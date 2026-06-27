@@ -69,11 +69,18 @@ _STRICT_SCRIPT_SOURCES = frozenset({"'self'", "'none'"})
 # permissive browser defaults and do NOT inherit from ``default-src``. Functional
 # fetch directives (style/img/font-src) are deliberately not required — they are not
 # security-load-bearing once ``default-src 'none'`` denies everything by default.
-_CSP_BASELINE: dict[str, frozenset[str]] = {
+# Directives both baselines share verbatim: ``default-src`` is the catch-all denial
+# in every mode, and ``base-uri``/``form-action`` stay locked because they don't
+# inherit from ``default-src``. Only ``script-src``/``style-src`` differ by mode.
+_COMMON_CSP_DIRECTIVES: dict[str, frozenset[str]] = {
     "default-src": frozenset({"'none'"}),
-    "script-src": _STRICT_SCRIPT_SOURCES,
     "base-uri": frozenset({"'none'", "'self'"}),
     "form-action": frozenset({"'none'", "'self'"}),
+}
+
+_CSP_BASELINE: dict[str, frozenset[str]] = {
+    **_COMMON_CSP_DIRECTIVES,
+    "script-src": _STRICT_SCRIPT_SOURCES,
 }
 
 # The bounded baseline for a cockpit opened **through Lavish-AXI** (csp_mode
@@ -90,11 +97,9 @@ _INTERACTIVE_SCRIPT_SOURCES = frozenset(
 )
 _INTERACTIVE_STYLE_SOURCES = frozenset({"'self'", "'none'", "'unsafe-inline'", LAVISH_CDN})
 _CSP_BASELINE_INTERACTIVE: dict[str, frozenset[str]] = {
-    "default-src": frozenset({"'none'"}),
+    **_COMMON_CSP_DIRECTIVES,
     "script-src": _INTERACTIVE_SCRIPT_SOURCES,
     "style-src": _INTERACTIVE_STYLE_SOURCES,
-    "base-uri": frozenset({"'none'", "'self'"}),
-    "form-action": frozenset({"'none'", "'self'"}),
 }
 
 # Resolved CSP baseline per mode, and whether the mode also forbids unsafe-* outright.
@@ -284,6 +289,10 @@ def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintErr
                 LintError("csp-weak", f"{name} permits out-of-baseline source(s): {disallowed}")
             )
 
+    # Strict mode only: a case-insensitive backstop catching 'unsafe-inline'/
+    # 'unsafe-eval' *anywhere*, including in functional directives the per-directive
+    # baseline above doesn't enumerate (e.g. style-src). Interactive mode permits
+    # these tokens by design (see _CSP_BASELINE_INTERACTIVE), so it skips the check.
     if forbid_unsafe:
         lowered = content.lower()
         if "'unsafe-inline'" in lowered or "'unsafe-eval'" in lowered:
