@@ -49,8 +49,20 @@ An optional, language-specific risk checklist the agent consults while authoring
 _Avoid_: profile, ruleset, plugin.
 
 **Focus Lens**:
-A reviewer-chosen *perspective* that reframes the analysis toward a concern — e.g. security, regressions, OWASP Top 10, or implementation options ("can we do this simpler?"). Distinct from a Language Lens (which is about the *code's language*, not the reviewer's *concern*). Re-invokable mid-review through the feedback loop ("dig into this from an OWASP angle"). Design deferred — tracked separately.
+A reviewer-chosen *perspective* that reframes the analysis toward a concern, distinct from a Language Lens (which is about the *code's language*, not the reviewer's *concern*). A Focus Lens does not add cockpit sections or risk categories — it re-weights and re-frames the existing Risk Map, Review Route, and feedback-loop answers toward its concern (the Lens principle: sharpen the neutral analysis, don't bolt on machinery). It has two activation paths: **at authoring time**, selected by the `focus` config key / CLI, it shapes the whole cockpit; **mid-review**, invoked through the Feedback Loop ("dig into this from an OWASP angle"), it runs a **Lens Pass** without regenerating the cockpit. The v1 catalog is the **Focus Lens Catalog** below. Most lenses are pure agent reasoning over the diff; the supply-chain lens is the exception that admits **External-Tool Findings**.
 _Avoid_: mode, filter, view, perspective.
+
+**Focus Lens Catalog**:
+The bundled set of Focus Lenses shipped with the skill, each a definition the agent consults to reframe its analysis (the same bundling shape as Language Lenses). v1 ships four: **security/OWASP** (reframes toward attack surface; maps risks to OWASP Top 10 / CWE), **regressions** (toward what could break that used to work — changed public surface, untouched callers), **simplification** (advisory *design critique* — "can we do this simpler?"; proposes alternatives, never patches — see [ADR-0005](./docs/adr/0005-design-critique-scope.md)), and **supply-chain** (runs `vet` on changed dependency manifests; opt-in, offline-safe; see [ADR-0006](./docs/adr/0006-external-tool-findings.md)). The first three are pure agent reasoning; supply-chain is the external-tool lens.
+_Avoid_: lens registry, plugin list, ruleset.
+
+**Lens Pass**:
+A mid-review application of a Focus Lens, invoked by the reviewer through the Feedback Loop ("show me this from a security angle"). The agent re-analyzes the relevant slice through the chosen lens and delivers the result as a live loop answer, appending it to the Analysis and the Q&A Log so it is baked in at close — it does **not** regenerate `review.html` (consistent with [ADR-0003](./docs/adr/0003-single-blocking-poll-loop.md)'s no-per-answer-regeneration). This is what makes a Focus Lens *re-invokable* rather than a one-shot authoring-time choice.
+_Avoid_: re-render, re-run, refresh.
+
+**External-Tool Finding**:
+A finding produced by an external analyzer (v1: `vet`, via the supply-chain Focus Lens) rather than by agent reasoning over the diff. It enters the cockpit only through an opt-in lens, is captured through the Escape Boundary like any other untrusted data (rendered, never executed), is attributed to its tool, and folds into the existing Risk Map. When the tool is absent or offline the finding degrades to an agent-reasoned note — it never blocks the review (see [ADR-0006](./docs/adr/0006-external-tool-findings.md)). This is the PRD's deferred "external-CLI-tool findings" category; `vet` is its first instance.
+_Avoid_: scan result, tool output, report.
 
 **Session**:
 A live Lavish-AXI editing/feedback connection, keyed by the canonical path of the Review Cockpit HTML file. There are no opaque session IDs — the file path *is* the identity.
