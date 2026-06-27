@@ -1,6 +1,7 @@
-/* Branch Review Cockpit — vendored default styling (walking skeleton, issue #3).
+/* Branch Review Cockpit — vendored default styling.
    Portable: the cockpit must render identically when opened directly in a plain
-   browser, so everything here is self-contained — no remote fonts or imports. */
+   browser, so everything here is self-contained — no remote fonts or imports
+   (the strict CSP and the Cockpit Linter forbid remote assets anyway, issue #4). */
 
 :root {
   --bg: #0d1117;
@@ -61,6 +62,49 @@ header.cockpit-head h1 {
   padding: 0.1rem 0.4rem;
   color: var(--fg);
 }
+
+/* Fragments emitted by the Escape Boundary (fragments.html): title, meta dl,
+   changed-files list, commits list. Styled here so a cockpit that pastes them
+   verbatim renders coherently with the hand-authored header above. */
+h1.cockpit-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.6rem;
+  line-height: 1.25;
+}
+
+dl.cockpit-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+}
+
+dl.cockpit-meta dt { color: var(--muted); }
+dl.cockpit-meta dd { margin: 0; }
+
+dl.cockpit-meta code {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  font-family: var(--mono);
+}
+
+ul.changed-files,
+ul.commits {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+ul.changed-files .status {
+  display: inline-block;
+  min-width: 1.5em;
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+ul.commits { font-family: var(--mono); font-size: 0.85rem; }
 
 section { margin: 2rem 0; }
 
