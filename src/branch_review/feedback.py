@@ -85,7 +85,7 @@ def _default_runner(argv: list[str]) -> LavishResult:
     interrupted and never lose queued feedback.
     """
     try:
-        proc = subprocess.run(  # nosec B603 — fixed argv (npx + pinned pkg), shell=False
+        proc = subprocess.run(  # nosec B603 B607 — fixed argv (npx + pinned pkg), shell=False
             argv,
             stdout=subprocess.PIPE,
             stderr=None,
@@ -110,9 +110,10 @@ def _was_delivered(result: LavishResult) -> bool:
 
     The POST precedes the long-poll, so a clean exit *or* an interrupt both mean the
     answer was shown; only a fast non-signal error (e.g. the server was unreachable)
-    means it was not — and then we must not log a phantom exchange.
+    means it was not — and then we must not log a phantom exchange. A signal exit is
+    already folded into ``interrupted`` by :func:`_default_runner`.
     """
-    return result.returncode == 0 or result.interrupted or result.returncode in _SIGNAL_EXITS
+    return result.returncode == 0 or result.interrupted
 
 
 def _count_lines(path: Path) -> int:
@@ -149,9 +150,12 @@ def append_exchange(
 
 
 def _emit(stdout: str, *, echo: bool) -> None:
-    """Pass the poll's TOON through to our stdout so the agent reads it directly."""
+    """Pass the poll's TOON through to our stdout, verbatim, so the agent reads it.
+
+    ``lavish-axi`` already emits newline-terminated TOON, so we add nothing.
+    """
     if echo and stdout:
-        print(stdout, end="" if stdout.endswith("\n") else "\n")
+        print(stdout, end="")
 
 
 def poll(
@@ -251,15 +255,13 @@ def main(argv: list[str] | None = None) -> int:
     end_p = sub.add_parser("end", help="End the Lavish session (/review-close).")
     end_p.add_argument("file", nargs="?", type=Path, default=DEFAULT_COCKPIT)
 
+    # ``required=True`` on the subparsers guarantees one of these three commands.
     args = parser.parse_args(argv)
     if args.command == "poll":
         return poll(args.file)
     if args.command == "reply":
         return reply(args.file, answer_file=args.answer_file)
-    if args.command == "end":
-        return end(args.file)
-    parser.error(f"unknown command {args.command!r}")  # pragma: no cover — argparse guards this
-    return 2  # pragma: no cover
+    return end(args.file)
 
 
 if __name__ == "__main__":

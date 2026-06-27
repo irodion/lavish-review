@@ -49,6 +49,16 @@ def _cockpit(tmp_path: Path) -> Path:
     return out / "review.html"
 
 
+def _recorder(seen: dict[str, Path], name: str) -> Callable[..., int]:
+    """A stand-in poll/reply/end that records the cockpit path it was called with."""
+
+    def _run(f: Path, **_kwargs: object) -> int:
+        seen[name] = f
+        return 0
+
+    return _run
+
+
 # --- append_exchange -------------------------------------------------------------
 
 
@@ -230,17 +240,9 @@ def test_end_invokes_lavish_end(tmp_path: Path) -> None:
 
 def test_main_dispatches_to_each_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Path] = {}
-
-    def record(name: str) -> Callable[..., int]:
-        def _run(f: Path, **_kwargs: object) -> int:
-            seen[name] = f
-            return 0
-
-        return _run
-
-    monkeypatch.setattr(feedback, "poll", record("poll"))
-    monkeypatch.setattr(feedback, "reply", record("reply"))
-    monkeypatch.setattr(feedback, "end", record("end"))
+    monkeypatch.setattr(feedback, "poll", _recorder(seen, "poll"))
+    monkeypatch.setattr(feedback, "reply", _recorder(seen, "reply"))
+    monkeypatch.setattr(feedback, "end", _recorder(seen, "end"))
 
     assert feedback.main(["poll", "a.html"]) == 0
     assert feedback.main(["reply", "b.html"]) == 0
@@ -249,14 +251,9 @@ def test_main_dispatches_to_each_subcommand(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_main_defaults_to_canonical_cockpit(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[Path] = []
-
-    def _run(f: Path, **_kwargs: object) -> int:
-        captured.append(f)
-        return 0
-
-    monkeypatch.setattr(feedback, "poll", _run)
+    seen: dict[str, Path] = {}
+    monkeypatch.setattr(feedback, "poll", _recorder(seen, "poll"))
 
     feedback.main(["poll"])
 
-    assert captured == [feedback.DEFAULT_COCKPIT]
+    assert seen["poll"] == feedback.DEFAULT_COCKPIT
