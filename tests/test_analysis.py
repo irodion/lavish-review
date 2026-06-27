@@ -123,6 +123,8 @@ _BAD_CASES = [
     ("missing-risk-map", _drop("risk_map"), "risk_map"),
     ("missing-test-checklist", _drop("test_checklist"), "test_checklist"),
     ("bad-schema", _set(["schema"], "something-else"), "schema"),
+    # An unknown future revision must fail — this validator encodes only 0.1.
+    ("unsupported-schema-version", _set(["schema"], "review-analysis/0.2"), "schema"),
     ("route-not-list", _set(["review_route"], {}), "review_route"),
     ("route-missing-path", _set(["review_route", 0, "path"], None), "review_route[0].path"),
     ("route-step-not-object", _set(["review_route"], ["nope"]), "review_route[0]"),
@@ -174,6 +176,20 @@ def test_malformed_section_produces_located_error(
     errors = validate_analysis(doc)
     locations = [e.location for e in errors]
     assert any(loc == location for loc in locations), f"{label}: {location!r} not in {locations}"
+
+
+def test_non_object_entry_does_not_shift_later_error_index() -> None:
+    # A non-object earlier in a list is reported at its real index AND must not
+    # renumber a genuinely-bad object after it (the validator filters non-objects
+    # but preserves original positions).
+    doc = _valid()
+    good = doc["risk_map"][0]
+    bad = {"category": "security", "level": "high", "reason": "", "challenge_questions": ["q"]}
+    doc["risk_map"] = ["not-an-object", good, bad]  # bad is at index 2
+    locations = [e.location for e in validate_analysis(doc)]
+    assert "risk_map[0]" in locations  # the non-object, at its real index
+    assert "risk_map[2].reason" in locations  # the empty reason, located at 2 — not 1
+    assert "risk_map[1].reason" not in locations  # the valid middle entry is untouched
 
 
 def test_risk_categories_are_the_canonical_seven() -> None:

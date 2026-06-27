@@ -81,7 +81,13 @@ def _detect_python(root: Path) -> Runner | None:
         if marker.is_file() and "pytest" in _read_text(marker):
             return Runner("pytest", "pytest", name)
 
-    if (root / "conftest.py").is_file() or any(root.glob("**/conftest.py")):
+    # A top-level conftest.py, or a nested one under the usual test roots. Bounded to
+    # tests/ and test/ on purpose: a recursive ``root.glob("**/conftest.py")`` would
+    # walk the *entire* repo (node_modules, .venv, vendored trees) on every review.
+    nested_conftest = any(
+        any((root / d).glob("**/conftest.py")) for d in ("tests", "test") if (root / d).is_dir()
+    )
+    if (root / "conftest.py").is_file() or nested_conftest:
         return Runner("pytest", "pytest", "conftest.py")
 
     if (root / "tests").is_dir() or (root / "test").is_dir():

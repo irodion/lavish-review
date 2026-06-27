@@ -231,6 +231,15 @@ def test_fragment_index_entry_rename_keeps_old_path() -> None:
     assert entry["fragment"] is not None
 
 
+def test_fragment_index_entry_omitted_requires_reason() -> None:
+    # An omitted file is still listed; an omission with no reason would render an
+    # empty, unexplained record — reject it at construction.
+    with pytest.raises(ValueError):
+        fragment_index_entry({"status": "M", "path": "x.py"}, omitted=True)
+    with pytest.raises(ValueError):
+        fragment_index_entry({"status": "M", "path": "x.py"}, omitted=True, reason="   ")
+
+
 def test_fragment_index_entry_omitted_drops_body_keeps_reason() -> None:
     # Excluded/capped files (issue #7) stay in the index with a reason, body gone —
     # nothing omitted is ever hidden.

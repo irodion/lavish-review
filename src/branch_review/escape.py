@@ -223,15 +223,18 @@ def fragment_index_entry(
 ) -> dict[str, object]:
     """One ordered ``fragments.json`` record for a changed file.
 
-    Maps a ``changed-files.json`` record to ``{path, status, id, fragment,
-    omitted, old_path?, reason?}``. ``fragment`` is the relative path of the
-    escaped fragment file, or ``None`` when the body is omitted (excluded, capped,
-    or otherwise classified out by issue #7) — the file still appears in the index
-    with its status and a ``reason`` so **nothing omitted is ever hidden**
-    (DESIGN). The path itself is not stored escaped here: ``fragments.json`` is
-    agent-facing data the agent reads, not HTML injected into the cockpit; when a
-    path reaches the Review Cockpit it crosses the boundary via :func:`fragment`.
+    Maps a ``changed-files.json`` record to ``{path, path_html, status, id,
+    fragment, omitted, old_path?, old_path_html?, reason?}``. ``fragment`` is the
+    relative path of the escaped fragment file, or ``None`` when the body is omitted
+    (excluded, capped, or otherwise classified out by issue #7) — an omitted file
+    still appears in the index with its status and a **required** ``reason`` so
+    **nothing omitted is ever hidden** (DESIGN). ``path``/``old_path`` are the raw
+    agent-facing strings; ``path_html``/``old_path_html`` are the same values having
+    crossed the boundary (escaped, marker-wrapped) for injection into cockpit
+    headings.
     """
+    if omitted and not (reason and reason.strip()):
+        raise ValueError("an omitted fragment index entry requires a non-empty reason")
     fid = file_fragment_id(record["path"])
     entry: dict[str, object] = {
         "path": record["path"],

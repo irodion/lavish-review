@@ -102,10 +102,14 @@ _CSP_BASELINE_INTERACTIVE: dict[str, frozenset[str]] = {
     "style-src": _INTERACTIVE_STYLE_SOURCES,
 }
 
-# Resolved CSP baseline per mode, and whether the mode also forbids unsafe-* outright.
-_CSP_MODES: dict[str, tuple[dict[str, frozenset[str]], bool]] = {
-    "strict": (_CSP_BASELINE, True),
-    "interactive": (_CSP_BASELINE_INTERACTIVE, False),
+# Per mode: (directive baseline, forbid unsafe-* outright, remote hosts allowed in
+# ANY directive). The remote allowlist bounds *every* directive — not just the ones
+# in the baseline — so a relaxed mode can't smuggle an arbitrary host into
+# connect-src/img-src/worker-src/etc. Strict allows no remote host at all;
+# interactive allows only the Lavish CDN (matching escape.INTERACTIVE_CSP).
+_CSP_MODES: dict[str, tuple[dict[str, frozenset[str]], bool, frozenset[str]]] = {
+    "strict": (_CSP_BASELINE, True, frozenset()),
+    "interactive": (_CSP_BASELINE_INTERACTIVE, False, frozenset({LAVISH_CDN})),
 }
 
 _UNTRUSTED_RE = re.compile(
@@ -275,15 +279,23 @@ def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintErr
             )
         ]
 
-    baseline, forbid_unsafe = _CSP_MODES[csp_mode]
+    baseline, forbid_unsafe, allowed_remotes = _CSP_MODES[csp_mode]
 
+    errors: list[LintError] = []
     directives: dict[str, list[str]] = {}
     for clause in content.split(";"):
         tokens = clause.split()
-        if tokens:
-            directives[tokens[0].lower()] = tokens[1:]
+        if not tokens:
+            continue
+        name = tokens[0].lower()
+        if name in directives:
+            # Browsers honour the FIRST occurrence and ignore later duplicates, so a
+            # repeated directive could let a weak first value slip past a lint that
+            # only inspected the last. Flag it and keep the first (browser-enforced) one.
+            errors.append(LintError("csp-weak", f"duplicate CSP directive {name!r}"))
+            continue
+        directives[name] = tokens[1:]
 
-    errors: list[LintError] = []
     for name, allowed in baseline.items():
         sources = directives.get(name)
         if sources is None:
@@ -294,6 +306,17 @@ def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintErr
             errors.append(
                 LintError("csp-weak", f"{name} permits out-of-baseline source(s): {disallowed}")
             )
+
+    # Bound EVERY directive's remote sources, not just the baseline ones: an arbitrary
+    # host in connect-src/img-src/worker-src/etc. would otherwise pass unchecked. Only
+    # the mode's allowlisted remote(s) (the Lavish CDN in interactive; none in strict)
+    # may appear; '...' tokens, data:/blob:, and relative refs are not remote.
+    for name, sources in directives.items():
+        for tok in sources:
+            if tok.lower().startswith(("http://", "https://", "//")) and tok not in allowed_remotes:
+                errors.append(
+                    LintError("csp-weak", f"{name} permits a non-allowlisted remote source {tok!r}")
+                )
 
     # Strict mode only: a case-insensitive backstop catching 'unsafe-inline'/
     # 'unsafe-eval' *anywhere*, including in functional directives the per-directive

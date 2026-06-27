@@ -114,15 +114,21 @@ def _typename(value: object) -> str:
 
 def _as_objects(
     value: object, location: str
-) -> tuple[list[Mapping[str, object]], list[AnalysisError]]:
-    """Coerce ``value`` to a list of objects, reporting non-list / non-object shapes."""
+) -> tuple[list[tuple[int, Mapping[str, object]]], list[AnalysisError]]:
+    """Coerce ``value`` to ``(original_index, object)`` pairs, reporting bad shapes.
+
+    The index is the position in the *original* list, not the filtered one: a
+    non-object entry is reported and skipped, but the surviving objects keep their
+    real indices so a later field error still locates correctly (e.g. a bad entry
+    at original index 2 reports ``risk_map[2]``, not ``[1]``).
+    """
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         return [], [AnalysisError(location, f"expected a list, got {_typename(value)}")]
-    objects: list[Mapping[str, object]] = []
+    objects: list[tuple[int, Mapping[str, object]]] = []
     errors: list[AnalysisError] = []
     for i, item in enumerate(value):
         if isinstance(item, Mapping):
-            objects.append(item)
+            objects.append((i, item))
         else:
             errors.append(
                 AnalysisError(f"{location}[{i}]", f"expected an object, got {_typename(item)}")
@@ -136,7 +142,7 @@ def _as_objects(
 def _validate_review_route(value: object) -> list[AnalysisError]:
     """``review_route``: ordered ``{path, reason}`` steps (CONTEXT: *Review Route*)."""
     objects, errors = _as_objects(value, "review_route")
-    for i, step in enumerate(objects):
+    for i, step in objects:
         loc = f"review_route[{i}]"
         errors.extend(_require_str(step.get("path"), f"{loc}.path"))
         errors.extend(_require_str(step.get("reason"), f"{loc}.reason"))
@@ -146,7 +152,7 @@ def _validate_review_route(value: object) -> list[AnalysisError]:
 def _validate_behavior_changes(value: object) -> list[AnalysisError]:
     """``behavior_changes``: ``{summary, detail?, paths?}`` records."""
     objects, errors = _as_objects(value, "behavior_changes")
-    for i, change in enumerate(objects):
+    for i, change in objects:
         loc = f"behavior_changes[{i}]"
         errors.extend(_require_str(change.get("summary"), f"{loc}.summary"))
         if "detail" in change:
@@ -164,7 +170,7 @@ def _validate_risk_map(value: object) -> list[AnalysisError]:
     contract.
     """
     objects, errors = _as_objects(value, "risk_map")
-    for i, entry in enumerate(objects):
+    for i, entry in objects:
         loc = f"risk_map[{i}]"
         errors.extend(_require_enum(entry.get("category"), f"{loc}.category", RISK_CATEGORIES))
         errors.extend(_require_enum(entry.get("level"), f"{loc}.level", RISK_LEVELS))
@@ -177,7 +183,7 @@ def _validate_risk_map(value: object) -> list[AnalysisError]:
 def _validate_file_walkthrough(value: object) -> list[AnalysisError]:
     """``file_walkthrough``: ``{path, explanation}`` per file the route visits."""
     objects, errors = _as_objects(value, "file_walkthrough")
-    for i, item in enumerate(objects):
+    for i, item in objects:
         loc = f"file_walkthrough[{i}]"
         errors.extend(_require_str(item.get("path"), f"{loc}.path"))
         errors.extend(_require_str(item.get("explanation"), f"{loc}.explanation"))
@@ -187,7 +193,7 @@ def _validate_file_walkthrough(value: object) -> list[AnalysisError]:
 def _validate_suspicious_omissions(value: object) -> list[AnalysisError]:
     """``suspicious_omissions``: ``{summary, kind?, detail?}`` (CONTEXT: *Suspicious Omission*)."""
     objects, errors = _as_objects(value, "suspicious_omissions")
-    for i, omission in enumerate(objects):
+    for i, omission in objects:
         loc = f"suspicious_omissions[{i}]"
         errors.extend(_require_str(omission.get("summary"), f"{loc}.summary"))
         if "kind" in omission:
@@ -217,7 +223,7 @@ def _validate_test_checklist(value: object) -> list[AnalysisError]:
 def _validate_diagrams(value: object) -> list[AnalysisError]:
     """``diagrams``: ``{title, kind, source}`` — source captured, rendering deferred."""
     objects, errors = _as_objects(value, "diagrams")
-    for i, diagram in enumerate(objects):
+    for i, diagram in objects:
         loc = f"diagrams[{i}]"
         errors.extend(_require_str(diagram.get("title"), f"{loc}.title"))
         errors.extend(_require_str(diagram.get("kind"), f"{loc}.kind"))
@@ -253,9 +259,12 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
 
     errors: list[AnalysisError] = []
 
+    # Pin to the exact supported revision: this validator encodes the 0.1 shape, so
+    # an unknown future tag (e.g. review-analysis/0.2) must fail rather than be
+    # validated against rules it may no longer match. Bump SCHEMA when the shape changes.
     schema = obj.get("schema")
-    if not isinstance(schema, str) or not schema.startswith("review-analysis/"):
-        errors.append(AnalysisError("schema", f"must be a 'review-analysis/*' tag, got {schema!r}"))
+    if schema != SCHEMA:
+        errors.append(AnalysisError("schema", f"must be {SCHEMA!r}, got {schema!r}"))
 
     errors.extend(_require_str(obj.get("title"), "title"))
     errors.extend(_require_str(obj.get("intent_summary"), "intent_summary"))

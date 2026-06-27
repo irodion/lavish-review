@@ -274,6 +274,18 @@ _INTERACTIVE_REJECTS = [
         "base-uri-unlocked",
         "default-src 'none'; script-src 'self' 'unsafe-inline'; base-uri *; form-action 'none'",
     ),
+    # A remote host smuggled into a non-baseline fetch directive must still fail —
+    # interactive is bounded to 'self' + the Lavish CDN across EVERY directive.
+    (
+        "img-src-arbitrary-remote",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; "
+        "img-src https://evil.example; base-uri 'none'; form-action 'none'",
+    ),
+    (
+        "connect-src-arbitrary-remote",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; "
+        "connect-src https://evil.example; base-uri 'none'; form-action 'none'",
+    ),
 ]
 
 
@@ -307,3 +319,22 @@ def test_duplicate_safe_hrefs_still_pass() -> None:
     # duplication per se.
     body = '<a href="#a" href="#b">x</a>'
     assert _rules(lint_cockpit(_cockpit(body=body))) == set()
+
+
+# --- duplicate CSP directives (browser uses the first; lint must not be fooled) --
+
+
+def test_duplicate_csp_directive_is_flagged() -> None:
+    # A repeated directive: the browser honours the first (weak) script-src and
+    # ignores the safe second; the linter must flag the duplicate either way.
+    csp = (
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; script-src 'self'; "
+        "base-uri 'none'; form-action 'none'"
+    )
+    assert "csp-weak" in _csp_rules(lint_cockpit(_cockpit(csp=csp)))
+
+
+def test_lavish_cdn_is_an_allowed_remote_in_interactive() -> None:
+    # The bound permits exactly the Lavish CDN (and data:/blob:), so the real
+    # interactive policy must not be rejected by the remote-host scan.
+    assert _csp_rules(lint_cockpit(_cockpit(csp=INTERACTIVE_CSP), csp_mode="interactive")) == set()

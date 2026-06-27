@@ -82,7 +82,9 @@ the `base...HEAD` diff, and writes to `.review-agent/`:
 - `fragments.html` — pre-escaped header blocks (title, meta, changed-files, commits)
 - `fragments/<id>.html` — **one pre-escaped `<pre class="diff">` per changed file**
 - `fragments.json` — the ordered, path-keyed index of those per-file fragments,
-  each entry `{path, path_html, status, id, fragment, omitted, old_path?, reason?}`
+  each entry `{path, path_html, status, id, fragment, omitted, old_path?,
+  old_path_html?, reason?}`. For a rename, inject `old_path_html` (already escaped)
+  if you show the old path in a heading — never hand-type `old_path`.
 - `assets/cockpit.css`, `assets/app.js` — vendored, copied for relative reference
 
 Escaped fragments carry invisible `<!--brc:untrusted-->…<!--/brc:untrusted-->`

@@ -58,11 +58,18 @@ def _run_git(args: list[str], cwd: Path, *, check: bool = True) -> str:
     # git's default C-quoted ``"\360\237..."`` octal form, so a changed-files path
     # round-trips verbatim — both as a JSON key the agent reads and as the pathspec
     # the per-file fragment diff (#21) feeds back to ``git diff``.
+    # ``--literal-pathspecs`` makes git treat every pathspec argument as an exact
+    # filename: a changed file literally named ``:(glob)*.py`` or ``a*.py`` must not
+    # be reinterpreted as pathspec magic / a wildcard when fed back to ``git diff``,
+    # which would match the wrong files (or none) for its fragment.
+    # ``encoding="utf-8"`` decodes stdout/stderr as UTF-8 explicitly rather than via
+    # the platform locale, so non-ASCII paths aren't mangled under a C/latin-1 locale.
     proc = subprocess.run(  # nosec B603 B607
-        ["git", "-c", "core.quotePath=false", *args],
+        ["git", "--literal-pathspecs", "-c", "core.quotePath=false", *args],
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if check and proc.returncode != 0:

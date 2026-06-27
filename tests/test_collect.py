@@ -232,6 +232,30 @@ def test_per_file_fragment_handles_tab_in_path(repo: Path) -> None:
     assert "tabbed = 1" in frag
 
 
+def test_per_file_fragment_handles_pathspec_magic_name(repo: Path) -> None:
+    # A file literally named with a pathspec-magic prefix must be treated as an exact
+    # filename (--literal-pathspecs), not reinterpreted as a glob that sweeps in other
+    # files. Without the literal flag, `:(glob)*.py` would match every .py file and
+    # the fragment would wrongly include the decoy's content.
+    _git(repo, "checkout", "feature")
+    (repo / "decoy.py").write_text("decoy = 1\n")
+    magic = ":(glob)*.py"
+    (repo / magic).write_text("globby = 1\n")
+    _git(repo, "add", "-A")  # -A avoids a pathspec arg of its own
+    _git(repo, "commit", "-m", "feat: pathspec-magic filename")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    assert magic in index, list(index)
+    frag = (out / str(index[magic]["fragment"])).read_text()
+    assert "globby = 1" in frag  # this file's own body
+    assert "decoy = 1" not in frag  # not a glob match that swept in the decoy
+    # The on-disk fragment filename is still a safe hex stem.
+    stem = Path(str(index[magic]["fragment"])).name.removesuffix(".html")
+    assert all(c in "0123456789abcdef" for c in stem)
+
+
 def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
     # First run with two files, second run with one — the dropped file's fragment
     # must not linger in fragments/ or the index.
