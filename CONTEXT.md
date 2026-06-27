@@ -33,8 +33,16 @@ The agent's structured intermediate reasoning about the diff (intent, behavior c
 _Avoid_: report, summary.
 
 **Lens**:
-An optional, language-specific risk checklist the agent consults while authoring the Risk Map (e.g. the C++ lens covers ownership, lifetime, threading, ABI). Lenses sharpen a neutral-by-default analysis; they are not separate machinery.
+The umbrella term for an analytical frame the agent applies while authoring the cockpit or answering. There are two kinds — a **Language Lens** and a **Focus Lens**. Lenses sharpen a neutral-by-default analysis; they are not separate machinery.
 _Avoid_: profile, ruleset, plugin.
+
+**Language Lens**:
+An optional, language-specific risk checklist the agent consults while authoring the Risk Map (e.g. the C++ lens covers ownership, lifetime, threading, ABI). Selected by detected language and config.
+_Avoid_: profile, ruleset, plugin.
+
+**Focus Lens**:
+A reviewer-chosen *perspective* that reframes the analysis toward a concern — e.g. security, regressions, OWASP Top 10, or implementation options ("can we do this simpler?"). Distinct from a Language Lens (which is about the *code's language*, not the reviewer's *concern*). Re-invokable mid-review through the feedback loop ("dig into this from an OWASP angle"). Design deferred — tracked separately.
+_Avoid_: mode, filter, view, perspective.
 
 **Session**:
 A live Lavish-AXI editing/feedback connection, keyed by the canonical path of the Review Cockpit HTML file. There are no opaque session IDs — the file path *is* the identity.
