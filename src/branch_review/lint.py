@@ -45,6 +45,14 @@ from branch_review.escape import UNTRUSTED_CLOSE, UNTRUSTED_OPEN
 # fragments (``#x``), and ``mailto:`` links are not remote resource loads.
 _REMOTE_PREFIXES = ("http://", "https://", "//")
 
+# The WHATWG URL parser strips ASCII tab and newlines (U+0009/000A/000D) from
+# anywhere in a URL before resolving its scheme, so ``java\tscript:`` and
+# ``java\nscript:`` both become ``javascript:`` in the browser.
+_URL_STRIPPED = str.maketrans("", "", "\t\n\r")
+# ...and it trims leading/trailing C0 controls (U+0000–U+001F) and spaces, so
+# ``\x01javascript:`` resolves too. Strip the same set before the scheme checks.
+_URL_TRIM = "".join(map(chr, range(0x21)))
+
 # Tokens a strict ``script-src`` (or ``default-src`` fallback) may contain.
 _STRICT_SCRIPT_SOURCES = frozenset({"'self'", "'none'"})
 
@@ -65,9 +73,19 @@ class LintError:
         return f"[{self.rule}] {self.message}"
 
 
+def _normalize_url(value: str) -> str:
+    """Clean a URL attribute the way a browser does before it resolves the scheme.
+
+    Removes embedded ASCII tab/newlines and trims leading/trailing C0 controls and
+    spaces, so a control-obfuscated ``java\\tscript:`` href can't slip past the
+    scheme checks that treat it as inline JS.
+    """
+    return value.translate(_URL_STRIPPED).strip(_URL_TRIM)
+
+
 def _is_remote(url: str) -> bool:
     """True if ``url`` points at a remote resource (absolute or protocol-relative)."""
-    return url.strip().lower().startswith(_REMOTE_PREFIXES)
+    return url.lower().startswith(_REMOTE_PREFIXES)
 
 
 def _check_untrusted_regions(html: str) -> list[LintError]:
@@ -157,7 +175,7 @@ class _TagAuditor(HTMLParser):
         for name in ("src", "href"):
             if name not in attr_map:
                 continue
-            value = attr_map[name].strip()
+            value = _normalize_url(attr_map[name])
             if value.lower().startswith("javascript:"):
                 self.errors.append(LintError("inline-js", f"<{tag}> {name} uses a javascript: URI"))
             elif self.styling == "vendored" and _is_remote(value):

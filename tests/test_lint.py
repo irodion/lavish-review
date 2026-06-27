@@ -113,6 +113,12 @@ _INLINE_JS_CASES = [
     ("onclick-handler", '<button onclick="x()">go</button>', "inline-js"),
     ("onerror-handler", '<img src="assets/a.png" onerror="x()">', "inline-js"),
     ("javascript-uri", '<a href="javascript:alert(1)">x</a>', "inline-js"),
+    # Browsers strip these ASCII controls during URL parsing, so the scheme still
+    # resolves to javascript: — the linter must catch them too.
+    ("js-uri-tab", '<a href="java\tscript:alert(1)">x</a>', "inline-js"),
+    ("js-uri-newline", '<a href="java\nscript:alert(1)">x</a>', "inline-js"),
+    ("js-uri-cr", '<a href="java\rscript:alert(1)">x</a>', "inline-js"),
+    ("js-uri-leading-control", '<a href="\x01javascript:alert(1)">x</a>', "inline-js"),
 ]
 
 
