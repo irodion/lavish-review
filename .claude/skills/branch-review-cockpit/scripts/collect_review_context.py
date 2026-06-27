@@ -31,7 +31,9 @@ def _main() -> int:
     from branch_review.collect import main
 
     argv = sys.argv[1:]
-    if not any(arg == "--assets-dir" for arg in argv):
+    # Default to the vendored assets unless the caller named one — accept both the
+    # `--assets-dir VALUE` and `--assets-dir=VALUE` argparse forms.
+    if not any(arg == "--assets-dir" or arg.startswith("--assets-dir=") for arg in argv):
         argv = [*argv, "--assets-dir", str(_ASSETS)]
     return main(argv)
 

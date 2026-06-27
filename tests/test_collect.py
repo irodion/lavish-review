@@ -194,3 +194,34 @@ def test_skill_shim_runs_without_editable_install(repo: Path, tmp_path: Path) ->
     # Default --assets-dir resolves to the skill's vendored assets and is copied.
     assert (out / "assets" / "cockpit.css").is_file()
     assert (out / "assets" / "app.js").is_file()
+
+
+def test_skill_shim_honors_assets_dir_equals_form(repo: Path, tmp_path: Path) -> None:
+    """`--assets-dir=VALUE` must override the vendored default, not be ignored."""
+    project_root = Path(__file__).resolve().parents[1]
+    shim = project_root / ".claude/skills/branch-review-cockpit/scripts/collect_review_context.py"
+    custom = tmp_path / "custom-assets"
+    custom.mkdir()
+    (custom / "cockpit.css").write_text("/* custom */")
+    (custom / "app.js").write_text("// custom")
+    out = tmp_path / "out"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(shim),
+            f"--assets-dir={custom}",
+            "--repo",
+            str(repo),
+            "--out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": os.environ["PATH"], "HOME": str(repo), **_ENV},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert (out / "assets" / "cockpit.css").read_text() == "/* custom */"
+    assert (out / "assets" / "app.js").read_text() == "// custom"
