@@ -3,3 +3,15 @@
 
 # Lavish-AXI local session state
 .lavish-axi/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
