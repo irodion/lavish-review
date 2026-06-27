@@ -11,18 +11,13 @@ from collections.abc import Iterable
 
 import pytest
 
-from branch_review.escape import UNTRUSTED_CLOSE, UNTRUSTED_OPEN, fragment
+from branch_review.escape import STRICT_CSP, UNTRUSTED_CLOSE, UNTRUSTED_OPEN, fragment
 from branch_review.lint import LintError, lint_cockpit
-
-_STRICT_CSP = (
-    "default-src 'none'; script-src 'self'; style-src 'self'; "
-    "img-src 'self'; base-uri 'none'; form-action 'none'"
-)
 
 
 def _cockpit(
     *,
-    csp: str | None = _STRICT_CSP,
+    csp: str | None = STRICT_CSP,
     head_extra: str = "",
     body: str = "",
     script: str = '<script src="assets/app.js"></script>',
@@ -190,7 +185,7 @@ def test_remote_asset_rules(
 
 # (label, csp content or None, expected rule or None)
 _CSP_CASES = [
-    ("strict", _STRICT_CSP, None),
+    ("strict", STRICT_CSP, None),
     ("missing", None, "csp-missing"),
     ("unsafe-inline", "default-src 'none'; script-src 'self' 'unsafe-inline'", "csp-weak"),
     ("script-wildcard", "default-src 'none'; script-src *", "csp-weak"),

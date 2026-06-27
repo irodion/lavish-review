@@ -112,28 +112,30 @@ class _TagAuditor(HTMLParser):
         self.styling = styling
         self.errors: list[LintError] = []
         self.csp_content: str | None = None
-        self._script_depth = 0
+        # HTMLParser treats a <script> body as raw text, so scripts can never
+        # nest — a plain in/out flag is all the body tracking needs.
+        self._in_script = False
         self._script_has_src = False
         self._script_inline_flagged = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._audit(tag, attrs)
         if tag == "script":
-            self._script_depth += 1
+            self._in_script = True
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._audit(tag, attrs)  # self-closing: no body to track
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "script" and self._script_depth > 0:
-            self._script_depth -= 1
+        if tag == "script":
+            self._in_script = False
 
     def handle_data(self, data: str) -> None:
         # A non-empty body inside a <script src=...> is dead code the browser
         # ignores, but it is still inline JS in the source — flag it once. A script
         # with no src was already reported by the no-inline-JS rule below.
         if (
-            self._script_depth > 0
+            self._in_script
             and self._script_has_src
             and not self._script_inline_flagged
             and data.strip()

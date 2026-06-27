@@ -35,6 +35,17 @@ from html import escape as _html_escape
 UNTRUSTED_OPEN = "<!--brc:untrusted-->"
 UNTRUSTED_CLOSE = "<!--/brc:untrusted-->"
 
+# The strict Content-Security-Policy the vendored cockpit must ship — the
+# defense-in-depth twin of the escaping above (ADR-0002). `script-src 'self'`
+# with no `'unsafe-inline'` forbids inline JS and forces all behaviour into the
+# vendored app.js; `default-src 'none'` denies every fetch the cockpit doesn't
+# explicitly re-allow. This is the single source the SKILL guidance, the cockpit,
+# and the Cockpit Linter's tests share, so the policy lives in one place.
+STRICT_CSP = (
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
+    "font-src 'self'; base-uri 'none'; form-action 'none'"
+)
+
 # Shown in place of an untrusted region when there is genuinely nothing to escape.
 # A trusted literal, so it carries no markers.
 _EMPTY_DIFF = "(no changes in this range)"
@@ -70,7 +81,12 @@ def diff_fragment(diff_text: str) -> str:
 
 
 def _file_line(record: Mapping[str, str]) -> str:
-    """One ``<li>`` for a changed file: trusted status badge + escaped path(s)."""
+    """One ``<li>`` for a changed file; status and path(s) both cross the boundary.
+
+    The git status flag (``A``/``M``/``R100``…) is not attacker-controlled, but it
+    is escaped through :func:`escape_text` anyway: the boundary is unconditional by
+    design (ADR-0002), never a per-value judgement call.
+    """
     status = escape_text(record.get("status", ""))
     path = fragment(record.get("path", ""))
     old_path = record.get("old_path")
@@ -100,15 +116,17 @@ def build_fragments(
     """
     files = list(files)
     commit_lines = list(commit_lines)
+    # Branch appears in both the title and the meta block; escape it once.
+    branch_frag = fragment(branch)
     parts: list[str] = []
 
     parts.append("<!-- fragment: title -->")
-    parts.append(f'<h1 class="cockpit-title">{fragment(branch)}</h1>')
+    parts.append(f'<h1 class="cockpit-title">{branch_frag}</h1>')
 
     parts.append("<!-- fragment: meta -->")
     parts.append('<dl class="cockpit-meta">')
     parts.append(f"  <dt>Base</dt><dd>{fragment(base)}</dd>")
-    parts.append(f"  <dt>Branch</dt><dd>{fragment(branch)}</dd>")
+    parts.append(f"  <dt>Branch</dt><dd>{branch_frag}</dd>")
     parts.append(f"  <dt>Head</dt><dd><code>{escape_text(head_sha[:12])}</code></dd>")
     parts.append(f"  <dt>Files changed</dt><dd>{int(changed_file_count)}</dd>")
     parts.append("</dl>")
