@@ -221,6 +221,16 @@ _CSP_CASES = [
     # base-uri / form-action don't inherit from default-src, so each is required.
     ("missing-base-uri", "default-src 'none'; script-src 'self'; form-action 'none'", "csp-weak"),
     ("missing-form-action", "default-src 'none'; script-src 'self'; base-uri 'none'", "csp-weak"),
+    # A wildcard, a scheme-source, or a bare host in a NON-baseline fetch directive
+    # allows arbitrary remote loads and must fail strict mode (it allows no remote at
+    # all) — these are exactly the tokens the old prefix-only remote check missed.
+    ("img-src-wildcard", f"{_BASE}; img-src *", "csp-weak"),
+    ("connect-src-scheme-source", f"{_BASE}; connect-src https:", "csp-weak"),
+    ("img-src-bare-host", f"{_BASE}; img-src cdn.example", "csp-weak"),
+    ("img-src-host-wildcard", f"{_BASE}; img-src https://*.example", "csp-weak"),
+    # data:/blob: are not remote loads, so they must NOT be flagged (no false positive)
+    # even though the linter now treats unknown tokens as remote by default.
+    ("img-src-data-blob-ok", f"{_BASE}; img-src 'self' data:; worker-src blob:", None),
 ]
 
 
@@ -285,6 +295,24 @@ _INTERACTIVE_REJECTS = [
         "connect-src-arbitrary-remote",
         "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; "
         "connect-src https://evil.example; base-uri 'none'; form-action 'none'",
+    ),
+    # The reported gap: a wildcard or a scheme-source (not a full URL) bypassed the
+    # remote bound. Interactive mode is widened to 'self' + the Lavish CDN, never to
+    # an open '*' or an any-https scheme, so these must still fail.
+    (
+        "img-src-wildcard",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; "
+        "img-src *; base-uri 'none'; form-action 'none'",
+    ),
+    (
+        "connect-src-scheme-source",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; "
+        "connect-src https:; base-uri 'none'; form-action 'none'",
+    ),
+    (
+        "img-src-bare-host",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; "
+        "img-src cdn.evil.example; base-uri 'none'; form-action 'none'",
     ),
 ]
 
