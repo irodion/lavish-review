@@ -180,16 +180,13 @@ def test_to_json_writes_status_as_string_value() -> None:
 
 def test_load_session_absent_returns_none(tmp_path: Path) -> None:
     assert load_session(tmp_path) is None
-    assert load_session(tmp_path / "session.json") is None
 
 
-def test_save_and_load_round_trip_via_dir_and_file(tmp_path: Path) -> None:
+def test_save_and_load_round_trip(tmp_path: Path) -> None:
     session = _session()
     path = save_session(tmp_path, session)
     assert path == tmp_path / "session.json"
     assert load_session(tmp_path) == session
-    # Loading by explicit file path resolves the same session.
-    assert load_session(path) == session
 
 
 def test_save_session_creates_missing_parent(tmp_path: Path) -> None:
@@ -277,8 +274,15 @@ def test_session_from_context_mirrors_the_collected_revision(tmp_path: Path) -> 
 def test_session_from_context_missing_field_raises(tmp_path: Path) -> None:
     path = tmp_path / "context.json"
     path.write_text(json.dumps({"base": "main"}), encoding="utf-8")
-    with pytest.raises(SessionError, match="missing field"):
+    with pytest.raises(SessionError, match="missing or not a string"):
         session_from_context(path)
+
+
+def test_session_from_context_non_string_field_raises(tmp_path: Path) -> None:
+    # The validation gap closed by the cleanup: a non-string field is rejected, not
+    # silently built into a nonsense session.
+    with pytest.raises(SessionError, match="head_sha"):
+        session_from_context(_write_context(tmp_path, head_sha=12345))  # type: ignore[arg-type]
 
 
 def test_session_from_context_absent_file_raises(tmp_path: Path) -> None:

@@ -3,9 +3,11 @@
 A reviewer can step away mid-review and come back. To make that safe the skill
 persists one ``session.json`` per Review — ``{status, base, branch, head_sha,
 started_at}`` — when it opens a cockpit, and consults it the next time
-``/review-branch`` runs. This module is the **deep module of pure policy** at the
-centre of that lifecycle: given the persisted :class:`Session` and the *current* git
-HEAD and branch, :func:`evaluate` decides how the new run relates to the old one.
+``/review-branch`` runs. At the centre of that lifecycle is a **deep core of pure
+policy**: given the persisted :class:`Session` and the *current* git HEAD and branch,
+:func:`evaluate` decides how the new run relates to the old one. A thin shell around
+it persists the session and a small CLI (``evaluate``/``start``/``end``) gathers the
+git state — git and file I/O live only in that shell, never in :func:`evaluate`.
 
 Four dispositions (the stable vocabulary the issue and SKILL speak):
 
@@ -19,11 +21,11 @@ Four dispositions (the stable vocabulary the issue and SKILL speak):
   one checked out now; it cannot be restored onto this branch. Generate.
 
 Like the Change Classifier (:mod:`branch_review.classify`), :func:`evaluate` makes
-**no git calls and reads no files** — the collector / CLI gather the current HEAD and
-branch and the persisted session, then feed them in. That keeps the decision a pure,
-exhaustively table-testable function: same inputs → same disposition, no environment.
-The thin I/O around it — :func:`load_session`, :func:`save_session`,
-:func:`session_from_context`, :func:`end_session` — only reads and writes JSON files.
+**no git calls and reads no files** — the CLI gathers the current HEAD and branch and
+the persisted session, then feeds them in. That keeps the decision a pure, exhaustively
+table-testable function: same inputs → same disposition, no environment. The shell
+around it — :func:`load_session`, :func:`save_session`, :func:`session_from_context`,
+:func:`end_session`, and the CLI — reads and writes the JSON and runs the git.
 
 See ``DESIGN.md`` ("Resume + staleness") and ``CONTEXT.md``.
 """
@@ -36,6 +38,13 @@ import sys
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
+
+from branch_review.collect import (
+    BaseResolutionError,
+    GitError,
+    current_revision,
+    repo_root,
+)
 
 # The persisted session lives beside the cockpit, under the gitignored state dir.
 SESSION_NAME = "session.json"
@@ -125,11 +134,20 @@ class Session:
     head_sha: str
     started_at: str
 
-    def to_json(self) -> str:
-        """Serialise to the pretty JSON written to ``session.json`` (status as its value)."""
+    def to_dict(self) -> dict[str, object]:
+        """The plain-dict form (status as its string value) — what gets serialised.
+
+        Exposed so callers that need the data inside a larger structure (the ``evaluate``
+        CLI embeds it in its JSON payload) get the dict directly, without round-tripping
+        through :meth:`to_json`'s string.
+        """
         data = asdict(self)
         data["status"] = self.status.value
-        return json.dumps(data, indent=2) + "\n"
+        return data
+
+    def to_json(self) -> str:
+        """Serialise to the pretty JSON written to ``session.json`` (status as its value)."""
+        return json.dumps(self.to_dict(), indent=2) + "\n"
 
     @classmethod
     def from_mapping(cls, data: object) -> Session:
@@ -210,37 +228,43 @@ def end_session(session: Session) -> Session:
     return replace(session, status=SessionStatus.ENDED)
 
 
-def _session_path(target: Path) -> Path:
-    """Resolve ``target`` to the ``session.json`` file (accept either the file or its dir)."""
-    return target if target.suffix == ".json" else target / SESSION_NAME
+def _read_json_object(path: Path) -> dict[str, object]:
+    """Read ``path`` as a JSON object, mapping any read/parse/shape error to ``SessionError``.
+
+    The single place the corrupt-file contract lives: a read or decode failure, or a
+    payload that isn't a JSON object, all surface as one intentional exception type so a
+    caller has a deliberate, catchable condition rather than a crash deep in parsing.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SessionError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SessionError(f"{path} must be a JSON object, got {type(data).__name__}")
+    return data
 
 
-def load_session(target: Path) -> Session | None:
-    """Load the persisted session from ``target`` (the file or its ``.review-agent/`` dir).
+def load_session(state_dir: Path) -> Session | None:
+    """Load the persisted session from ``<state_dir>/session.json``.
 
     Returns ``None`` when the file is absent — the ordinary "no prior review" case, not
     an error. Raises :class:`SessionError` when the file is present but unparseable or
-    structurally invalid, so a corrupt session is a deliberate, catchable condition
-    rather than a crash deep in JSON parsing.
+    structurally invalid, so a corrupt session is a deliberate, catchable condition.
     """
-    path = _session_path(target)
+    path = state_dir / SESSION_NAME
     if not path.is_file():
         return None
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SessionError(f"cannot read {path}: {exc}") from exc
-    return Session.from_mapping(raw)
+    return Session.from_mapping(_read_json_object(path))
 
 
-def save_session(target: Path, session: Session) -> Path:
-    """Write ``session`` to ``target`` (the file or its dir) and return the file path.
+def save_session(state_dir: Path, session: Session) -> Path:
+    """Write ``session`` to ``<state_dir>/session.json`` and return the file path.
 
-    The parent dir is created if needed (the collector normally made it already). UTF-8
+    The state dir is created if needed (the collector normally made it already). UTF-8
     to match every other artifact, so a non-ASCII branch name round-trips.
     """
-    path = _session_path(target)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / SESSION_NAME
     path.write_text(session.to_json(), encoding="utf-8")
     return path
 
@@ -252,26 +276,25 @@ def session_from_context(context_path: Path) -> Session:
     the exact revision the cockpit was authored from, so the session mirrors that rather
     than re-running git — guaranteeing the saved session and the cockpit describe the
     same HEAD. ``started_at`` is the context's ``generated_at`` (the review began when
-    the diff was collected). Raises :class:`SessionError` if the context is missing a
-    needed field.
+    the diff was collected). Each consumed field is validated to be a string, so a
+    malformed context fails with a :class:`SessionError` rather than constructing a
+    nonsense session.
     """
-    try:
-        data = json.loads(context_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SessionError(f"cannot read {context_path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise SessionError(f"{context_path} must be a JSON object")
-    try:
-        return Session(
-            schema=_SCHEMA,
-            status=SessionStatus.OPEN,
-            base=data["base"],
-            branch=data["branch"],
-            head_sha=data["head_sha"],
-            started_at=data["generated_at"],
-        )
-    except KeyError as exc:
-        raise SessionError(f"{context_path} missing field {exc.args[0]!r}") from exc
+    data = _read_json_object(context_path)
+    fields: dict[str, str] = {}
+    for key in ("base", "branch", "head_sha", "generated_at"):
+        value = data.get(key)
+        if not isinstance(value, str):
+            raise SessionError(f"{context_path} field {key!r} is missing or not a string")
+        fields[key] = value
+    return Session(
+        schema=_SCHEMA,
+        status=SessionStatus.OPEN,
+        base=fields["base"],
+        branch=fields["branch"],
+        head_sha=fields["head_sha"],
+        started_at=fields["generated_at"],
+    )
 
 
 # --- CLI --------------------------------------------------------------------
@@ -282,11 +305,15 @@ def session_from_context(context_path: Path) -> Session:
 # Git lives only here, in the CLI — never in the pure evaluator above.
 
 
-def _resolve_out(repo: Path, out: Path | None) -> Path:
-    """The state dir holding ``session.json`` — explicit ``--out`` or ``<repo>/.review-agent``."""
-    from branch_review.collect import repo_root
+def _state_dir(repo: Path, out: Path | None) -> tuple[Path, Path]:
+    """Resolve ``(repo_root, state_dir)`` in one ``repo_root`` call.
 
-    return out if out is not None else repo_root(repo) / ".review-agent"
+    The state dir holding ``session.json`` is the explicit ``--out`` or
+    ``<repo_root>/.review-agent``. Returning the root too lets ``evaluate`` reuse it for
+    :func:`current_revision` instead of resolving the working tree twice.
+    """
+    root = repo_root(repo)
+    return root, (out if out is not None else root / ".review-agent")
 
 
 def _cmd_evaluate(repo: Path, out: Path | None) -> int:
@@ -296,10 +323,7 @@ def _cmd_evaluate(repo: Path, out: Path | None) -> int:
     ``disposition``. A corrupt ``session.json`` is reported as ``none`` with a ``note``
     (not a crash), so a broken session never blocks a review — it just regenerates.
     """
-    from branch_review.collect import current_revision, repo_root
-
-    root = repo_root(repo)
-    out_dir = out if out is not None else root / ".review-agent"
+    root, out_dir = _state_dir(repo, out)
     head_sha, branch = current_revision(root)
 
     note: str | None = None
@@ -314,7 +338,7 @@ def _cmd_evaluate(repo: Path, out: Path | None) -> int:
         "offers_restore": disposition.offers_restore,
         "restore_is_default": disposition.restore_is_default,
         "current": {"head_sha": head_sha, "branch": branch},
-        "session": None if session is None else json.loads(session.to_json()),
+        "session": None if session is None else session.to_dict(),
     }
     if note is not None:
         payload["note"] = note
@@ -324,7 +348,7 @@ def _cmd_evaluate(repo: Path, out: Path | None) -> int:
 
 def _cmd_start(repo: Path, out: Path | None) -> int:
     """Record the open session from the freshly collected ``context.json``."""
-    out_dir = _resolve_out(repo, out)
+    _root, out_dir = _state_dir(repo, out)
     session = session_from_context(out_dir / "context.json")
     path = save_session(out_dir, session)
     print(f"Session recorded ({session.status.value}) at {path}")
@@ -334,7 +358,7 @@ def _cmd_start(repo: Path, out: Path | None) -> int:
 
 def _cmd_end(repo: Path, out: Path | None) -> int:
     """Mark the persisted session ended (``/review-close``); a no-op if none exists."""
-    out_dir = _resolve_out(repo, out)
+    _root, out_dir = _state_dir(repo, out)
     session = load_session(out_dir)
     if session is None:
         print("No session.json to end.")
@@ -361,11 +385,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("end", help="Mark the session ended (/review-close).")
     args = parser.parse_args(argv)
 
-    # The git layer (:mod:`branch_review.collect`) is imported inside the handlers so
-    # the pure evaluator above carries no git dependency; its failure modes are caught
-    # here so a bad repo or a missing artifact surfaces as a clean error, not a traceback.
-    from branch_review.collect import BaseResolutionError, GitError
-
+    # The git layer's failure modes (and our own) are caught here so a bad repo or a
+    # missing artifact surfaces as a clean error, not a traceback.
     try:
         if args.command == "evaluate":
             return _cmd_evaluate(args.repo, args.out)
