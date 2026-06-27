@@ -280,3 +280,30 @@ _INTERACTIVE_REJECTS = [
 @pytest.mark.parametrize(("label", "csp"), _INTERACTIVE_REJECTS, ids=lambda c: c)
 def test_interactive_mode_is_still_bounded(label: str, csp: str) -> None:
     assert "csp-weak" in _csp_rules(lint_cockpit(_cockpit(csp=csp), csp_mode="interactive")), label
+
+
+# --- duplicate attributes (browser keeps the FIRST; lint must not be fooled) --
+
+
+def test_duplicate_attr_dangerous_first_value_is_caught() -> None:
+    # The dict collapse kept the safe last value; the raw-pair audit catches the
+    # dangerous first one the browser would actually use.
+    body = '<a href="javascript:alert(1)" href="#ok">x</a>'
+    assert "inline-js" in _rules(lint_cockpit(_cockpit(body=body)))
+
+
+def test_duplicate_attr_dangerous_second_value_is_caught() -> None:
+    body = '<a href="#ok" href="javascript:alert(1)">x</a>'
+    assert "inline-js" in _rules(lint_cockpit(_cockpit(body=body)))
+
+
+def test_duplicate_remote_href_is_caught_under_vendored() -> None:
+    body = '<link rel="stylesheet" href="assets/x.css" href="https://evil.example/x.css">'
+    assert "remote-asset" in _rules(lint_cockpit(_cockpit(body=body)))
+
+
+def test_duplicate_safe_hrefs_still_pass() -> None:
+    # Two harmless local hrefs must not trip anything — the audit flags danger, not
+    # duplication per se.
+    body = '<a href="#a" href="#b">x</a>'
+    assert _rules(lint_cockpit(_cockpit(body=body))) == set()

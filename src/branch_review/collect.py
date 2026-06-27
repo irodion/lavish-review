@@ -117,16 +117,31 @@ def detect_base(cwd: Path) -> str:
 
 
 def _changed_files(base: str, cwd: Path) -> list[dict[str, str]]:
-    """Parse ``git diff --name-status base...HEAD`` into status/path records."""
-    out = _run_git(["diff", "--name-status", f"{base}...HEAD"], cwd)
+    """Parse ``git diff --name-status -z base...HEAD`` into status/path records.
+
+    NUL-delimited (``-z``) so paths round-trip verbatim. In the default line/tab
+    format git C-quotes any path containing a tab or newline **regardless of**
+    ``core.quotePath`` (those bytes would otherwise corrupt the format), which would
+    break both this parse and the later path-scoped per-file diff — the file's body
+    would silently vanish from the walkthrough (violating "nothing omitted is ever
+    hidden"). With ``-z`` the status and each path are separate NUL-terminated
+    fields and paths are emitted raw.
+    """
+    out = _run_git(["diff", "--name-status", "-z", f"{base}...HEAD"], cwd)
+    tokens = out.split("\0")
     files: list[dict[str, str]] = []
-    for line in out.splitlines():
-        parts = line.split("\t")
-        status = parts[0]
-        if status.startswith(("R", "C")) and len(parts) >= 3:
-            files.append({"status": status, "path": parts[2], "old_path": parts[1]})
-        elif len(parts) >= 2:
-            files.append({"status": status, "path": parts[1]})
+    i = 0
+    while i < len(tokens) and tokens[i]:  # final NUL yields a trailing "" → stop
+        status = tokens[i]
+        # Rename/copy carries two NUL-separated paths (old, new); else just one.
+        if status.startswith(("R", "C")) and i + 2 < len(tokens):
+            files.append({"status": status, "path": tokens[i + 2], "old_path": tokens[i + 1]})
+            i += 3
+        elif i + 1 < len(tokens):
+            files.append({"status": status, "path": tokens[i + 1]})
+            i += 2
+        else:
+            break
     return files
 
 

@@ -212,6 +212,26 @@ def test_per_file_fragment_handles_unusual_path(repo: Path) -> None:
     assert (out / str(rec["fragment"])).is_file()
 
 
+def test_per_file_fragment_handles_tab_in_path(repo: Path) -> None:
+    # A literal tab in a filename is C-quoted by git even with core.quotePath=false
+    # (the tab would corrupt the line/tab format), which would record a quoted path
+    # and make the path-scoped per-file diff empty — silently hiding the body.
+    # NUL-delimited (-z) name-status keeps the path raw so the body survives.
+    _git(repo, "checkout", "feature")
+    odd = "weird\ttab.py"
+    (repo / odd).write_text("tabbed = 1\n")
+    _git(repo, "add", "--", odd)
+    _git(repo, "commit", "-m", "feat: tab in path")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    assert odd in index, list(index)
+    frag = (out / str(index[odd]["fragment"])).read_text()
+    assert "(no changes in this range)" not in frag  # the body must not vanish
+    assert "tabbed = 1" in frag
+
+
 def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
     # First run with two files, second run with one — the dropped file's fragment
     # must not linger in fragments/ or the index.

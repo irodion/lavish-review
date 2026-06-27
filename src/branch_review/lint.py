@@ -218,25 +218,31 @@ class _TagAuditor(HTMLParser):
     def _audit(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {name.lower(): (value or "") for name, value in attrs}
 
-        for name in attr_map:
+        # Audit the RAW (name, value) pairs, not the collapsed dict: when a tag
+        # carries duplicate attributes the browser keeps the FIRST, so
+        # ``<a href="javascript:..." href="#ok">`` is live JS even though the dict
+        # would keep the safe last value. Flagging any dangerous occurrence (and any
+        # remote one) keeps the tripwire sound — duplicate security-relevant
+        # attributes are a smell worth failing on regardless of order.
+        for raw_name, raw_value in attrs:
+            name = raw_name.lower()
             if name.startswith("on"):
                 self.errors.append(
-                    LintError("inline-js", f"<{tag}> carries inline event handler {name!r}")
+                    LintError("inline-js", f"<{tag}> carries inline event handler {raw_name!r}")
                 )
-
-        for name in ("src", "href"):
-            if name not in attr_map:
-                continue
-            value = _normalize_url(attr_map[name])
-            if value.lower().startswith("javascript:"):
-                self.errors.append(LintError("inline-js", f"<{tag}> {name} uses a javascript: URI"))
-            elif self.styling == "vendored" and _is_remote(value):
-                self.errors.append(
-                    LintError(
-                        "remote-asset",
-                        f"<{tag}> {name}={value!r} is remote under styling: vendored",
+            if name in ("src", "href"):
+                value = _normalize_url(raw_value or "")
+                if value.lower().startswith("javascript:"):
+                    self.errors.append(
+                        LintError("inline-js", f"<{tag}> {name} uses a javascript: URI")
                     )
-                )
+                elif self.styling == "vendored" and _is_remote(value):
+                    self.errors.append(
+                        LintError(
+                            "remote-asset",
+                            f"<{tag}> {name}={value!r} is remote under styling: vendored",
+                        )
+                    )
 
         if tag == "script":
             self._script_has_src = "src" in attr_map
