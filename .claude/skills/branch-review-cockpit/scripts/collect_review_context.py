@@ -9,7 +9,7 @@ vendored assets that sit beside this file, so the collector copies
 
 Packaging this into a standalone, dependency-free skill bundle is issue #12; for
 the dev-only skeleton it imports ``branch_review`` from the repo's ``src/``, which
-it puts on ``sys.path`` itself — so the documented ``python <this script>`` works
+it puts on ``sys.path`` itself — so the documented ``python3 <this script>`` works
 in a fresh checkout, with or without an editable install.
 """
 

@@ -39,7 +39,7 @@ Run the collector from the repo you want to review. Pass an explicit base only i
 the user named one (precedence: command arg > config > auto-detect):
 
 ```sh
-python .claude/skills/branch-review-cockpit/scripts/collect_review_context.py [base]
+python3 .claude/skills/branch-review-cockpit/scripts/collect_review_context.py [base]
 ```
 
 It auto-detects the Base (`origin/HEAD`, else `main`/`develop`/`master`), computes
