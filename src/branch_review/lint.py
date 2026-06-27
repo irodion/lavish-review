@@ -23,8 +23,14 @@ Rules enforced:
   fails — the cockpit must render with local vendored assets only. ``styling: cdn``
   is the opt-in that relaxes this.
 * **Strict CSP.** A ``<meta http-equiv="Content-Security-Policy">`` must be present
-  and strict: scripts limited to ``'self'``/``'none'`` and no ``'unsafe-inline'``
-  / ``'unsafe-eval'`` anywhere.
+  and meet the full baseline of :data:`~branch_review.escape.STRICT_CSP`, not just
+  constrain scripts: ``default-src 'none'`` (deny every resource type by default),
+  ``script-src`` limited to ``'self'``/``'none'``, and ``base-uri`` + ``form-action``
+  locked to ``'none'``/``'self'`` — those two are checked explicitly because they do
+  **not** fall back to ``default-src``, so a policy that omits them leaves ``<base>``
+  hijacking and form exfiltration open. ``'unsafe-inline'`` / ``'unsafe-eval'`` are
+  rejected anywhere. A policy like ``script-src 'self'`` with no ``default-src``
+  fails: it would leave every other resource type governed by the browser default.
 
 See ``DESIGN.md`` and ``docs/adr/0002-deterministic-escape-boundary.md``.
 """
@@ -53,8 +59,22 @@ _URL_STRIPPED = str.maketrans("", "", "\t\n\r")
 # ``\x01javascript:`` resolves too. Strip the same set before the scheme checks.
 _URL_TRIM = "".join(map(chr, range(0x21)))
 
-# Tokens a strict ``script-src`` (or ``default-src`` fallback) may contain.
+# Tokens a strict ``script-src`` may contain.
 _STRICT_SCRIPT_SOURCES = frozenset({"'self'", "'none'"})
+
+# The strict CSP baseline every cockpit must satisfy — the enforced core of
+# STRICT_CSP (escape.py), each directive mapped to the source tokens it may carry.
+# ``default-src`` must be the catch-all denial ``'none'`` the skill promises;
+# ``base-uri``/``form-action`` are pinned here too because they have their own
+# permissive browser defaults and do NOT inherit from ``default-src``. Functional
+# fetch directives (style/img/font-src) are deliberately not required — they are not
+# security-load-bearing once ``default-src 'none'`` denies everything by default.
+_CSP_BASELINE: dict[str, frozenset[str]] = {
+    "default-src": frozenset({"'none'"}),
+    "script-src": _STRICT_SCRIPT_SOURCES,
+    "base-uri": frozenset({"'none'", "'self'"}),
+    "form-action": frozenset({"'none'", "'self'"}),
+}
 
 _UNTRUSTED_RE = re.compile(
     re.escape(UNTRUSTED_OPEN) + "(.*?)" + re.escape(UNTRUSTED_CLOSE),
@@ -199,7 +219,13 @@ class _TagAuditor(HTMLParser):
 
 
 def _check_csp(content: str | None) -> list[LintError]:
-    """Fail unless a strict Content-Security-Policy governs scripts."""
+    """Fail unless the Content-Security-Policy meets the full strict baseline.
+
+    Enforces every directive in :data:`_CSP_BASELINE` — not just ``script-src`` —
+    so a policy that constrains scripts but omits ``default-src`` (leaving other
+    resource types to the browser default) is rejected, matching the
+    ``default-src 'none'`` baseline the skill promises.
+    """
     if content is None:
         return [
             LintError(
@@ -208,24 +234,22 @@ def _check_csp(content: str | None) -> list[LintError]:
             )
         ]
 
-    errors: list[LintError] = []
     directives: dict[str, list[str]] = {}
     for clause in content.split(";"):
         tokens = clause.split()
         if tokens:
             directives[tokens[0].lower()] = tokens[1:]
 
-    script_sources = directives.get("script-src", directives.get("default-src"))
-    if script_sources is None:
-        errors.append(LintError("csp-weak", "CSP defines neither script-src nor default-src"))
-    else:
-        non_strict = [tok for tok in script_sources if tok not in _STRICT_SCRIPT_SOURCES]
+    errors: list[LintError] = []
+    for name, allowed in _CSP_BASELINE.items():
+        sources = directives.get(name)
+        if sources is None:
+            errors.append(LintError("csp-weak", f"CSP is missing the strict {name} directive"))
+            continue
+        non_strict = [tok for tok in sources if tok not in allowed]
         if non_strict:
             errors.append(
-                LintError(
-                    "csp-weak",
-                    f"script-src permits non-strict source(s): {non_strict}",
-                )
+                LintError("csp-weak", f"{name} permits non-strict source(s): {non_strict}")
             )
 
     lowered = content.lower()
