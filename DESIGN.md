@@ -36,6 +36,22 @@ Executive Summary · Review Route · Behavior Changes · Risk Map (categories: c
 
 Styling: vendored `cockpit.css` default; `styling: cdn` opt-in uses Lavish's Tailwind+DaisyUI fallback. Test integration: **checklist + read-only runner detection, no execution**.
 
+## Lenses
+
+A **Lens** sharpens the neutral-by-default analysis; it is not separate machinery and never adds a cockpit section or risk category. Two kinds:
+
+- **Language Lens** (issue #11): a bundled, language-specific risk checklist (C++/Python/TS) folded into the Risk Map, selected by detected language + `language_hints`.
+- **Focus Lens**: a reviewer-chosen *perspective* that re-weights and re-frames the Risk Map, Review Route, and feedback-loop answers toward a concern. Two activation paths: **authoring-time** via the `focus` config key / CLI (shapes the whole cockpit), and **mid-review** via a **Lens Pass** through the feedback loop (re-analyzes a slice, answers live, appends to `analysis.json` + `qa.jsonl` for bake-at-close — **no `review.html` regeneration**, per ADR-0003). The re-invokable mid-review path is what distinguishes a Focus Lens from a one-shot authoring choice, and is why it waited on the loop (#5).
+
+**v1 Focus Lens Catalog** (bundled definitions, same shape as Language Lenses):
+
+- **security / OWASP** — reframes toward attack surface; maps risks to OWASP Top 10 / CWE. Pure agent reasoning.
+- **regressions** — reframes toward what could break that used to work (changed public surface, untouched callers; leans on Suspicious Omissions). Pure agent reasoning.
+- **simplification** — advisory **design critique** ("what are our choices? can we do this simpler?"). Proposes alternatives as `maintainability`-framed entries and loop answers; **never patches, never decides** (ADR-0005). This is the bounded expansion of the cockpit from change-audit to advisory critique.
+- **supply-chain** — runs [`vet`](https://github.com/safedep/vet) on **changed dependency manifests** to surface known-vulnerable / malicious / license-problematic added or bumped deps. **Opt-in, offline-safe**: runs only when selected *and* a manifest changed; degrades to an agent-reasoned note when `vet` is absent or the network is down; tool output is escaped untrusted data; findings fold into the `security` category (ADR-0006). First instance of the external-tool-findings substrate (the PRD's deferred `semgrep`/`ruff`/`clang-tidy` category).
+
+All Focus Lens findings fold into the existing Risk Map categories and answers — no new sections, no new categories.
+
 ## Feedback loop (ADR-0003)
 
 - One command enters a **blocking answer loop**: `lavish-axi poll` (no-timeout) returns queued feedback; agent answers and re-polls with `--agent-reply`.
@@ -70,6 +86,6 @@ Two non-overlapping scopes:
 
 ## v1 scope
 
-**In:** the full pipeline above — `/review-branch [base]`, agent analysis + cockpit, escaping + CSP + lint, blocking loop with the three controls, `qa.jsonl` + bake-at-close, `session.json` + staleness offer, minimal `.review-agent.yaml`, C++/Python/TS lenses, installer.
+**In:** the full pipeline above — `/review-branch [base]`, agent analysis + cockpit, escaping + CSP + lint, blocking loop with the three controls, `qa.jsonl` + bake-at-close, `session.json` + staleness offer, minimal `.review-agent.yaml`, C++/Python/TS Language Lenses, the Focus Lens Catalog (security/OWASP, regressions, simplification, supply-chain) with authoring-time + mid-review (Lens Pass) activation, installer.
 
-**Deferred (roadmap, retained):** Mermaid rendering (vendored), `diff2html` side-by-side, Python Lavish fallback, external-CLI-tool findings (`semgrep`/`ruff`/`clang-tidy` if installed), additional-skills config, user-defined language hints, ambient SessionStart-hook resume.
+**Deferred (roadmap, retained):** Mermaid rendering (vendored), `diff2html` side-by-side, Python Lavish fallback, further external-tool-findings lenses (`semgrep`/`ruff`/`clang-tidy` on the substrate the supply-chain lens establishes), additional-skills config, user-defined language hints, user-defined Focus Lenses, ambient SessionStart-hook resume.
