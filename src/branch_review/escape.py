@@ -116,6 +116,17 @@ def diff_fragment(diff_text: str) -> str:
     return f'<pre class="diff">{body}</pre>\n'
 
 
+def notice_fragment(message: str) -> str:
+    """A trusted notice rendered in the whole diff's place (e.g. the total-diff fallback).
+
+    Reuses the ``<pre class="diff">`` shell so the cockpit's Diff section styles it
+    like a diff block, but the body is a tool-authored message — not attacker data —
+    so it carries no untrusted markers. Escaped through :func:`escape_text` anyway
+    for uniformity; the message is plain text by construction.
+    """
+    return f'<pre class="diff">{escape_text(message)}</pre>\n'
+
+
 def _file_line(record: Mapping[str, str]) -> str:
     """One ``<li>`` for a changed file; status and path(s) both cross the boundary.
 

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
 
 
@@ -183,17 +183,22 @@ def _matched_exclude(
     segment, a built-in glob, or a configured pattern) so the omission reason can
     name it.
     """
+    # ``fnmatchcase`` (not ``fnmatch``) so glob matching is case-sensitive on every
+    # OS — plain ``fnmatch`` normalizes case via ``os.path.normcase`` and would
+    # include a file on POSIX but omit it on Windows. ``sorted(exclude_dirs)`` makes
+    # the human reason deterministic when a path sits under more than one excluded
+    # dir (the disposition is the same either way; only the label could wobble).
     if not config.exclude_reset:
-        for segment in config.exclude_dirs:
+        for segment in sorted(config.exclude_dirs):
             if segment in parts:
                 return f"in {segment}/"
         for pattern in config.exclude_globs:
-            if fnmatch(name, pattern):
+            if fnmatchcase(name, pattern):
                 return pattern
 
     # Configured excludes match the full path so a rule can target a subtree.
     for pattern in config.extra_excludes:
-        if fnmatch(path, pattern) or fnmatch(name, pattern):
+        if fnmatchcase(path, pattern) or fnmatchcase(name, pattern):
             return pattern
     return None
 

@@ -37,6 +37,7 @@ from branch_review.escape import (
     build_fragments,
     diff_fragment,
     fragment_index_entry,
+    notice_fragment,
 )
 
 # Base auto-detect fallbacks, tried in order when origin/HEAD is absent.
@@ -270,11 +271,17 @@ def _generated_paths(files: list[dict[str, str]], cwd: Path) -> set[str]:
     exactly as git resolves them. Output is ``path\\0attr\\0value`` triples; a value
     of ``set`` means generated. Querying by pathname needs no file on disk, so a
     file deleted at HEAD is still classified by the attribute that covers its path.
+
+    ``strip=False``: this stream *starts* with the raw pathname, so a blanket
+    ``.strip()`` would eat a leading space from a filename like ``" generated.py"``
+    before the parser builds the key — the file would then never match its
+    changed-files record and its generated body would slip through. (``--numstat -z``
+    starts with the counts, so it has no such failure mode.)
     """
     if not files:
         return set()
     paths = [record["path"] for record in files]
-    out = _run_git(["check-attr", "-z", "linguist-generated", "--", *paths], cwd)
+    out = _run_git(["check-attr", "-z", "linguist-generated", "--", *paths], cwd, strip=False)
     tokens = out.split("\0")
     generated: set[str] = set()
     # Walk fixed-width triples; a trailing "" from the final NUL is ignored.
@@ -393,8 +400,6 @@ def collect(
     out.mkdir(parents=True, exist_ok=True)
 
     context, files = _build_context(resolved_base, root, now=now or datetime.now(UTC))
-    # strip=False: the whole diff is shown verbatim — preserve trailing whitespace.
-    diff_text = _run_git(["diff", context.diff_range], root, strip=False)
     diff_stat = _run_git(["diff", "--stat", context.diff_range], root)
     commits = _run_git(["log", "--oneline", f"{resolved_base}..HEAD"], root)
     commit_lines = commits.splitlines()
@@ -411,6 +416,26 @@ def collect(
         commit_lines=commit_lines,
     )
 
+    # Classify per-file and resolve the total-diff verdict (issue #7) *before*
+    # materializing any whole-diff body. The fallback must suppress the whole-diff
+    # artifacts too — not only the per-file fragments — or a huge branch would still
+    # dump the entire unified diff into diff.patch / diff.fragment.html. Running this
+    # first also means we never build the giant diff we would only throw away.
+    fragment_index, changeset = _write_file_fragments(
+        out, context.diff_range, files, root, classifier_config
+    )
+
+    # Under the total-diff fallback the whole diff degrades to a file-list + stats
+    # banner: diff.patch is empty and diff.fragment.html carries the reason instead
+    # of the body. Otherwise the diff is shown verbatim (strip=False preserves
+    # trailing whitespace; git already newline-terminates it).
+    if changeset.too_large:
+        diff_text = ""
+        diff_html = notice_fragment(changeset.reason or "diff too large — file list + stats only")
+    else:
+        diff_text = _run_git(["diff", context.diff_range], root, strip=False)
+        diff_html = diff_fragment(diff_text)
+
     # Always UTF-8 so non-ASCII diffs/paths/messages round-trip deterministically
     # regardless of the platform default encoding, and so the HTML fragment is the
     # UTF-8 the cockpit's <meta charset="utf-8"> promises the browser.
@@ -418,19 +443,11 @@ def collect(
     files_json = json.dumps(files, indent=2) + "\n"
     (out / "context.json").write_text(context_json, encoding="utf-8")
     (out / "changed-files.json").write_text(files_json, encoding="utf-8")
-    # ``diff_text`` is raw (strip=False): already newline-terminated by git when
-    # non-empty, "" when empty — write it verbatim so the patch is byte-faithful.
     (out / "diff.patch").write_text(diff_text, encoding="utf-8")
     (out / "diff-stat.txt").write_text(diff_stat + "\n", encoding="utf-8")
     (out / "commits.txt").write_text(commits + "\n", encoding="utf-8")
-    (out / "diff.fragment.html").write_text(diff_fragment(diff_text), encoding="utf-8")
+    (out / "diff.fragment.html").write_text(diff_html, encoding="utf-8")
     (out / "fragments.html").write_text(fragments, encoding="utf-8")
-
-    # Per-file escaped fragments + ordered index (issue #21) — the File Walkthrough
-    # substrate. The whole-diff diff.fragment.html above is preserved unchanged.
-    fragment_index, changeset = _write_file_fragments(
-        out, context.diff_range, files, root, classifier_config
-    )
     fragments_json = (
         json.dumps(
             {

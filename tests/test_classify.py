@@ -148,6 +148,23 @@ def test_exclude_reset_drops_builtin_globs_but_keeps_lockfiles_and_attributes() 
     )
 
 
+def test_glob_matching_is_case_sensitive_on_every_platform() -> None:
+    # fnmatchcase (not fnmatch) keeps glob excludes case-sensitive regardless of OS,
+    # so a branch classifies identically on POSIX and Windows. The lowercase form is
+    # excluded; an uppercased variant is not silently swept up.
+    assert classify("static/app.min.js", FileStats(added=3), _DEFAULT) is Disposition.OMIT_EXCLUDED
+    assert classify("static/APP.MIN.JS", FileStats(added=3), _DEFAULT) is Disposition.INCLUDE_BODY
+
+
+def test_exclude_dir_reason_is_deterministic_when_multiple_match() -> None:
+    # A path under two excluded dirs is OMIT_EXCLUDED either way; the human reason is
+    # made stable (sorted) so the deterministic context files don't wobble run-to-run.
+    config = ClassifierConfig(exclude_dirs=frozenset({"vendor", "third_party", "dist"}))
+    result = classify_file("third_party/vendor/lib.js", FileStats(added=3), config)
+    assert result.disposition is Disposition.OMIT_EXCLUDED
+    assert result.reason == "excluded (in third_party/) — body omitted, stats kept"
+
+
 def test_custom_caps_are_honored() -> None:
     config = ClassifierConfig(max_file_diff_lines=10)
     assert classify("x.py", FileStats(added=11), config) is Disposition.OMIT_TOO_LARGE

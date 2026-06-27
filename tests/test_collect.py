@@ -508,6 +508,25 @@ def test_vendored_and_generated_are_excluded(repo: Path) -> None:
         assert rec["omitted"] is True
 
 
+def test_linguist_generated_honored_for_leading_space_filename(repo: Path) -> None:
+    # check-attr -z streams the raw pathname first, so its stdout must NOT be
+    # .strip()'d — a leading-space filename would otherwise lose its space before
+    # the generated-set key is built, and the file's body would slip through.
+    _git(repo, "checkout", "feature")
+    odd = " generated.py"  # leading space
+    (repo / odd).write_text("x = 1\n")
+    (repo / ".gitattributes").write_text("* linguist-generated\n")
+    _git(repo, "add", "--", odd, ".gitattributes")
+    _git(repo, "commit", "-m", "chore: spaced generated file")
+    collect(repo)
+    index = _fragments_index(repo / ".review-agent")
+
+    rec = index[odd]
+    assert rec["disposition"] == "omit:excluded"
+    assert rec["fragment"] is None
+    assert "linguist-generated" in str(rec["reason"])
+
+
 def test_linguist_generated_attribute_is_honored(repo: Path) -> None:
     _git(repo, "checkout", "feature")
     # A normal-looking path becomes excluded purely via .gitattributes.
@@ -573,6 +592,12 @@ def test_total_diff_guard_falls_back_to_listing(repo: Path) -> None:
     assert data["too_large"] is True
     assert "diff too large" in str(data["too_large_reason"])
     assert data["included_changed_lines"] > 20
+    # The whole-diff artifacts degrade too — not just per-file fragments. diff.patch
+    # is empty and diff.fragment.html carries the banner, never the full body.
+    assert (out / "diff.patch").read_text() == ""
+    frag_html = (out / "diff.fragment.html").read_text()
+    assert "diff too large" in frag_html
+    assert "+line " not in frag_html  # the actual diff body is not dumped
 
 
 def test_normal_branch_is_not_flagged_too_large(repo: Path) -> None:
