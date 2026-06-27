@@ -1,0 +1,100 @@
+/* Branch Review Cockpit — vendored default styling (walking skeleton, issue #3).
+   Portable: the cockpit must render identically when opened directly in a plain
+   browser, so everything here is self-contained — no remote fonts or imports. */
+
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --fg: #e6edf3;
+  --muted: #9da7b3;
+  --accent: #4493f8;
+  --add: #3fb950;
+  --del: #f85149;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem clamp(1rem, 5vw, 4rem);
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+main { max-width: 1100px; margin: 0 auto; }
+
+header.cockpit-head {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+header.cockpit-head h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.6rem;
+  line-height: 1.25;
+}
+
+.intent {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+.meta {
+  margin: 0.75rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.meta code {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  color: var(--fg);
+}
+
+section { margin: 2rem 0; }
+
+section > h2 {
+  font-size: 1.05rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+}
+
+pre.diff {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+/* app.js tints diff lines client-side; safe because it never injects markup. */
+pre.diff .ln-add { color: var(--add); }
+pre.diff .ln-del { color: var(--del); }
+pre.diff .ln-hunk { color: var(--accent); }
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
