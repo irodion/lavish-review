@@ -1,3 +1,6 @@
+# Local agent rules / overrides (machine-local, never committed)
+CLAUDE.local.md
+
 # Branch Review Cockpit — generated review state (never committed)
 .review-agent/
 
