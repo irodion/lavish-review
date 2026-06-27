@@ -47,6 +47,41 @@ STRICT_CSP = (
     "font-src 'self'; base-uri 'none'; form-action 'none'"
 )
 
+# The CDN origin Lavish-AXI loads its editor stack (Tailwind + DaisyUI) from when it
+# injects its interactive client into a served page.
+LAVISH_CDN = "https://cdn.jsdelivr.net"
+
+# The relaxed policy for a cockpit opened **through Lavish-AXI**, not via ``file://``.
+#
+# Lavish serves the cockpit and injects its annotation/editor UI into the page —
+# a CDN Tailwind runtime + DaisyUI stylesheet, an inline ``<style
+# type="text/tailwindcss">``, and an inline ``<script type="module">`` bootstrap —
+# without reconciling with the page's own CSP. Under :data:`STRICT_CSP` every one of
+# those injections is blocked, so the annotation UI renders unstyled and unusable
+# (issue: strict CSP vs. the Lavish interactive layer; see
+# ``docs/adr/0004-interactive-csp.md``). This policy trusts ``'self'`` plus the
+# Lavish CDN and permits inline script/style so that UI can run.
+#
+# This is a **defense-in-depth reduction, not a hole**: the primary XSS control is
+# the deterministic entity-escaping at the Escape Boundary (ADR-0002), which is
+# CSP-independent — untrusted diff bytes are already entities and cannot execute
+# under any policy. Relaxing the CSP is acceptable *only* because this context is
+# local and loopback-only (the cockpit is served from 127.0.0.1 by a tool the user
+# launched). The portable ``file://`` artifact keeps :data:`STRICT_CSP`. The
+# relaxation stays **bounded**: ``default-src 'none'`` still denies everything not
+# named, ``base-uri``/``form-action`` stay locked, and script/style are widened only
+# to ``'self'`` + the Lavish CDN + inline/eval — not to an open wildcard.
+INTERACTIVE_CSP = (
+    "default-src 'none'; "
+    f"script-src 'self' 'unsafe-inline' 'unsafe-eval' {LAVISH_CDN}; "
+    f"style-src 'self' 'unsafe-inline' {LAVISH_CDN}; "
+    f"img-src 'self' data: {LAVISH_CDN}; "
+    f"font-src 'self' data: {LAVISH_CDN}; "
+    f"connect-src 'self' {LAVISH_CDN}; "
+    "worker-src 'self' blob:; "
+    "base-uri 'none'; form-action 'none'"
+)
+
 # Shown in place of an untrusted region when there is genuinely nothing to escape.
 # A trusted literal, so it carries no markers.
 _EMPTY_DIFF = "(no changes in this range)"

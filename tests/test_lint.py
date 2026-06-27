@@ -11,7 +11,13 @@ from collections.abc import Iterable
 
 import pytest
 
-from branch_review.escape import STRICT_CSP, UNTRUSTED_CLOSE, UNTRUSTED_OPEN, fragment
+from branch_review.escape import (
+    INTERACTIVE_CSP,
+    STRICT_CSP,
+    UNTRUSTED_CLOSE,
+    UNTRUSTED_OPEN,
+    fragment,
+)
 from branch_review.lint import LintError, lint_cockpit
 
 
@@ -226,3 +232,51 @@ def test_csp_rules(label: str, csp: str | None, expected: str | None) -> None:
         assert csp_rules == set(), f"{label}: unexpected {csp_rules}"
     else:
         assert expected in csp_rules, f"{label}: expected {expected} in {csp_rules}"
+
+
+# --- interactive CSP mode (cockpit served through Lavish-AXI, ADR-0004) -------
+
+
+def _csp_rules(errors: Iterable[LintError]) -> set[str]:
+    return {r for r in _rules(errors) if r.startswith("csp-")}
+
+
+def test_interactive_csp_passes_in_interactive_mode() -> None:
+    # The relaxed policy Lavish needs is accepted only when we ask for it.
+    assert _csp_rules(lint_cockpit(_cockpit(csp=INTERACTIVE_CSP), csp_mode="interactive")) == set()
+
+
+def test_interactive_csp_fails_under_strict_mode() -> None:
+    # The portable-artifact default must still reject the relaxed policy — the two
+    # modes are genuinely different, not both permissive.
+    assert "csp-weak" in _csp_rules(lint_cockpit(_cockpit(csp=INTERACTIVE_CSP)))
+
+
+def test_strict_csp_still_passes_in_interactive_mode() -> None:
+    # Strict is a subset of the interactive baseline, so it remains acceptable.
+    assert _csp_rules(lint_cockpit(_cockpit(csp=STRICT_CSP), csp_mode="interactive")) == set()
+
+
+# Interactive mode is relaxed but still BOUNDED — these must fail even in it.
+_INTERACTIVE_REJECTS = [
+    ("script-wildcard", "default-src 'none'; script-src *; base-uri 'none'; form-action 'none'"),
+    (
+        "arbitrary-remote-host",
+        "default-src 'none'; script-src 'self' https://evil.example; "
+        "base-uri 'none'; form-action 'none'",
+    ),
+    (
+        "default-src-self-too-weak",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "base-uri 'none'; form-action 'none'",
+    ),
+    (
+        "base-uri-unlocked",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; base-uri *; form-action 'none'",
+    ),
+]
+
+
+@pytest.mark.parametrize(("label", "csp"), _INTERACTIVE_REJECTS, ids=lambda c: c)
+def test_interactive_mode_is_still_bounded(label: str, csp: str) -> None:
+    assert "csp-weak" in _csp_rules(lint_cockpit(_cockpit(csp=csp), csp_mode="interactive")), label

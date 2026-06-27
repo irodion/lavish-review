@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
-from branch_review.escape import UNTRUSTED_CLOSE, UNTRUSTED_OPEN
+from branch_review.escape import LAVISH_CDN, UNTRUSTED_CLOSE, UNTRUSTED_OPEN
 
 # A remote reference the vendored cockpit must not load: an absolute http(s) URL
 # or a protocol-relative ``//host`` one. Local relative paths (``assets/app.js``),
@@ -74,6 +74,33 @@ _CSP_BASELINE: dict[str, frozenset[str]] = {
     "script-src": _STRICT_SCRIPT_SOURCES,
     "base-uri": frozenset({"'none'", "'self'"}),
     "form-action": frozenset({"'none'", "'self'"}),
+}
+
+# The bounded baseline for a cockpit opened **through Lavish-AXI** (csp_mode
+# "interactive"; see escape.INTERACTIVE_CSP and docs/adr/0004-interactive-csp.md).
+# Lavish injects an inline/CDN editor stack the strict policy blocks, so script/style
+# are widened — but only to ``'self'`` + the Lavish CDN + inline/eval, never an open
+# wildcard. ``default-src 'none'`` and the ``base-uri``/``form-action`` locks are
+# retained exactly as in strict mode, and the blanket ``'unsafe-inline'``/
+# ``'unsafe-eval'`` rejection is intentionally NOT applied here (those tokens are the
+# whole point of this mode). Functional fetch directives stay unconstrained, as in
+# strict mode.
+_INTERACTIVE_SCRIPT_SOURCES = frozenset(
+    {"'self'", "'none'", "'unsafe-inline'", "'unsafe-eval'", "'wasm-unsafe-eval'", LAVISH_CDN}
+)
+_INTERACTIVE_STYLE_SOURCES = frozenset({"'self'", "'none'", "'unsafe-inline'", LAVISH_CDN})
+_CSP_BASELINE_INTERACTIVE: dict[str, frozenset[str]] = {
+    "default-src": frozenset({"'none'"}),
+    "script-src": _INTERACTIVE_SCRIPT_SOURCES,
+    "style-src": _INTERACTIVE_STYLE_SOURCES,
+    "base-uri": frozenset({"'none'", "'self'"}),
+    "form-action": frozenset({"'none'", "'self'"}),
+}
+
+# Resolved CSP baseline per mode, and whether the mode also forbids unsafe-* outright.
+_CSP_MODES: dict[str, tuple[dict[str, frozenset[str]], bool]] = {
+    "strict": (_CSP_BASELINE, True),
+    "interactive": (_CSP_BASELINE_INTERACTIVE, False),
 }
 
 _UNTRUSTED_RE = re.compile(
@@ -218,13 +245,16 @@ class _TagAuditor(HTMLParser):
             self.csp_content = attr_map.get("content", "")
 
 
-def _check_csp(content: str | None) -> list[LintError]:
-    """Fail unless the Content-Security-Policy meets the full strict baseline.
+def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintError]:
+    """Fail unless the Content-Security-Policy meets the baseline for ``csp_mode``.
 
-    Enforces every directive in :data:`_CSP_BASELINE` — not just ``script-src`` —
-    so a policy that constrains scripts but omits ``default-src`` (leaving other
-    resource types to the browser default) is rejected, matching the
-    ``default-src 'none'`` baseline the skill promises.
+    ``strict`` (the default, for the portable ``file://`` artifact) enforces the
+    full ``default-src 'none'`` / ``script-src 'self'`` baseline and rejects
+    ``'unsafe-*'`` outright. ``interactive`` (for a cockpit served through
+    Lavish-AXI) keeps ``default-src 'none'`` and the ``base-uri``/``form-action``
+    locks but widens script/style to ``'self'`` + the Lavish CDN + inline/eval —
+    still bounded, so an open wildcard or an arbitrary remote host is rejected. See
+    ``docs/adr/0004-interactive-csp.md``.
     """
     if content is None:
         return [
@@ -234,6 +264,8 @@ def _check_csp(content: str | None) -> list[LintError]:
             )
         ]
 
+    baseline, forbid_unsafe = _CSP_MODES[csp_mode]
+
     directives: dict[str, list[str]] = {}
     for clause in content.split(";"):
         tokens = clause.split()
@@ -241,28 +273,36 @@ def _check_csp(content: str | None) -> list[LintError]:
             directives[tokens[0].lower()] = tokens[1:]
 
     errors: list[LintError] = []
-    for name, allowed in _CSP_BASELINE.items():
+    for name, allowed in baseline.items():
         sources = directives.get(name)
         if sources is None:
-            errors.append(LintError("csp-weak", f"CSP is missing the strict {name} directive"))
+            errors.append(LintError("csp-weak", f"CSP is missing the {name} directive"))
             continue
-        non_strict = [tok for tok in sources if tok not in allowed]
-        if non_strict:
+        disallowed = [tok for tok in sources if tok not in allowed]
+        if disallowed:
             errors.append(
-                LintError("csp-weak", f"{name} permits non-strict source(s): {non_strict}")
+                LintError("csp-weak", f"{name} permits out-of-baseline source(s): {disallowed}")
             )
 
-    lowered = content.lower()
-    if "'unsafe-inline'" in lowered or "'unsafe-eval'" in lowered:
-        errors.append(LintError("csp-weak", "CSP contains 'unsafe-inline' or 'unsafe-eval'"))
+    if forbid_unsafe:
+        lowered = content.lower()
+        if "'unsafe-inline'" in lowered or "'unsafe-eval'" in lowered:
+            errors.append(LintError("csp-weak", "CSP contains 'unsafe-inline' or 'unsafe-eval'"))
     return errors
 
 
-def lint_cockpit(html: str, *, styling: str = "vendored") -> list[LintError]:
+def lint_cockpit(
+    html: str, *, styling: str = "vendored", csp_mode: str = "strict"
+) -> list[LintError]:
     """Lint a cockpit's HTML; return every violation (empty list means it passes).
 
     ``styling`` is the resolved cockpit styling (``vendored`` default, ``cdn``
-    opt-in); it only relaxes the remote-asset rule.
+    opt-in); it only relaxes the remote-asset rule. ``csp_mode`` selects the CSP
+    baseline: ``strict`` (default, the portable ``file://`` artifact) or
+    ``interactive`` (a cockpit served through Lavish-AXI — see
+    :func:`_check_csp`). The untrusted-markup and no-inline-JS rules are unchanged
+    by either: the cockpit we author never contains inline JS, even in
+    ``interactive`` mode (Lavish injects its own at serve time).
     """
     errors: list[LintError] = []
     errors.extend(_check_untrusted_regions(html))
@@ -271,7 +311,7 @@ def lint_cockpit(html: str, *, styling: str = "vendored") -> list[LintError]:
     auditor.feed(html)
     auditor.close()
     errors.extend(auditor.errors)
-    errors.extend(_check_csp(auditor.csp_content))
+    errors.extend(_check_csp(auditor.csp_content, csp_mode=csp_mode))
     return errors
 
 
@@ -288,6 +328,13 @@ def main(argv: list[str] | None = None) -> int:
         default="vendored",
         help="Resolved cockpit styling (default: vendored).",
     )
+    parser.add_argument(
+        "--csp-mode",
+        choices=("strict", "interactive"),
+        default="strict",
+        help="CSP baseline: strict (portable file:// artifact) or interactive "
+        "(served through Lavish-AXI). Default: strict.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -296,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read {args.path}: {exc}", file=sys.stderr)
         return 2
 
-    errors = lint_cockpit(html, styling=args.styling)
+    errors = lint_cockpit(html, styling=args.styling, csp_mode=args.csp_mode)
     if errors:
         for error in errors:
             print(f"lint: {error}", file=sys.stderr)
