@@ -189,15 +189,32 @@ def test_remote_asset_rules(
 
 # --- CSP ---------------------------------------------------------------------
 
+# A baseline-complete strict policy; each case below perturbs one directive off it.
+_BASE = "default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'"
+
 # (label, csp content or None, expected rule or None)
 _CSP_CASES = [
     ("strict", STRICT_CSP, None),
+    ("base-complete", _BASE, None),
+    # 'self' is accepted for base-uri/form-action (default-src must stay 'none').
+    (
+        "base-uri-form-action-self-ok",
+        "default-src 'none'; script-src 'self'; base-uri 'self'; form-action 'self'",
+        None,
+    ),
     ("missing", None, "csp-missing"),
     ("unsafe-inline", "default-src 'none'; script-src 'self' 'unsafe-inline'", "csp-weak"),
     ("script-wildcard", "default-src 'none'; script-src *", "csp-weak"),
     ("remote-script-host", "script-src 'self' https://cdn.example", "csp-weak"),
     ("no-script-directive", "img-src 'self'", "csp-weak"),
-    ("default-src-self-ok", "default-src 'self'", None),
+    # The reported gap: scripts are constrained but nothing else is — other resource
+    # types fall to the browser default. Must fail (not pass as it did before).
+    ("script-src-only-no-default", "script-src 'self'", "csp-weak"),
+    # default-src must be the catch-all denial 'none', not the weaker 'self'.
+    ("default-src-self-too-weak", "default-src 'self'; script-src 'self'", "csp-weak"),
+    # base-uri / form-action don't inherit from default-src, so each is required.
+    ("missing-base-uri", "default-src 'none'; script-src 'self'; form-action 'none'", "csp-weak"),
+    ("missing-form-action", "default-src 'none'; script-src 'self'; base-uri 'none'", "csp-weak"),
 ]
 
 
