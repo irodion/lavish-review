@@ -1,7 +1,7 @@
-// Branch Review Cockpit — vendored behaviour (walking skeleton, issue #3).
+// Branch Review Cockpit — vendored behaviour.
 //
-// All cockpit behaviour lives here, never inline, so the hardening slice
-// (issue #4) can ship a strict CSP that forbids inline script. This script
+// All cockpit behaviour lives here, never inline, so the cockpit ships a strict
+// CSP (`script-src 'self'`) that forbids inline script (issue #4). This script
 // treats the diff strictly as TEXT: it rebuilds each line with createElement +
 // textContent and NEVER assigns attacker-derived strings to innerHTML, so a
 // `<script>` hidden in a diff hunk can only ever render as visible characters.

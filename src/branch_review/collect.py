@@ -5,10 +5,11 @@ the Base, computes the ``merge-base(base, HEAD)...HEAD`` diff, and writes the
 deterministic Review context files under ``.review-agent/`` that the agent then
 authors the Review Cockpit from. See ``DESIGN.md`` and ``CONTEXT.md``.
 
-Walking-skeleton scope (issue #3): happy-path Base auto-detect, the full diff,
-and *basic* inline HTML escaping just sufficient to render. The hardened
-deterministic Escape Boundary, strict CSP, and post-write lint land in the
-hardening slice (issue #4) and must merge before reviewing any untrusted branch.
+All untrusted data (diff bodies, file paths, commit messages, branch names) is
+emitted through the deterministic Escape Boundary (:mod:`branch_review.escape`,
+ADR-0002) as pre-escaped, marker-delimited fragments — ``diff.fragment.html`` and
+``fragments.html`` — that the agent injects verbatim; the agent never
+hand-interpolates a raw untrusted string.
 """
 
 from __future__ import annotations
@@ -19,9 +20,10 @@ import subprocess  # nosec B404 — only fixed git argv, shell=False (see _run_g
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from html import escape
 from pathlib import Path
 from shutil import copy2
+
+from branch_review.escape import build_fragments, diff_fragment
 
 # Base auto-detect fallbacks, tried in order when origin/HEAD is absent.
 _BASE_CANDIDATES = ("main", "develop", "master")
@@ -128,7 +130,9 @@ class ReviewContext:
     is_empty: bool
 
 
-def _build_context(base: str, cwd: Path, *, now: datetime) -> tuple[ReviewContext, str]:
+def _build_context(
+    base: str, cwd: Path, *, now: datetime
+) -> tuple[ReviewContext, list[dict[str, str]]]:
     """Resolve revs for ``base...HEAD`` and the Branch Under Review."""
     if not _ref_exists(base, cwd):
         raise BaseResolutionError(f"Base ref {base!r} does not resolve to a commit.")
@@ -151,17 +155,7 @@ def _build_context(base: str, cwd: Path, *, now: datetime) -> tuple[ReviewContex
         changed_file_count=len(files),
         is_empty=not files,
     )
-    return context, json.dumps(files, indent=2) + "\n"
-
-
-def _diff_fragment(diff_text: str) -> str:
-    """A render-safe ``<pre>`` fragment of the unified diff.
-
-    Skeleton-grade escaping (``html.escape``) — enough to render attacker text as
-    text. The hardened Escape Boundary (issue #4) supersedes this.
-    """
-    body = escape(diff_text) if diff_text else "(no changes in this range)"
-    return f'<pre class="diff">{body}</pre>\n'
+    return context, files
 
 
 def copy_assets(assets_dir: Path, dest_dir: Path) -> list[str]:
@@ -196,21 +190,36 @@ def collect(
     out = out_dir or (root / ".review-agent")
     out.mkdir(parents=True, exist_ok=True)
 
-    context, files_json = _build_context(resolved_base, root, now=now or datetime.now(UTC))
+    context, files = _build_context(resolved_base, root, now=now or datetime.now(UTC))
     diff_text = _run_git(["diff", context.diff_range], root)
     diff_stat = _run_git(["diff", "--stat", context.diff_range], root)
     commits = _run_git(["log", "--oneline", f"{resolved_base}..HEAD"], root)
+    commit_lines = commits.splitlines()
+
+    # Untrusted data crosses the Escape Boundary here: the diff and the
+    # path/commit/branch fragments are pre-escaped and marker-delimited so the
+    # agent injects them verbatim and the Cockpit Linter can prove they are safe.
+    fragments = build_fragments(
+        branch=context.branch,
+        base=context.base,
+        head_sha=context.head_sha,
+        changed_file_count=context.changed_file_count,
+        files=files,
+        commit_lines=commit_lines,
+    )
 
     # Always UTF-8 so non-ASCII diffs/paths/messages round-trip deterministically
     # regardless of the platform default encoding, and so the HTML fragment is the
     # UTF-8 the cockpit's <meta charset="utf-8"> promises the browser.
     context_json = json.dumps(asdict(context), indent=2) + "\n"
+    files_json = json.dumps(files, indent=2) + "\n"
     (out / "context.json").write_text(context_json, encoding="utf-8")
     (out / "changed-files.json").write_text(files_json, encoding="utf-8")
     (out / "diff.patch").write_text(diff_text + ("\n" if diff_text else ""), encoding="utf-8")
     (out / "diff-stat.txt").write_text(diff_stat + "\n", encoding="utf-8")
     (out / "commits.txt").write_text(commits + "\n", encoding="utf-8")
-    (out / "diff.fragment.html").write_text(_diff_fragment(diff_text), encoding="utf-8")
+    (out / "diff.fragment.html").write_text(diff_fragment(diff_text), encoding="utf-8")
+    (out / "fragments.html").write_text(fragments, encoding="utf-8")
 
     if assets_dir is not None:
         copy_assets(assets_dir, out / "assets")
