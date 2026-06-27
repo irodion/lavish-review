@@ -117,7 +117,7 @@ first and mirror its shape. Sections:
 - `title`, `intent_summary` — the Executive Summary's source: one honest read of
   what the branch does. Don't over-claim. **Write it for the reviewer, not the
   tracker**: describe what the change does and why it matters in plain terms.
-  Leave out internal meta that's noise to a reviewer — bare issue/PR/ADR numbers
+  Omit internal meta that's noise to a reviewer — bare issue/PR/ADR numbers
   (`#21`, `ADR-0004`), process commentary (“fixes from review”, commit SHAs), and
   CI/test-count boilerplate (“155 tests, mypy green”). If a risk traces to a
   specific decision, explain the decision, don't just cite its number.
