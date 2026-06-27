@@ -470,8 +470,9 @@ def test_lockfile_body_omitted_but_listed_with_stats(repo: Path) -> None:
     assert str(lock["reason"]).strip()
     # Existence + stats survive: the file is listed and its line counts are kept.
     assert lock["added"] == 200
-    assert "package-lock.json" in {rec["path"] for rec in json.loads(
-        (out / "changed-files.json").read_text())}
+    assert "package-lock.json" in {
+        rec["path"] for rec in json.loads((out / "changed-files.json").read_text())
+    }
     # No orphan body fragment was written for the omitted file.
     assert not (out / "fragments" / f"{lock['id']}.html").exists()
 
