@@ -96,11 +96,11 @@ def _detect_node(root: Path) -> Runner | None:
     if not package.is_file():
         return None
     data = _load_json(package)
+    deps = {**_dep_section(data, "devDependencies"), **_dep_section(data, "dependencies")}
 
     for tool, cmd in (("vitest", "npx vitest run"), ("jest", "npx jest")):
         if any((root / f"{tool}.config.{ext}").is_file() for ext in ("js", "ts", "mjs", "cjs")):
             return Runner(tool, cmd, f"{tool}.config.*")
-        deps = {**_dep_section(data, "devDependencies"), **_dep_section(data, "dependencies")}
         if tool in deps:
             return Runner(tool, cmd, "package.json")
 
