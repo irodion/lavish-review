@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -70,6 +71,23 @@ def test_detect_base_raises_when_no_candidate(tmp_path: Path) -> None:
     _commit(root, "f.txt", "hi\n", "only commit")
     with pytest.raises(BaseResolutionError):
         detect_base(root)
+
+
+def test_detect_base_uses_remote_default_when_no_local(repo: Path) -> None:
+    # Simulate a feature-only checkout: origin/HEAD -> origin/main, but no local main.
+    main_sha = _git(repo, "rev-parse", "main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", main_sha)
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    _git(repo, "checkout", "feature")
+    _git(repo, "branch", "-D", "main")
+
+    assert detect_base(repo) == "origin/main"
+
+    # ...and the remote-tracking ref must drive a working collection.
+    context = collect(repo)
+    assert context.base == "origin/main"
+    assert context.diff_range == "origin/main...HEAD"
+    assert context.changed_file_count == 1
 
 
 def test_collect_writes_context_and_files(repo: Path) -> None:
@@ -150,3 +168,29 @@ def test_copy_assets_missing_source_raises(tmp_path: Path) -> None:
     empty.mkdir()
     with pytest.raises(FileNotFoundError):
         copy_assets(empty, tmp_path / "dest")
+
+
+def test_skill_shim_runs_without_editable_install(repo: Path, tmp_path: Path) -> None:
+    """The documented `python <shim>` works in a fresh checkout (no editable install).
+
+    Run with `-S` so site-packages (where the editable install lives) is not on
+    the path — the script only succeeds if its own `sys.path` insertion finds
+    `branch_review` under the repo's `src/`.
+    """
+    project_root = Path(__file__).resolve().parents[1]
+    shim = project_root / ".claude/skills/branch-review-cockpit/scripts/collect_review_context.py"
+    out = tmp_path / "out"
+    proc = subprocess.run(
+        [sys.executable, "-S", str(shim), "--repo", str(repo), "--out", str(out)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": os.environ["PATH"], "HOME": str(repo), **_ENV},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert (out / "context.json").is_file()
+    assert (out / "diff.fragment.html").is_file()
+    # Default --assets-dir resolves to the skill's vendored assets and is copied.
+    assert (out / "assets" / "cockpit.css").is_file()
+    assert (out / "assets" / "app.js").is_file()

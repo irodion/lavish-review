@@ -82,7 +82,13 @@ def detect_base(cwd: Path) -> str:
     """
     head = _run_git(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd, check=False)
     if head:
-        return head.removeprefix("refs/remotes/origin/")
+        # Prefer the clean local name (e.g. `main`) when it exists; otherwise keep
+        # the remote-tracking ref (`origin/main`) so a remote-only default branch —
+        # common in feature-only checkouts — still resolves.
+        local = head.removeprefix("refs/remotes/origin/")
+        if _ref_exists(local, cwd):
+            return local
+        return head.removeprefix("refs/remotes/")
     for candidate in _BASE_CANDIDATES:
         if _ref_exists(candidate, cwd):
             return candidate

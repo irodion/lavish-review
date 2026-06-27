@@ -8,8 +8,9 @@ vendored assets that sit beside this file, so the collector copies
 ``cockpit.css``/``app.js`` into ``.review-agent/assets/`` for relative reference.
 
 Packaging this into a standalone, dependency-free skill bundle is issue #12; for
-the dev-only skeleton it runs from a repo with ``branch_review`` importable
-(``pip install -e .``).
+the dev-only skeleton it imports ``branch_review`` from the repo's ``src/``, which
+it puts on ``sys.path`` itself — so the documented ``python <this script>`` works
+in a fresh checkout, with or without an editable install.
 """
 
 from __future__ import annotations
@@ -17,10 +18,16 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_ASSETS = Path(__file__).resolve().parent.parent / "assets"
+_HERE = Path(__file__).resolve()
+_ASSETS = _HERE.parent.parent / "assets"
+# .../<repo>/.claude/skills/branch-review-cockpit/scripts/<this file>
+_REPO_SRC = _HERE.parents[4] / "src"
 
 
 def _main() -> int:
+    if _REPO_SRC.is_dir() and str(_REPO_SRC) not in sys.path:
+        sys.path.insert(0, str(_REPO_SRC))
+
     from branch_review.collect import main
 
     argv = sys.argv[1:]
