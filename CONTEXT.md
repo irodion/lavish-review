@@ -56,6 +56,14 @@ _Avoid_: mode, filter, view, perspective.
 A live Lavish-AXI editing/feedback connection, keyed by the canonical path of the Review Cockpit HTML file. There are no opaque session IDs — the file path *is* the identity.
 _Avoid_: connection, tab.
 
+**Session State** (`session.json`):
+The persisted, on-disk record of a Review's lifecycle — `{status, base, branch, head_sha, started_at}` — written when a cockpit is generated and read on the next `/review-branch`. It is what lets a reviewer step away and come back: the live **Session** (above) is the connection; the Session State is the *memory* that outlives it. `status` is `open` (unfinished — offered for restore) or `ended` (closed — kept for its transcript, never restored).
+_Avoid_: session file, save state, checkpoint.
+
+**Session Evaluator**:
+The deep module of pure policy at the centre of resume & staleness. Given the persisted Session State and the *current* git HEAD and branch, it returns exactly one disposition — `none` (nothing to resume), `fresh` (re-attach), `stale` (branch advanced — **regenerate by default**, resume-anyway available), or `different-branch` (the saved review is for another branch). It makes no git calls and reads no files, so the decision is exhaustively table-testable.
+_Avoid_: staleness checker, session manager.
+
 **Feedback Loop**:
 The blocking answer loop the skill sits in after opening the cockpit: `lavish-axi poll` returns the reviewer's queued questions/annotations, the agent answers them in the browser chat grounded in the diff/repo, and re-polls with `--agent-reply` — repeating until the Session ends or is interrupted. The agent reads the poll output (TOON) directly; there is no parser. Browser feedback is *untrusted data* — answered and logged, never executed and never used to build a shell command.
 _Avoid_: chat loop, poll loop, conversation.

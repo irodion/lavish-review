@@ -64,6 +64,40 @@ answers come from — author it well and the rest follows.
 
 ## Steps
 
+### 0. Check for an unfinished review (resume & staleness)
+
+Before regenerating anything, ask the **Session Evaluator** whether an earlier review
+of this branch is worth restoring. Run it from the repo:
+
+```sh
+python3 .claude/skills/branch-review-cockpit/scripts/session.py evaluate
+```
+
+It prints JSON with a `disposition` (and `offers_restore` / `restore_is_default`
+flags that encode the default). Act on it — **never regenerate a fresh review on top
+of one you should have restored**:
+
+- `none` — no unfinished review (none saved, or the last one was closed). Proceed to
+  step 1 and generate.
+- `fresh` — an unfinished review for **this** branch at **this** HEAD already exists.
+  **Offer to restore it (the default).** Restoring re-attaches without regenerating:
+  skip steps 1–7 and go straight to the answer loop (step 8) on the existing
+  `.review-agent/review.html` — `session.json` stays as is. Only if the user asks for
+  a clean rebuild do you fall through to step 1.
+- `stale` — an unfinished review exists but the branch has advanced since it was
+  generated (`head_sha` moved). **Regenerate by default** — proceed to step 1 — and
+  tell the user why (the cockpit on disk no longer matches the branch). Resume-anyway
+  is available if they insist: re-attach as in `fresh`, but warn that the diff shown is
+  from the older HEAD.
+- `different-branch` — the saved review is for a different branch than the one checked
+  out now; it can't be restored onto this one. Mention it, then proceed to step 1 to
+  generate a review for the current branch.
+
+A corrupt `session.json` is reported as `none` (with a `note`) — it never blocks a
+review; you just regenerate. If the user ran `/review-branch` explicitly intending a
+fresh review, you may regenerate regardless — but still surface a `fresh`/`stale`
+finding so they can choose.
+
 ### 1. Collect the deterministic context
 
 Run the collector from the repo you want to review. Pass an explicit base only if
@@ -224,8 +258,17 @@ never silence it by stripping the untrusted markers.
 npx -y lavish-axi@0.1.31 .review-agent/review.html
 ```
 
-Loopback default. Tell the user it's open, summarize what they're looking at
-(intent + the top risks), then enter the feedback loop (step 8).
+Loopback default. Then **record the session** so a later `/review-branch` can resume
+it (step 0) instead of blindly regenerating — this writes
+`.review-agent/session.json` (`status: open`) from the `context.json` you just
+collected:
+
+```sh
+python3 .claude/skills/branch-review-cockpit/scripts/session.py start
+```
+
+Tell the user it's open, summarize what they're looking at (intent + the top risks),
+then enter the feedback loop (step 8).
 
 ### 8. Enter the blocking answer loop
 
@@ -274,8 +317,15 @@ ends the session with `review_loop.py end`.
 ### 9. Close
 
 When the session ends (`status: ended`) or the user runs `/review-close`, stop the
-loop and tell the user the review is closed; `qa.jsonl` holds the transcript.
-(Folding `qa.jsonl` back into `review.html` at close is issue #9.)
+loop and **mark the session ended** so a later `/review-branch` sees a finished review
+(disposition `none`) rather than offering to restore a closed one:
+
+```sh
+python3 .claude/skills/branch-review-cockpit/scripts/session.py end
+```
+
+Then tell the user the review is closed; `qa.jsonl` holds the transcript. (Folding
+`qa.jsonl` back into `review.html` at close is issue #9.)
 
 ## On-disk layout
 
@@ -286,6 +336,7 @@ loop and tell the user the review is closed; `qa.jsonl` holds the transcript.
   fragments/<id>.html     (one pre-escaped diff per changed file)
   analysis.json           (your structured Analysis — validated before authoring)
   review.html
+  session.json            (lifecycle state for resume & staleness — {status, base, branch, head_sha, started_at})
   agent-reply.txt         (your answer, read by review_loop.py reply)
   qa.jsonl                (live Q&A transcript, one exchange per line)
   last-poll.toon          (raw stdout of the most recent poll — the question)

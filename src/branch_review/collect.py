@@ -111,6 +111,23 @@ def repo_root(cwd: Path) -> Path:
     return Path(_run_git(["rev-parse", "--show-toplevel"], cwd))
 
 
+def current_revision(cwd: Path) -> tuple[str, str]:
+    """The working tree's current ``(head_sha, branch)`` — what the Session Evaluator compares.
+
+    ``head_sha`` is the full ``HEAD`` SHA; ``branch`` is the symbolic branch name, or —
+    on a detached HEAD, where ``--abbrev-ref`` reports the literal ``HEAD`` — the short
+    SHA, so a detached review is identified consistently rather than by a guessed name.
+    This is the same pair :func:`_build_context` records into ``context.json`` /
+    ``session.json``; both go through here so a generated review and a later staleness
+    check read the branch and HEAD identically (issue #8).
+    """
+    branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    if branch == "HEAD":  # detached — identify by short SHA rather than guess a name
+        branch = _run_git(["rev-parse", "--short", "HEAD"], cwd)
+    head_sha = _run_git(["rev-parse", "HEAD"], cwd)
+    return head_sha, branch
+
+
 def detect_base(cwd: Path) -> str:
     """Auto-detect the Base: ``origin/HEAD`` then ``main``/``develop``/``master``.
 
@@ -191,11 +208,8 @@ def _build_context(
     """Resolve revs for ``base...HEAD`` and the Branch Under Review."""
     if not _ref_exists(base, cwd):
         raise BaseResolutionError(f"Base ref {base!r} does not resolve to a commit.")
-    branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
-    if branch == "HEAD":  # detached — identify by short SHA rather than guess a name
-        branch = _run_git(["rev-parse", "--short", "HEAD"], cwd)
+    head_sha, branch = current_revision(cwd)
     merge_base = _run_git(["merge-base", base, "HEAD"], cwd)
-    head_sha = _run_git(["rev-parse", "HEAD"], cwd)
     base_sha = _run_git(["rev-parse", base], cwd)
     files = _changed_files(base, cwd)
     context = ReviewContext(
