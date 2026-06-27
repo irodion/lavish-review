@@ -240,6 +240,20 @@ def test_fragment_index_entry_omitted_requires_reason() -> None:
         fragment_index_entry({"status": "M", "path": "x.py"}, omitted=True, reason="   ")
 
 
+def test_fragment_index_entry_records_disposition_when_given() -> None:
+    # The classifier's stable verdict string rides along so the cockpit can group
+    # omissions by kind; absent the kwarg the key is omitted (back-compat).
+    plain = fragment_index_entry({"status": "M", "path": "a.py"})
+    assert "disposition" not in plain
+    tagged = fragment_index_entry(
+        {"status": "M", "path": "uv.lock"},
+        omitted=True,
+        reason="dependency lockfile",
+        disposition="omit:lockfile",
+    )
+    assert tagged["disposition"] == "omit:lockfile"
+
+
 def test_fragment_index_entry_omitted_drops_body_keeps_reason() -> None:
     # Excluded/capped files (issue #7) stay in the index with a reason, body gone —
     # nothing omitted is ever hidden.

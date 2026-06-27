@@ -28,6 +28,14 @@ _Avoid_: risk list, findings.
 Something the diff did *not* change but arguably should have — untouched tests, callers, docs, config, or error handling adjacent to a behavioral change.
 _Avoid_: gap, missing change.
 
+**Change Classifier**:
+The deterministic noise-control step that decides, per changed file, whether its diff *body* belongs in the cockpit. It keeps noisy branches reviewable without ever silently hiding a change: only bodies are dropped — a file's existence and stats are always kept and listed. Default excludes cover lockfiles, vendored/generated/build trees, and `.gitattributes linguist-generated`; a per-file line cap and a whole-changeset total cap bound the rest.
+_Avoid_: filter, noise filter, ignore list.
+
+**Disposition**:
+The Change Classifier's verdict for one file — one of `include-body`, `omit:lockfile`, `omit:excluded`, or `omit:too-large`. Every omitting disposition carries a human reason shown beside the still-listed file. The total-diff fallback re-stamps included files as `omit:too-large` and flags the changeset so the cockpit shows a file-list + stats banner instead of diffs.
+_Avoid_: verdict, status, category.
+
 **Analysis** (`analysis.json`):
 The agent's structured intermediate reasoning about the diff (intent, behavior changes, review route, risk map, omissions, test checklist, diagrams). It is the substrate the Review Cockpit is authored from and the substrate the feedback loop answers from.
 _Avoid_: report, summary.

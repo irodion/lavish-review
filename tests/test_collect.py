@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from branch_review.classify import ClassifierConfig
 from branch_review.collect import (
     BaseResolutionError,
     collect,
@@ -438,3 +439,148 @@ def test_skill_shim_honors_assets_dir_equals_form(repo: Path, tmp_path: Path) ->
     assert proc.returncode == 0, proc.stderr
     assert (out / "assets" / "cockpit.css").read_text() == "/* custom */"
     assert (out / "assets" / "app.js").read_text() == "// custom"
+
+
+# --- Change Classifier wiring (issue #7) -----------------------------------
+#
+# These exercise the classifier *through the collector* against real git plumbing:
+# the per-disposition policy itself is unit-tested in test_classify.py.
+
+
+def _add_lines(repo: Path, name: str, n: int, message: str) -> None:
+    """Commit a file of ``n`` lines on the current branch (parents created)."""
+    target = repo / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("".join(f"line {i}\n" for i in range(n)))
+    _git(repo, "add", name)
+    _git(repo, "commit", "-m", message)
+
+
+def test_lockfile_body_omitted_but_listed_with_stats(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _add_lines(repo, "package-lock.json", 200, "chore: lockfile")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    lock = index["package-lock.json"]
+    assert lock["disposition"] == "omit:lockfile"
+    assert lock["omitted"] is True
+    assert lock["fragment"] is None  # body dropped
+    assert str(lock["reason"]).strip()
+    # Existence + stats survive: the file is listed and its line counts are kept.
+    assert lock["added"] == 200
+    assert "package-lock.json" in {rec["path"] for rec in json.loads(
+        (out / "changed-files.json").read_text())}
+    # No orphan body fragment was written for the omitted file.
+    assert not (out / "fragments" / f"{lock['id']}.html").exists()
+
+
+def test_vendored_and_generated_are_excluded(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _add_lines(repo, "node_modules/dep/index.js", 30, "chore: vendored dep")
+    _add_lines(repo, "api/types.generated.ts", 30, "chore: generated types")
+    collect(repo)
+    index = _fragments_index(repo / ".review-agent")
+
+    for path in ("node_modules/dep/index.js", "api/types.generated.ts"):
+        rec = index[path]
+        assert rec["disposition"] == "omit:excluded", path
+        assert rec["fragment"] is None
+        assert rec["omitted"] is True
+
+
+def test_linguist_generated_attribute_is_honored(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    # A normal-looking path becomes excluded purely via .gitattributes.
+    (repo / ".gitattributes").write_text("generated.py linguist-generated\n")
+    _add_lines(repo, "generated.py", 20, "feat: add generated.py")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "commit", "-m", "chore: mark generated")
+    collect(repo)
+    index = _fragments_index(repo / ".review-agent")
+
+    rec = index["generated.py"]
+    assert rec["disposition"] == "omit:excluded"
+    assert rec["fragment"] is None
+    assert "linguist-generated" in str(rec["reason"])
+
+
+def test_oversized_file_body_omitted_but_listed(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _add_lines(repo, "huge.py", 50, "feat: huge file")
+    collect(repo, config=ClassifierConfig(max_file_diff_lines=10))
+    index = _fragments_index(repo / ".review-agent")
+
+    huge = index["huge.py"]
+    assert huge["disposition"] == "omit:too-large"
+    assert huge["fragment"] is None
+    assert huge["added"] == 50  # stats kept even though the body is gone
+    assert "50" in str(huge["reason"])
+
+
+def test_normal_file_keeps_its_body(repo: Path) -> None:
+    # The default repo fixture changes app.py by one line — a plain include-body.
+    collect(repo)
+    index = _fragments_index(repo / ".review-agent")
+    app = index["app.py"]
+    assert app["disposition"] == "include-body"
+    assert app["omitted"] is False
+    assert app["fragment"] is not None
+    assert (repo / ".review-agent" / str(app["fragment"])).is_file()
+
+
+def test_total_diff_guard_falls_back_to_listing(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _add_lines(repo, "a.py", 40, "feat: a")
+    _add_lines(repo, "b.py", 40, "feat: b")
+    # Total changed lines (~80+) exceeds the tiny total cap → file-list + stats only.
+    collect(repo, config=ClassifierConfig(max_total_diff_lines=20))
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    # Every file is omitted under the fallback — but every file is still listed,
+    # with stats, and carries the same total-diff reason. Nothing is silently cut.
+    for rec in index.values():
+        assert rec["omitted"] is True
+        assert rec["fragment"] is None
+        assert "diff too large" in str(rec["reason"])
+    # No body fragments were written at all.
+    assert not any((out / "fragments").glob("*.html"))
+    # changed-files.json still names every file (existence never dropped).
+    changed = {rec["path"] for rec in json.loads((out / "changed-files.json").read_text())}
+    assert {"a.py", "b.py"}.issubset(changed)
+    # The fallback is an explicit top-level signal the cockpit can banner on.
+    data = json.loads((out / "fragments.json").read_text())
+    assert data["too_large"] is True
+    assert "diff too large" in str(data["too_large_reason"])
+    assert data["included_changed_lines"] > 20
+
+
+def test_normal_branch_is_not_flagged_too_large(repo: Path) -> None:
+    collect(repo)
+    data = json.loads((repo / ".review-agent" / "fragments.json").read_text())
+    assert data["too_large"] is False
+    assert data["too_large_reason"] is None
+
+
+def test_existence_and_stats_survive_every_omission(repo: Path) -> None:
+    # The load-bearing invariant: across mixed dispositions, every changed file
+    # appears in the index with stats; only bodies (fragments) ever disappear.
+    _git(repo, "checkout", "feature")
+    _add_lines(repo, "uv.lock", 100, "chore: lock")
+    _add_lines(repo, "vendor/x.go", 30, "chore: vendor")
+    _add_lines(repo, "keep.py", 5, "feat: keep")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    changed = [rec["path"] for rec in json.loads((out / "changed-files.json").read_text())]
+    index = _fragments_index(out)
+    # Index covers exactly the changed files, in order.
+    assert list(index.keys()) == changed
+    for rec in index.values():
+        assert "added" in rec and "deleted" in rec  # stats always present
+        if rec["omitted"]:
+            assert rec["fragment"] is None
+        else:
+            assert (out / str(rec["fragment"])).is_file()

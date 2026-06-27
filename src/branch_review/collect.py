@@ -23,6 +23,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from shutil import copy2, rmtree
 
+from branch_review.classify import (
+    ChangesetDisposition,
+    Classification,
+    ClassifierConfig,
+    FileStats,
+    classify_changeset,
+    classify_file,
+    downgrade_to_listing,
+)
 from branch_review.escape import (
     FRAGMENTS_DIRNAME,
     build_fragments,
@@ -209,35 +218,145 @@ def _per_file_diff(diff_range: str, record: dict[str, str], cwd: Path) -> str:
     return _run_git(["diff", diff_range, "--", *pathspec], cwd)
 
 
-def _write_file_fragments(
-    out: Path, diff_range: str, files: list[dict[str, str]], cwd: Path
-) -> list[dict[str, object]]:
-    """Write one escaped ``fragments/<id>.html`` per changed file + the ordered index.
+def _file_stats(diff_range: str, files: list[dict[str, str]], cwd: Path) -> dict[str, FileStats]:
+    """Per-file added/deleted line counts from ``git diff --numstat -z``.
 
-    The substrate the File Walkthrough / Review Route (issue #6) consume: each
-    file's hunk is escaped independently through the boundary, keyed by a
-    traversal-safe id, and the returned records preserve ``changed-files.json``
-    order so the agent can walk files in a deliberate route. The ``fragments/``
-    dir is rebuilt from scratch each run so a prior review's files never linger as
-    orphans in the new index (**nothing shown that isn't in this range**).
+    Keyed by the same path ``_changed_files`` uses (the new path for a rename), so a
+    stats lookup always lines up with a changed-files record. ``-z`` keeps paths raw
+    and switches renames to a ``added<TAB>deleted<TAB>\\0old\\0new`` triple (empty
+    path field, then old then new) instead of the line/tab ``{old => new}`` form, so
+    the parse is unambiguous. Binary files report ``-``/``-`` and become
+    ``FileStats(binary=True)`` with zero counts — they have no line body to cap.
+    """
+    if not files:
+        return {}
+    out = _run_git(["diff", "--numstat", "-z", diff_range], cwd)
+    tokens = out.split("\0")
+    stats: dict[str, FileStats] = {}
+    i = 0
+    while i < len(tokens) and tokens[i]:  # trailing NUL yields "" → stop
+        parts = tokens[i].split("\t")
+        if len(parts) != 3:
+            break
+        added_s, deleted_s, path = parts
+        if path == "" and i + 2 < len(tokens):
+            # Rename/copy: counts here, old + new path in the next two NUL fields.
+            path = tokens[i + 2]
+            i += 3
+        else:
+            i += 1
+        binary = added_s == "-" or deleted_s == "-"
+        stats[path] = FileStats(
+            added=0 if binary else int(added_s),
+            deleted=0 if binary else int(deleted_s),
+            binary=binary,
+        )
+    return stats
+
+
+def _generated_paths(files: list[dict[str, str]], cwd: Path) -> set[str]:
+    """Paths the working tree's ``.gitattributes`` marks ``linguist-generated``.
+
+    Asks git itself (``git check-attr -z linguist-generated``) rather than parsing
+    ``.gitattributes`` here, so nested and inherited attribute files are honored
+    exactly as git resolves them. Output is ``path\\0attr\\0value`` triples; a value
+    of ``set`` means generated. Querying by pathname needs no file on disk, so a
+    file deleted at HEAD is still classified by the attribute that covers its path.
+    """
+    if not files:
+        return set()
+    paths = [record["path"] for record in files]
+    out = _run_git(["check-attr", "-z", "linguist-generated", "--", *paths], cwd)
+    tokens = out.split("\0")
+    generated: set[str] = set()
+    # Walk fixed-width triples; a trailing "" from the final NUL is ignored.
+    for i in range(0, len(tokens) - 2, 3):
+        path, _attr, value = tokens[i], tokens[i + 1], tokens[i + 2]
+        if value == "set":
+            generated.add(path)
+    return generated
+
+
+def _write_file_fragments(
+    out: Path,
+    diff_range: str,
+    files: list[dict[str, str]],
+    cwd: Path,
+    config: ClassifierConfig,
+) -> tuple[list[dict[str, object]], ChangesetDisposition]:
+    """Write an escaped ``fragments/<id>.html`` per *included* file + the ordered index.
+
+    The substrate the File Walkthrough / Review Route (issue #6) consume, now gated
+    by the Change Classifier (issue #7). Each file is classified from its stats: an
+    ``include-body`` file gets its hunk escaped independently through the boundary
+    and a fragment on disk; an omitted file (lockfile, excluded, generated, or
+    over-cap) gets **no** body but still appears in the index with its status, stats,
+    and a required reason — **nothing omitted is ever hidden** (DESIGN). A final
+    total-diff guard downgrades every still-included file to a stats-only listing
+    when the combined body would be too large, so a huge branch degrades to a file
+    list + stats banner rather than a silent truncation. The returned records
+    preserve ``changed-files.json`` order; the ``fragments/`` dir is rebuilt each run
+    so a prior review's files never linger as orphans (**nothing shown that isn't in
+    this range**).
     """
     frag_dir = out / FRAGMENTS_DIRNAME
     if frag_dir.exists():
         rmtree(frag_dir)
     frag_dir.mkdir(parents=True, exist_ok=True)
 
+    stats_by_path = _file_stats(diff_range, files, cwd)
+    generated = _generated_paths(files, cwd)
+
+    # First pass: classify every file from its (deterministic) stats.
+    classified: list[tuple[str, FileStats, Classification]] = []
+    for record in files:
+        path = record["path"]
+        base_stats = stats_by_path.get(path, FileStats())
+        stats = (
+            FileStats(
+                added=base_stats.added,
+                deleted=base_stats.deleted,
+                binary=base_stats.binary,
+                linguist_generated=True,
+            )
+            if path in generated
+            else base_stats
+        )
+        classified.append((path, stats, classify_file(path, stats, config)))
+
+    # Total-diff guard: if the included bodies together blow the total cap, fall
+    # back to a file-list + stats listing — every still-included file is downgraded.
+    changeset = classify_changeset(classified, config)
+    if changeset.too_large and changeset.reason is not None:
+        fallback_reason = changeset.reason
+        classified = [
+            (path, stats, downgrade_to_listing(classification, fallback_reason))
+            for path, stats, classification in classified
+        ]
+
     entries: list[dict[str, object]] = []
     seen: dict[str, str] = {}
-    for record in files:
-        entry = fragment_index_entry(record)  # body omitted/reason is issue #7's call
+    for record, (_path, stats, classification) in zip(files, classified, strict=True):
+        omitted = classification.omitted
+        entry = fragment_index_entry(
+            record,
+            omitted=omitted,
+            reason=classification.reason or None,
+            disposition=classification.disposition.value,
+        )
+        # Existence and stats are never dropped — only bodies (issue #7).
+        entry["added"] = stats.added
+        entry["deleted"] = stats.deleted
+        entry["binary"] = stats.binary
         fid = str(entry["id"])
         if seen.get(fid, record["path"]) != record["path"]:
             raise GitError(f"fragment id collision on {fid!r}: {seen[fid]!r} vs {record['path']!r}")
         seen[fid] = record["path"]
-        diff_text = _per_file_diff(diff_range, record, cwd)
-        (frag_dir / f"{fid}.html").write_text(diff_fragment(diff_text), encoding="utf-8")
+        if not omitted:
+            diff_text = _per_file_diff(diff_range, record, cwd)
+            (frag_dir / f"{fid}.html").write_text(diff_fragment(diff_text), encoding="utf-8")
         entries.append(entry)
-    return entries
+    return entries, changeset
 
 
 def copy_assets(assets_dir: Path, dest_dir: Path) -> list[str]:
@@ -259,15 +378,19 @@ def collect(
     base: str | None = None,
     out_dir: Path | None = None,
     assets_dir: Path | None = None,
+    config: ClassifierConfig | None = None,
     now: datetime | None = None,
 ) -> ReviewContext:
     """Collect the Review context for the current branch into ``out_dir``.
 
     Resolves the Base (explicit ``base`` wins over auto-detect), computes the
     ``base...HEAD`` diff, and writes the deterministic context files. ``review.html``
-    is intentionally NOT written here — the agent authors it (ADR-0001).
+    is intentionally NOT written here — the agent authors it (ADR-0001). ``config``
+    is the Change Classifier policy (issue #7); the built-in defaults apply when it
+    is omitted (repo ``.review-agent.yaml`` wiring is issue #10).
     """
     root = repo_root(cwd)
+    classifier_config = config or ClassifierConfig()
     resolved_base = base or detect_base(root)
     out = out_dir or (root / ".review-agent")
     out.mkdir(parents=True, exist_ok=True)
@@ -305,12 +428,20 @@ def collect(
 
     # Per-file escaped fragments + ordered index (issue #21) — the File Walkthrough
     # substrate. The whole-diff diff.fragment.html above is preserved unchanged.
-    fragment_index = _write_file_fragments(out, context.diff_range, files, root)
+    fragment_index, changeset = _write_file_fragments(
+        out, context.diff_range, files, root, classifier_config
+    )
     fragments_json = (
         json.dumps(
             {
                 "schema": _FRAGMENTS_SCHEMA,
                 "diff_range": context.diff_range,
+                # The total-diff guard's verdict (issue #7): when ``too_large`` the
+                # cockpit renders a "file list + stats only" banner — the fallback is
+                # explicit here, not inferred from every file being omitted.
+                "too_large": changeset.too_large,
+                "too_large_reason": changeset.reason,
+                "included_changed_lines": changeset.included_changed_lines,
                 "files": fragment_index,
             },
             indent=2,

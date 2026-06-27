@@ -220,15 +220,19 @@ def fragment_index_entry(
     *,
     omitted: bool = False,
     reason: str | None = None,
+    disposition: str | None = None,
 ) -> dict[str, object]:
     """One ordered ``fragments.json`` record for a changed file.
 
     Maps a ``changed-files.json`` record to ``{path, path_html, status, id,
-    fragment, omitted, old_path?, old_path_html?, reason?}``. ``fragment`` is the
-    relative path of the escaped fragment file, or ``None`` when the body is omitted
-    (excluded, capped, or otherwise classified out by issue #7) — an omitted file
-    still appears in the index with its status and a **required** ``reason`` so
-    **nothing omitted is ever hidden** (DESIGN). ``path``/``old_path`` are the raw
+    fragment, omitted, disposition?, old_path?, old_path_html?, reason?}``.
+    ``fragment`` is the relative path of the escaped fragment file, or ``None`` when
+    the body is omitted (excluded, capped, or otherwise classified out by the Change
+    Classifier, issue #7) — an omitted file still appears in the index with its
+    status and a **required** ``reason`` so **nothing omitted is ever hidden**
+    (DESIGN). ``disposition`` (when given) is the classifier's stable verdict string
+    (``include-body``/``omit:lockfile``/…) so the cockpit can group omissions by
+    kind rather than parse the prose ``reason``. ``path``/``old_path`` are the raw
     agent-facing strings; ``path_html``/``old_path_html`` are the same values having
     crossed the boundary (escaped, marker-wrapped) for injection into cockpit
     headings.
@@ -248,6 +252,8 @@ def fragment_index_entry(
         "fragment": None if omitted else f"{FRAGMENTS_DIRNAME}/{fid}.html",
         "omitted": omitted,
     }
+    if disposition is not None:
+        entry["disposition"] = disposition
     old_path = record.get("old_path")
     if old_path is not None:
         entry["old_path"] = old_path
