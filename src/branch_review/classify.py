@@ -173,16 +173,16 @@ def _is_lockfile(name: str, config: ClassifierConfig) -> bool:
     return name in config.lockfiles
 
 
-def _matched_exclude(path: str, config: ClassifierConfig) -> str | None:
+def _matched_exclude(
+    path: str, name: str, parts: tuple[str, ...], config: ClassifierConfig
+) -> str | None:
     """The first matching exclude rule for ``path``, or ``None``.
 
-    Returns a short human label of *what* matched (a directory segment, a built-in
-    glob, or a configured pattern) so the omission reason can name it.
+    ``name``/``parts`` are the already-parsed basename and path segments (the caller
+    parses the path once). Returns a short human label of *what* matched (a directory
+    segment, a built-in glob, or a configured pattern) so the omission reason can
+    name it.
     """
-    posix = PurePosixPath(path)
-    name = posix.name
-    parts = posix.parts
-
     if not config.exclude_reset:
         for segment in config.exclude_dirs:
             if segment in parts:
@@ -214,7 +214,8 @@ def classify_file(path: str, stats: FileStats, config: ClassifierConfig) -> Clas
     Excludes outrank the size cap on purpose: an excluded lockfile or vendored blob
     should read as "excluded", not "too large", even when it is also huge.
     """
-    name = PurePosixPath(path).name
+    posix = PurePosixPath(path)
+    name = posix.name
 
     if _is_lockfile(name, config):
         return Classification(
@@ -228,7 +229,7 @@ def classify_file(path: str, stats: FileStats, config: ClassifierConfig) -> Clas
             "marked linguist-generated in .gitattributes — body omitted, stats kept",
         )
 
-    matched = _matched_exclude(path, config)
+    matched = _matched_exclude(path, name, posix.parts, config)
     if matched is not None:
         return Classification(
             Disposition.OMIT_EXCLUDED,

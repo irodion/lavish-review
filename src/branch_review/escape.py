@@ -221,21 +221,25 @@ def fragment_index_entry(
     omitted: bool = False,
     reason: str | None = None,
     disposition: str | None = None,
+    stats: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """One ordered ``fragments.json`` record for a changed file.
 
     Maps a ``changed-files.json`` record to ``{path, path_html, status, id,
-    fragment, omitted, disposition?, old_path?, old_path_html?, reason?}``.
+    fragment, omitted, disposition?, <stats…>, old_path?, old_path_html?, reason?}``.
     ``fragment`` is the relative path of the escaped fragment file, or ``None`` when
     the body is omitted (excluded, capped, or otherwise classified out by the Change
     Classifier, issue #7) — an omitted file still appears in the index with its
-    status and a **required** ``reason`` so **nothing omitted is ever hidden**
-    (DESIGN). ``disposition`` (when given) is the classifier's stable verdict string
-    (``include-body``/``omit:lockfile``/…) so the cockpit can group omissions by
-    kind rather than parse the prose ``reason``. ``path``/``old_path`` are the raw
-    agent-facing strings; ``path_html``/``old_path_html`` are the same values having
-    crossed the boundary (escaped, marker-wrapped) for injection into cockpit
-    headings.
+    status, its ``stats``, and a **required** ``reason`` so **nothing omitted is ever
+    hidden** (DESIGN). ``disposition`` (when given) is the classifier's stable verdict
+    string (``include-body``/``omit:lockfile``/…) so the cockpit can group omissions
+    by kind rather than parse the prose ``reason``. ``stats`` (when given) is merged
+    verbatim into the entry — the classifier's per-file line counts (``added``,
+    ``deleted``, ``binary``) that survive even when the body does. Keeping the whole
+    entry schema in this one builder is deliberate: ``fragments.json`` has a single
+    authoring site. ``path``/``old_path`` are the raw agent-facing strings;
+    ``path_html``/``old_path_html`` are the same values having crossed the boundary
+    (escaped, marker-wrapped) for injection into cockpit headings.
     """
     if omitted and not (reason and reason.strip()):
         raise ValueError("an omitted fragment index entry requires a non-empty reason")
@@ -254,6 +258,8 @@ def fragment_index_entry(
     }
     if disposition is not None:
         entry["disposition"] = disposition
+    if stats is not None:
+        entry.update(stats)
     old_path = record.get("old_path")
     if old_path is not None:
         entry["old_path"] = old_path

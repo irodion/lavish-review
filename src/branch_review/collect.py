@@ -18,7 +18,7 @@ import argparse
 import json
 import subprocess  # nosec B404 — only fixed git argv, shell=False (see _run_git)
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from shutil import copy2, rmtree
@@ -312,16 +312,7 @@ def _write_file_fragments(
     for record in files:
         path = record["path"]
         base_stats = stats_by_path.get(path, FileStats())
-        stats = (
-            FileStats(
-                added=base_stats.added,
-                deleted=base_stats.deleted,
-                binary=base_stats.binary,
-                linguist_generated=True,
-            )
-            if path in generated
-            else base_stats
-        )
+        stats = replace(base_stats, linguist_generated=True) if path in generated else base_stats
         classified.append((path, stats, classify_file(path, stats, config)))
 
     # Total-diff guard: if the included bodies together blow the total cap, fall
@@ -343,11 +334,9 @@ def _write_file_fragments(
             omitted=omitted,
             reason=classification.reason or None,
             disposition=classification.disposition.value,
+            # Existence and stats are never dropped — only bodies (issue #7).
+            stats={"added": stats.added, "deleted": stats.deleted, "binary": stats.binary},
         )
-        # Existence and stats are never dropped — only bodies (issue #7).
-        entry["added"] = stats.added
-        entry["deleted"] = stats.deleted
-        entry["binary"] = stats.binary
         fid = str(entry["id"])
         if seen.get(fid, record["path"]) != record["path"]:
             raise GitError(f"fragment id collision on {fid!r}: {seen[fid]!r} vs {record['path']!r}")
