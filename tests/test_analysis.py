@@ -80,8 +80,14 @@ def test_complete_analysis_passes() -> None:
 def test_empty_list_sections_are_allowed() -> None:
     # An empty diff has no route/risks; the validator checks shape, not completeness.
     doc = _valid()
-    for section in ("review_route", "behavior_changes", "risk_map", "file_walkthrough",
-                    "suspicious_omissions", "diagrams"):
+    for section in (
+        "review_route",
+        "behavior_changes",
+        "risk_map",
+        "file_walkthrough",
+        "suspicious_omissions",
+        "diagrams",
+    ):
         doc[section] = []
     doc["test_checklist"]["items"] = []
     assert validate_analysis(doc) == []
@@ -96,6 +102,7 @@ def test_non_object_is_rejected() -> None:
 def _drop(key: str) -> Mutator:
     def mutate(doc: dict[str, Any]) -> None:
         del doc[key]
+
     return mutate
 
 
@@ -105,6 +112,7 @@ def _set(path: list[Any], value: Any) -> Mutator:
         for key in path[:-1]:
             target = target[key]
         target[path[-1]] = value
+
     return mutate
 
 
@@ -121,22 +129,39 @@ _BAD_CASES = [
     ("risk-bad-category", _set(["risk_map", 0, "category"], "ux"), "risk_map[0].category"),
     ("risk-bad-level", _set(["risk_map", 0, "level"], "critical"), "risk_map[0].level"),
     ("risk-missing-reason", _set(["risk_map", 0, "reason"], ""), "risk_map[0].reason"),
-    ("risk-no-questions", _set(["risk_map", 0, "challenge_questions"], []),
-     "risk_map[0].challenge_questions"),
-    ("risk-question-not-str", _set(["risk_map", 0, "challenge_questions"], [1]),
-     "risk_map[0].challenge_questions[0]"),
-    ("walkthrough-missing-explanation", _set(["file_walkthrough", 0, "explanation"], None),
-     "file_walkthrough[0].explanation"),
-    ("omission-bad-kind", _set(["suspicious_omissions", 0, "kind"], "whoops"),
-     "suspicious_omissions[0].kind"),
+    (
+        "risk-no-questions",
+        _set(["risk_map", 0, "challenge_questions"], []),
+        "risk_map[0].challenge_questions",
+    ),
+    (
+        "risk-question-not-str",
+        _set(["risk_map", 0, "challenge_questions"], [1]),
+        "risk_map[0].challenge_questions[0]",
+    ),
+    (
+        "walkthrough-missing-explanation",
+        _set(["file_walkthrough", 0, "explanation"], None),
+        "file_walkthrough[0].explanation",
+    ),
+    (
+        "omission-bad-kind",
+        _set(["suspicious_omissions", 0, "kind"], "whoops"),
+        "suspicious_omissions[0].kind",
+    ),
     ("checklist-not-object", _set(["test_checklist"], []), "test_checklist"),
-    ("checklist-items-not-list", _set(["test_checklist", "items"], "run them"),
-     "test_checklist.items"),
-    ("checklist-runner-wrong-type", _set(["test_checklist", "runner"], 5),
-     "test_checklist.runner"),
+    (
+        "checklist-items-not-list",
+        _set(["test_checklist", "items"], "run them"),
+        "test_checklist.items",
+    ),
+    ("checklist-runner-wrong-type", _set(["test_checklist", "runner"], 5), "test_checklist.runner"),
     ("diagram-missing-source", _set(["diagrams", 0, "source"], ""), "diagrams[0].source"),
-    ("behavior-summary-missing", _set(["behavior_changes", 0, "summary"], None),
-     "behavior_changes[0].summary"),
+    (
+        "behavior-summary-missing",
+        _set(["behavior_changes", 0, "summary"], None),
+        "behavior_changes[0].summary",
+    ),
 ]
 
 
@@ -154,8 +179,13 @@ def test_malformed_section_produces_located_error(
 def test_risk_categories_are_the_canonical_seven() -> None:
     # The cockpit and SKILL share this vocabulary; pin it so a drift is caught.
     assert set(RISK_CATEGORIES) == {
-        "correctness", "compatibility", "concurrency", "security",
-        "performance", "maintainability", "test_coverage",
+        "correctness",
+        "compatibility",
+        "concurrency",
+        "security",
+        "performance",
+        "maintainability",
+        "test_coverage",
     }
 
 
