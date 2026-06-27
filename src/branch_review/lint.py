@@ -260,6 +260,34 @@ class _TagAuditor(HTMLParser):
             self.csp_content = attr_map.get("content", "")
 
 
+# CSP source tokens that never trigger a remote fetch: the quoted keyword-sources
+# (``'self'``, ``'none'``, ``'unsafe-*'``, ``'nonce-…'``, ``'sha256-…'``) and the
+# non-network schemes below, which load from the document or memory rather than an
+# origin. Every *other* token in a source list — the bare wildcard ``*``, a network
+# scheme-source like ``https:``/``http:``/``ws:``, or any host-source
+# (``example.com``, ``*.cdn.com``, ``https://host``) — can pull from a remote origin
+# and must be on the mode's allowlist, so the remote check treats anything else as
+# remote by default.
+_CSP_NON_NETWORK_SCHEMES = frozenset({"data:", "blob:", "mediastream:", "filesystem:"})
+
+
+def _csp_source_is_remote(token: str, allowed_remotes: frozenset[str]) -> bool:
+    """True if a CSP source token can load from an origin not on ``allowed_remotes``.
+
+    Inverts the test to an allowlist: a token is *safe* only if it is the mode's
+    allowlisted remote, a quoted keyword-source, or a non-network scheme. Anything
+    else — ``*``, a scheme-source (``https:``), or a bare/wildcard host — is treated
+    as a remote that the strict/interactive bound forbids. This is stricter than
+    matching known remote prefixes, which let ``*`` and ``https:`` slip through.
+    """
+    if token in allowed_remotes:
+        return False
+    if token.startswith("'") and token.endswith("'"):
+        return False  # keyword-source: 'self' / 'none' / 'unsafe-*' / nonce / hash
+    # Anything that isn't a non-network scheme is a host- or scheme-source (or '*').
+    return token.lower() not in _CSP_NON_NETWORK_SCHEMES
+
+
 def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintError]:
     """Fail unless the Content-Security-Policy meets the baseline for ``csp_mode``.
 
@@ -310,12 +338,17 @@ def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintErr
     # Bound EVERY directive's remote sources, not just the baseline ones: an arbitrary
     # host in connect-src/img-src/worker-src/etc. would otherwise pass unchecked. Only
     # the mode's allowlisted remote(s) (the Lavish CDN in interactive; none in strict)
-    # may appear; '...' tokens, data:/blob:, and relative refs are not remote.
+    # may appear. The check is an allowlist (see _csp_source_is_remote), so the open
+    # wildcard '*' and scheme-sources like 'https:' are rejected too — not just full
+    # URLs; quoted keywords, data:/blob:, and the allowlisted host are the only passes.
     for name, sources in directives.items():
         for tok in sources:
-            if tok.lower().startswith(("http://", "https://", "//")) and tok not in allowed_remotes:
+            if _csp_source_is_remote(tok, allowed_remotes):
                 errors.append(
-                    LintError("csp-weak", f"{name} permits a non-allowlisted remote source {tok!r}")
+                    LintError(
+                        "csp-weak",
+                        f"{name} permits a non-allowlisted remote/wildcard source {tok!r}",
+                    )
                 )
 
     # Strict mode only: a case-insensitive backstop catching 'unsafe-inline'/
