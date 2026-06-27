@@ -201,12 +201,16 @@ def collect(
     diff_stat = _run_git(["diff", "--stat", context.diff_range], root)
     commits = _run_git(["log", "--oneline", f"{resolved_base}..HEAD"], root)
 
-    (out / "context.json").write_text(json.dumps(asdict(context), indent=2) + "\n")
-    (out / "changed-files.json").write_text(files_json)
-    (out / "diff.patch").write_text(diff_text + ("\n" if diff_text else ""))
-    (out / "diff-stat.txt").write_text(diff_stat + "\n")
-    (out / "commits.txt").write_text(commits + "\n")
-    (out / "diff.fragment.html").write_text(_diff_fragment(diff_text))
+    # Always UTF-8 so non-ASCII diffs/paths/messages round-trip deterministically
+    # regardless of the platform default encoding, and so the HTML fragment is the
+    # UTF-8 the cockpit's <meta charset="utf-8"> promises the browser.
+    context_json = json.dumps(asdict(context), indent=2) + "\n"
+    (out / "context.json").write_text(context_json, encoding="utf-8")
+    (out / "changed-files.json").write_text(files_json, encoding="utf-8")
+    (out / "diff.patch").write_text(diff_text + ("\n" if diff_text else ""), encoding="utf-8")
+    (out / "diff-stat.txt").write_text(diff_stat + "\n", encoding="utf-8")
+    (out / "commits.txt").write_text(commits + "\n", encoding="utf-8")
+    (out / "diff.fragment.html").write_text(_diff_fragment(diff_text), encoding="utf-8")
 
     if assets_dir is not None:
         copy_assets(assets_dir, out / "assets")

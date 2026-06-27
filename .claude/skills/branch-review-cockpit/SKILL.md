@@ -89,7 +89,7 @@ here — the blocking feedback loop arrives in issue #5.
 
 ## On-disk layout
 
-```
+```text
 .review-agent/            (gitignored — generated)
   context.json  diff.patch  diff-stat.txt  changed-files.json  commits.txt
   diff.fragment.html  review.html

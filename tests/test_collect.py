@@ -141,6 +141,18 @@ def test_diff_fragment_escapes_untrusted_content(repo: Path) -> None:
     assert fragment.startswith('<pre class="diff">')
 
 
+def test_artifacts_are_utf8(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _commit(repo, "app.py", "x = 'é你好\U0001f600'\n", "feat: café 你好 😀")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    # Decoding strictly as UTF-8 must succeed and preserve the non-ASCII bytes.
+    assert "café 你好 \U0001f600" in (out / "commits.txt").read_text(encoding="utf-8")
+    assert "你好\U0001f600" in (out / "diff.patch").read_text(encoding="utf-8")
+    assert "你好\U0001f600" in (out / "diff.fragment.html").read_text(encoding="utf-8")
+
+
 def test_empty_range_is_marked(repo: Path) -> None:
     _git(repo, "checkout", "main")
     _git(repo, "branch", "-D", "feature")
