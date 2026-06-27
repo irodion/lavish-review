@@ -82,9 +82,15 @@ the `base...HEAD` diff, and writes to `.review-agent/`:
 - `fragments.html` — pre-escaped header blocks (title, meta, changed-files, commits)
 - `fragments/<id>.html` — **one pre-escaped `<pre class="diff">` per changed file**
 - `fragments.json` — the ordered, path-keyed index of those per-file fragments,
-  each entry `{path, path_html, status, id, fragment, omitted, old_path?,
-  old_path_html?, reason?}`. For a rename, inject `old_path_html` (already escaped)
-  if you show the old path in a heading — never hand-type `old_path`.
+  each entry `{path, path_html, status, id, fragment, omitted, disposition,
+  added, deleted, binary, old_path?, old_path_html?, reason?}`. For a rename,
+  inject `old_path_html` (already escaped) if you show the old path in a heading —
+  never hand-type `old_path`. `disposition` is the Change Classifier's verdict
+  (`include-body` / `omit:lockfile` / `omit:excluded` / `omit:too-large`); `added`/
+  `deleted` are the file's line stats (always present, even when the body is
+  omitted). The top-level `too_large` / `too_large_reason` flag the total-diff
+  fallback — when `true`, **every** file's body is omitted and the cockpit shows a
+  file-list + stats banner (carry `too_large_reason` into it) rather than diffs.
 - `assets/cockpit.css`, `assets/app.js` — vendored, copied for relative reference
 
 Escaped fragments carry invisible `<!--brc:untrusted-->…<!--/brc:untrusted-->`
@@ -186,8 +192,8 @@ sections **in this order**, each a `<section>` with an `<h2>`:
    `<div class="walkthrough-file">` with an `<h3>` whose path is the entry's
    **`path_html`**, your `explanation` prose, then the **verbatim contents of that
    file's `fragments/<id>.html`**. If the entry is `omitted: true`, show its
-   `reason` in a `<p class="omitted">` instead of a diff — **never hide an omitted
-   file**.
+   `reason` (and its `added`/`deleted` stats) in a `<p class="omitted">` instead of
+   a diff — the file is still listed; **never hide an omitted file**.
 7. **Suspicious Omissions** — one `<div class="omission">` per entry (summary, kind,
    detail).
 8. **Test Checklist** — a `<div class="checklist">`: the suggested runner/command in
