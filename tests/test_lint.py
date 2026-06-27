@@ -11,7 +11,13 @@ from collections.abc import Iterable
 
 import pytest
 
-from branch_review.escape import STRICT_CSP, UNTRUSTED_CLOSE, UNTRUSTED_OPEN, fragment
+from branch_review.escape import (
+    INTERACTIVE_CSP,
+    STRICT_CSP,
+    UNTRUSTED_CLOSE,
+    UNTRUSTED_OPEN,
+    fragment,
+)
 from branch_review.lint import LintError, lint_cockpit
 
 
@@ -226,3 +232,109 @@ def test_csp_rules(label: str, csp: str | None, expected: str | None) -> None:
         assert csp_rules == set(), f"{label}: unexpected {csp_rules}"
     else:
         assert expected in csp_rules, f"{label}: expected {expected} in {csp_rules}"
+
+
+# --- interactive CSP mode (cockpit served through Lavish-AXI, ADR-0004) -------
+
+
+def _csp_rules(errors: Iterable[LintError]) -> set[str]:
+    return {r for r in _rules(errors) if r.startswith("csp-")}
+
+
+def test_interactive_csp_passes_in_interactive_mode() -> None:
+    # The relaxed policy Lavish needs is accepted only when we ask for it.
+    assert _csp_rules(lint_cockpit(_cockpit(csp=INTERACTIVE_CSP), csp_mode="interactive")) == set()
+
+
+def test_interactive_csp_fails_under_strict_mode() -> None:
+    # The portable-artifact default must still reject the relaxed policy — the two
+    # modes are genuinely different, not both permissive.
+    assert "csp-weak" in _csp_rules(lint_cockpit(_cockpit(csp=INTERACTIVE_CSP)))
+
+
+def test_strict_csp_still_passes_in_interactive_mode() -> None:
+    # Strict is a subset of the interactive baseline, so it remains acceptable.
+    assert _csp_rules(lint_cockpit(_cockpit(csp=STRICT_CSP), csp_mode="interactive")) == set()
+
+
+# Interactive mode is relaxed but still BOUNDED — these must fail even in it.
+_INTERACTIVE_REJECTS = [
+    ("script-wildcard", "default-src 'none'; script-src *; base-uri 'none'; form-action 'none'"),
+    (
+        "arbitrary-remote-host",
+        "default-src 'none'; script-src 'self' https://evil.example; "
+        "base-uri 'none'; form-action 'none'",
+    ),
+    (
+        "default-src-self-too-weak",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "base-uri 'none'; form-action 'none'",
+    ),
+    (
+        "base-uri-unlocked",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; base-uri *; form-action 'none'",
+    ),
+    # A remote host smuggled into a non-baseline fetch directive must still fail —
+    # interactive is bounded to 'self' + the Lavish CDN across EVERY directive.
+    (
+        "img-src-arbitrary-remote",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; "
+        "img-src https://evil.example; base-uri 'none'; form-action 'none'",
+    ),
+    (
+        "connect-src-arbitrary-remote",
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; "
+        "connect-src https://evil.example; base-uri 'none'; form-action 'none'",
+    ),
+]
+
+
+@pytest.mark.parametrize(("label", "csp"), _INTERACTIVE_REJECTS, ids=lambda c: c)
+def test_interactive_mode_is_still_bounded(label: str, csp: str) -> None:
+    assert "csp-weak" in _csp_rules(lint_cockpit(_cockpit(csp=csp), csp_mode="interactive")), label
+
+
+# --- duplicate attributes (browser keeps the FIRST; lint must not be fooled) --
+
+
+def test_duplicate_attr_dangerous_first_value_is_caught() -> None:
+    # The dict collapse kept the safe last value; the raw-pair audit catches the
+    # dangerous first one the browser would actually use.
+    body = '<a href="javascript:alert(1)" href="#ok">x</a>'
+    assert "inline-js" in _rules(lint_cockpit(_cockpit(body=body)))
+
+
+def test_duplicate_attr_dangerous_second_value_is_caught() -> None:
+    body = '<a href="#ok" href="javascript:alert(1)">x</a>'
+    assert "inline-js" in _rules(lint_cockpit(_cockpit(body=body)))
+
+
+def test_duplicate_remote_href_is_caught_under_vendored() -> None:
+    body = '<link rel="stylesheet" href="assets/x.css" href="https://evil.example/x.css">'
+    assert "remote-asset" in _rules(lint_cockpit(_cockpit(body=body)))
+
+
+def test_duplicate_safe_hrefs_still_pass() -> None:
+    # Two harmless local hrefs must not trip anything — the audit flags danger, not
+    # duplication per se.
+    body = '<a href="#a" href="#b">x</a>'
+    assert _rules(lint_cockpit(_cockpit(body=body))) == set()
+
+
+# --- duplicate CSP directives (browser uses the first; lint must not be fooled) --
+
+
+def test_duplicate_csp_directive_is_flagged() -> None:
+    # A repeated directive: the browser honours the first (weak) script-src and
+    # ignores the safe second; the linter must flag the duplicate either way.
+    csp = (
+        "default-src 'none'; script-src 'self' 'unsafe-inline'; script-src 'self'; "
+        "base-uri 'none'; form-action 'none'"
+    )
+    assert "csp-weak" in _csp_rules(lint_cockpit(_cockpit(csp=csp)))
+
+
+def test_lavish_cdn_is_an_allowed_remote_in_interactive() -> None:
+    # The bound permits exactly the Lavish CDN (and data:/blob:), so the real
+    # interactive policy must not be rejected by the remote-host scan.
+    assert _csp_rules(lint_cockpit(_cockpit(csp=INTERACTIVE_CSP), csp_mode="interactive")) == set()

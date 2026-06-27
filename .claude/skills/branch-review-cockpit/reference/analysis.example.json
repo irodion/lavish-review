@@ -1,0 +1,111 @@
+{
+  "schema": "review-analysis/0.1",
+  "title": "Per-file escaped diff fragments + full cockpit sections",
+  "intent_summary": "Adds the File Walkthrough substrate (one independently-escaped diff fragment per changed file) and the agent-authored analytical sections — Executive Summary, Review Route, Behavior Changes, Risk Map, File Walkthrough, Suspicious Omissions, and a Test Checklist driven by read-only runner detection.",
+  "review_route": [
+    {
+      "path": "src/branch_review/analysis.py",
+      "reason": "Start here: the schema and validator define the shape every other section must honour."
+    },
+    {
+      "path": "src/branch_review/escape.py",
+      "reason": "The per-file fragment id and index helpers — the substrate the walkthrough renders."
+    },
+    {
+      "path": "src/branch_review/collect.py",
+      "reason": "Wires per-file diffs into the collection step; check the fragments dir is rebuilt cleanly."
+    },
+    {
+      "path": "src/branch_review/runners.py",
+      "reason": "Verify detection is genuinely read-only before trusting the Test Checklist."
+    }
+  ],
+  "behavior_changes": [
+    {
+      "summary": "The collector now emits one escaped diff fragment per changed file plus an ordered index.",
+      "detail": "fragments/<id>.html and fragments.json are written alongside the preserved whole-diff fragment.",
+      "paths": ["src/branch_review/collect.py", "src/branch_review/escape.py"]
+    },
+    {
+      "summary": "Non-ASCII paths now round-trip as raw UTF-8 (core.quotePath disabled).",
+      "detail": "Previously git C-quoted them, so the stored path no longer matched the file on disk.",
+      "paths": ["src/branch_review/collect.py"]
+    }
+  ],
+  "risk_map": [
+    {
+      "category": "security",
+      "level": "medium",
+      "reason": "Untrusted file paths are turned into on-disk fragment filenames; a naive mapping could allow path traversal or collisions.",
+      "challenge_questions": [
+        "Can any path produce a fragment filename that escapes the fragments/ directory?",
+        "Do two distinct paths ever map to the same fragment id, silently overwriting one?"
+      ]
+    },
+    {
+      "category": "correctness",
+      "level": "medium",
+      "reason": "The per-file index must preserve changed-files order and represent renames, or the Review Route walks files in the wrong sequence.",
+      "challenge_questions": [
+        "Is fragments.json order identical to changed-files.json?",
+        "Are rename/copy records carrying both old and new path?"
+      ]
+    },
+    {
+      "category": "test_coverage",
+      "level": "low",
+      "reason": "Runner detection and the validator are new surfaces; under-testing them would let malformed analyses or wrong runner suggestions slip through.",
+      "challenge_questions": [
+        "Is every required analysis section exercised by a malformed-input case?",
+        "Is the read-only guarantee of runner detection asserted, not just assumed?"
+      ]
+    }
+  ],
+  "file_walkthrough": [
+    {
+      "path": "src/branch_review/analysis.py",
+      "explanation": "New deep module: the Analysis Schema Validator. Validates structure, types, and the closed risk/omission vocabularies, returning located errors."
+    },
+    {
+      "path": "src/branch_review/escape.py",
+      "explanation": "Adds file_fragment_id (traversal-safe hex id) and fragment_index_entry (one ordered index record, with omitted/reason for capped files)."
+    },
+    {
+      "path": "src/branch_review/collect.py",
+      "explanation": "Writes per-file fragments and fragments.json; rebuilds the fragments dir each run; disables core.quotePath for raw UTF-8 paths."
+    },
+    {
+      "path": "src/branch_review/runners.py",
+      "explanation": "Read-only test-runner detection across Python/Node/Go/Rust/Make, returning a suggested command and the marker file that justifies it."
+    }
+  ],
+  "suspicious_omissions": [
+    {
+      "summary": "No per-file cap or exclusion is applied yet.",
+      "kind": "other",
+      "detail": "The index carries omitted/reason fields, but the Change Classifier that populates them is issue #7; large/excluded files are not yet omitted."
+    },
+    {
+      "summary": "The cockpit's new sections are exercised end-to-end only by the lint tripwire, not a rendered-DOM assertion.",
+      "kind": "tests",
+      "detail": "Section structure is validated via analysis.json; the HTML authoring itself relies on the post-write lint."
+    }
+  ],
+  "test_checklist": {
+    "runner": "pytest",
+    "runner_evidence": "pyproject.toml",
+    "command": "pytest",
+    "items": [
+      "Run the per-file fragment table tests (multi-file order, rename, HTML-in-one-file, unusual path).",
+      "Run the analysis validator tables (a complete file passes; each malformed section reports a located error).",
+      "Run the runner-detection tables, including the read-only (no process-spawning import) assertion."
+    ]
+  },
+  "diagrams": [
+    {
+      "title": "Collection → analysis → cockpit",
+      "kind": "mermaid",
+      "source": "graph LR; collect[collect_review_context] --> frags[per-file fragments]; frags --> analysis[analysis.json]; analysis --> validate[validate_analysis]; validate --> cockpit[review.html]"
+    }
+  ]
+}

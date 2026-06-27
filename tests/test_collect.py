@@ -138,6 +138,191 @@ def test_collect_writes_context_and_files(repo: Path) -> None:
     assert "feat: bump x" in (out / "commits.txt").read_text()
 
 
+def _fragments_index(out: Path) -> dict[str, dict[str, object]]:
+    """Load fragments.json keyed by path for assertions (order checked separately)."""
+    data = json.loads((out / "fragments.json").read_text())
+    return {rec["path"]: rec for rec in data["files"]}
+
+
+def test_per_file_fragments_written_in_changed_files_order(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _commit(repo, "b.py", "b = 1\n", "feat: add b")
+    _commit(repo, "a.py", "a = 1\n", "feat: add a")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    changed = [rec["path"] for rec in json.loads((out / "changed-files.json").read_text())]
+    indexed = [rec["path"] for rec in json.loads((out / "fragments.json").read_text())["files"]]
+    assert indexed == changed  # ordered index preserves changed-files order
+
+    # Every non-omitted entry has a real, escaped fragment file on disk.
+    for rec in _fragments_index(out).values():
+        frag = out / str(rec["fragment"])
+        assert frag.is_file()
+        assert frag.read_text().startswith('<pre class="diff">')
+
+
+def test_per_file_fragment_isolates_html_in_one_file(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _commit(repo, "safe.py", "ok = 1\n", "feat: safe file")
+    _commit(repo, "evil.py", "# <script>alert(1)</script>\n", "feat: xss bait")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    evil = (out / str(index["evil.py"]["fragment"])).read_text()
+    assert "<script>alert(1)</script>" not in evil
+    assert "&lt;script&gt;" in evil
+    # The payload stays contained in its own file's fragment, not the neighbour's.
+    safe = (out / str(index["safe.py"]["fragment"])).read_text()
+    assert "script" not in safe
+
+
+def test_per_file_fragment_records_rename(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _git(repo, "mv", "app.py", "renamed.py")
+    # Match the base content so git scores it a pure rename (R100), not add+delete.
+    (repo / "renamed.py").write_text("x = 1\n")
+    _git(repo, "add", "renamed.py")
+    _git(repo, "commit", "-m", "refactor: rename app.py")
+    collect(repo)
+    index = _fragments_index(repo / ".review-agent")
+
+    rename = index["renamed.py"]
+    assert str(rename["status"]).startswith("R")
+    assert rename["old_path"] == "app.py"
+    assert rename["fragment"] is not None
+
+
+def test_per_file_fragment_handles_unusual_path(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    odd = "weird dir/na me \U0001f600.py"
+    (repo / "weird dir").mkdir()
+    (repo / odd).write_text("x = 1\n")
+    _git(repo, "add", "--", odd)
+    _git(repo, "commit", "-m", "feat: odd path")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    # The odd path is keyed verbatim, but its fragment file is a safe hex stem.
+    rec = index[odd]
+    frag_name = Path(str(rec["fragment"])).name
+    assert all(c in "0123456789abcdef" for c in frag_name.removesuffix(".html"))
+    assert (out / str(rec["fragment"])).is_file()
+
+
+def test_per_file_fragment_handles_tab_in_path(repo: Path) -> None:
+    # A literal tab in a filename is C-quoted by git even with core.quotePath=false
+    # (the tab would corrupt the line/tab format), which would record a quoted path
+    # and make the path-scoped per-file diff empty — silently hiding the body.
+    # NUL-delimited (-z) name-status keeps the path raw so the body survives.
+    _git(repo, "checkout", "feature")
+    odd = "weird\ttab.py"
+    (repo / odd).write_text("tabbed = 1\n")
+    _git(repo, "add", "--", odd)
+    _git(repo, "commit", "-m", "feat: tab in path")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    assert odd in index, list(index)
+    frag = (out / str(index[odd]["fragment"])).read_text()
+    assert "(no changes in this range)" not in frag  # the body must not vanish
+    assert "tabbed = 1" in frag
+
+
+def test_per_file_fragment_handles_pathspec_magic_name(repo: Path) -> None:
+    # A file literally named with a pathspec-magic prefix must be treated as an exact
+    # filename (--literal-pathspecs), not reinterpreted as a glob that sweeps in other
+    # files. Without the literal flag, `:(glob)*.py` would match every .py file and
+    # the fragment would wrongly include the decoy's content.
+    _git(repo, "checkout", "feature")
+    (repo / "decoy.py").write_text("decoy = 1\n")
+    magic = ":(glob)*.py"
+    (repo / magic).write_text("globby = 1\n")
+    _git(repo, "add", "-A")  # -A avoids a pathspec arg of its own
+    _git(repo, "commit", "-m", "feat: pathspec-magic filename")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    assert magic in index, list(index)
+    frag = (out / str(index[magic]["fragment"])).read_text()
+    assert "globby = 1" in frag  # this file's own body
+    assert "decoy = 1" not in frag  # not a glob match that swept in the decoy
+    # The on-disk fragment filename is still a safe hex stem.
+    stem = Path(str(index[magic]["fragment"])).name.removesuffix(".html")
+    assert all(c in "0123456789abcdef" for c in stem)
+
+
+def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
+    # First run with two files, second run with one — the dropped file's fragment
+    # must not linger in fragments/ or the index.
+    _git(repo, "checkout", "feature")
+    _commit(repo, "gone.py", "g = 1\n", "feat: temporary file")
+    collect(repo)
+    out = repo / ".review-agent"
+    assert "gone.py" in _fragments_index(out)
+    stale = out / str(_fragments_index(out)["gone.py"]["fragment"])
+    assert stale.is_file()
+
+    _git(repo, "rm", "gone.py")
+    _git(repo, "commit", "-m", "chore: drop temporary file")
+    collect(repo)
+    assert "gone.py" not in _fragments_index(out)
+    assert not stale.exists()  # fragments/ rebuilt from scratch
+
+
+def test_authored_cockpit_from_fragments_passes_lint(repo: Path) -> None:
+    """End-to-end: a cockpit assembled the way the SKILL instructs is lint-clean.
+
+    Proves the Escape Boundary holds through the new #6 sections — a hostile path
+    and an HTML-in-hunk are injected only via ``path_html`` and the per-file
+    fragment, and the Cockpit Linter (issue #4) finds nothing to complain about.
+    """
+    from branch_review.escape import STRICT_CSP
+    from branch_review.lint import lint_cockpit
+
+    _git(repo, "checkout", "feature")
+    odd = "src/inj<x>&'.py"  # hostile but filesystem-legal (no path separator)
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / odd).write_text('html = "<img src=x onerror=alert(1)>"\n')
+    _git(repo, "add", "--", odd)
+    _git(repo, "commit", "-m", "feat: hostile path and hunk")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    header = (out / "fragments.html").read_text(encoding="utf-8")
+    index = _fragments_index(out)
+    entry = index[odd]
+    diff_frag = (out / str(entry["fragment"])).read_text(encoding="utf-8")
+
+    # Build the File Walkthrough exactly as the SKILL prescribes: path from
+    # `path_html` (escaped), body from the per-file fragment (escaped), prose ours.
+    cockpit = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<meta http-equiv='Content-Security-Policy' content=\"{STRICT_CSP}\">"
+        "<link rel='stylesheet' href='assets/cockpit.css'></head><body><main>"
+        f"<header class='cockpit-head'>{header}</header>"
+        "<section><h2>Executive Summary</h2><p class='intent'>A test branch.</p></section>"
+        "<section><h2>File Walkthrough</h2>"
+        "<div class='walkthrough-file'>"
+        f"<h3>{entry['path_html']}</h3>"
+        "<p class='explanation'>This file is hostile by design.</p>"
+        f"{diff_frag}</div></section>"
+        "<script src='assets/app.js'></script></body></html>"
+    )
+
+    errors = lint_cockpit(cockpit, styling="vendored")
+    assert errors == [], errors
+    # And the payloads really are neutralised, not merely tolerated: every hostile
+    # angle bracket became an entity, so neither the path nor the hunk can form a tag.
+    assert "inj<x>" not in cockpit  # the angle brackets in the path are escaped
+    assert "<img" not in cockpit  # the hunk's tag is escaped to &lt;img (inert text)
+    assert "&lt;img" in cockpit
+
+
 def test_explicit_base_overrides_autodetect(repo: Path) -> None:
     # A second base whose merge-base with HEAD is the same initial commit.
     _git(repo, "branch", "develop", "main")

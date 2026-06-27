@@ -12,12 +12,15 @@ from __future__ import annotations
 import pytest
 
 from branch_review.escape import (
+    FRAGMENTS_DIRNAME,
     UNTRUSTED_CLOSE,
     UNTRUSTED_OPEN,
     build_fragments,
     diff_fragment,
     escape_text,
+    file_fragment_id,
     fragment,
+    fragment_index_entry,
 )
 
 # (label, raw input, substrings that MUST appear, substrings that MUST NOT appear)
@@ -164,3 +167,87 @@ def test_build_fragments_handles_empty_ranges() -> None:
     assert "No files changed in this range." in out
     assert "No commits in this range." in out
     assert UNTRUSTED_OPEN in out  # branch/base still cross the boundary
+
+
+# --- Per-file fragment substrate (issue #21) ---------------------------------
+
+# Hostile and unusual paths the fragment id must tame into a safe filename stem.
+_PATHS = [
+    "src/app.py",
+    "a/../../etc/passwd",  # traversal attempt
+    "weird name with spaces.py",
+    "deep/nest/café_你好_\U0001f600.ts",
+    "a" * 300 + ".py",  # absurdly long
+    ".hidden",
+    "",  # degenerate but must not crash
+]
+
+
+@pytest.mark.parametrize("path", _PATHS, ids=lambda p: p[:20] or "empty")
+def test_file_fragment_id_is_filename_safe(path: str) -> None:
+    fid = file_fragment_id(path)
+    # Hex only: cannot contain a path separator, dot-dot, leading dot, or space —
+    # so `fragments/<id>.html` can never escape the fragments dir.
+    assert fid and all(c in "0123456789abcdef" for c in fid)
+    assert "/" not in fid and ".." not in fid
+    # Stable: same path → same id across calls.
+    assert file_fragment_id(path) == fid
+
+
+def test_file_fragment_id_distinct_paths_do_not_collide() -> None:
+    ids = [file_fragment_id(p) for p in _PATHS]
+    assert len(set(ids)) == len(ids)
+
+
+def test_fragment_index_entry_normal_file() -> None:
+    entry = fragment_index_entry({"status": "M", "path": "src/app.py"})
+    fid = file_fragment_id("src/app.py")
+    assert entry == {
+        "path": "src/app.py",
+        "path_html": fragment("src/app.py"),
+        "status": "M",
+        "id": fid,
+        "fragment": f"{FRAGMENTS_DIRNAME}/{fid}.html",
+        "omitted": False,
+    }
+
+
+def test_fragment_index_entry_escapes_path_html() -> None:
+    # The cockpit-facing path string must arrive escaped — a hostile filename can't
+    # carry live markup into a Walkthrough/Route heading.
+    entry = fragment_index_entry({"status": "A", "path": "x/<script>.py"})
+    path_html = entry["path_html"]
+    assert isinstance(path_html, str)
+    assert "<script>" not in path_html
+    assert "&lt;script&gt;" in path_html
+    assert path_html.startswith(UNTRUSTED_OPEN) and path_html.endswith(UNTRUSTED_CLOSE)
+
+
+def test_fragment_index_entry_rename_keeps_old_path() -> None:
+    entry = fragment_index_entry({"status": "R100", "path": "new.py", "old_path": "old.py"})
+    assert entry["old_path"] == "old.py"
+    assert entry["old_path_html"] == fragment("old.py")
+    assert entry["status"] == "R100"
+    assert entry["fragment"] is not None
+
+
+def test_fragment_index_entry_omitted_requires_reason() -> None:
+    # An omitted file is still listed; an omission with no reason would render an
+    # empty, unexplained record — reject it at construction.
+    with pytest.raises(ValueError):
+        fragment_index_entry({"status": "M", "path": "x.py"}, omitted=True)
+    with pytest.raises(ValueError):
+        fragment_index_entry({"status": "M", "path": "x.py"}, omitted=True, reason="   ")
+
+
+def test_fragment_index_entry_omitted_drops_body_keeps_reason() -> None:
+    # Excluded/capped files (issue #7) stay in the index with a reason, body gone —
+    # nothing omitted is ever hidden.
+    entry = fragment_index_entry(
+        {"status": "M", "path": "pkg-lock.json"},
+        omitted=True,
+        reason="excluded: lockfile",
+    )
+    assert entry["omitted"] is True
+    assert entry["fragment"] is None
+    assert entry["reason"] == "excluded: lockfile"

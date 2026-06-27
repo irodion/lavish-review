@@ -24,6 +24,7 @@ See ``DESIGN.md``, ``CONTEXT.md`` (Review Cockpit), and
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping
 from html import escape as _html_escape
 
@@ -44,6 +45,41 @@ UNTRUSTED_CLOSE = "<!--/brc:untrusted-->"
 STRICT_CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
     "font-src 'self'; base-uri 'none'; form-action 'none'"
+)
+
+# The CDN origin Lavish-AXI loads its editor stack (Tailwind + DaisyUI) from when it
+# injects its interactive client into a served page.
+LAVISH_CDN = "https://cdn.jsdelivr.net"
+
+# The relaxed policy for a cockpit opened **through Lavish-AXI**, not via ``file://``.
+#
+# Lavish serves the cockpit and injects its annotation/editor UI into the page —
+# a CDN Tailwind runtime + DaisyUI stylesheet, an inline ``<style
+# type="text/tailwindcss">``, and an inline ``<script type="module">`` bootstrap —
+# without reconciling with the page's own CSP. Under :data:`STRICT_CSP` every one of
+# those injections is blocked, so the annotation UI renders unstyled and unusable
+# (issue: strict CSP vs. the Lavish interactive layer; see
+# ``docs/adr/0004-interactive-csp.md``). This policy trusts ``'self'`` plus the
+# Lavish CDN and permits inline script/style so that UI can run.
+#
+# This is a **defense-in-depth reduction, not a hole**: the primary XSS control is
+# the deterministic entity-escaping at the Escape Boundary (ADR-0002), which is
+# CSP-independent — untrusted diff bytes are already entities and cannot execute
+# under any policy. Relaxing the CSP is acceptable *only* because this context is
+# local and loopback-only (the cockpit is served from 127.0.0.1 by a tool the user
+# launched). The portable ``file://`` artifact keeps :data:`STRICT_CSP`. The
+# relaxation stays **bounded**: ``default-src 'none'`` still denies everything not
+# named, ``base-uri``/``form-action`` stay locked, and script/style are widened only
+# to ``'self'`` + the Lavish CDN + inline/eval — not to an open wildcard.
+INTERACTIVE_CSP = (
+    "default-src 'none'; "
+    f"script-src 'self' 'unsafe-inline' 'unsafe-eval' {LAVISH_CDN}; "
+    f"style-src 'self' 'unsafe-inline' {LAVISH_CDN}; "
+    f"img-src 'self' data: {LAVISH_CDN}; "
+    f"font-src 'self' data: {LAVISH_CDN}; "
+    f"connect-src 'self' {LAVISH_CDN}; "
+    "worker-src 'self' blob:; "
+    "base-uri 'none'; form-action 'none'"
 )
 
 # Shown in place of an untrusted region when there is genuinely nothing to escape.
@@ -148,3 +184,74 @@ def build_fragments(
         parts.append('<p class="commits-empty">No commits in this range.</p>')
 
     return "\n".join(parts) + "\n"
+
+
+# --- Per-file diff fragments (File Walkthrough substrate, issue #21) ----------
+#
+# The whole-diff ``diff_fragment`` above is one big ``<pre>``; the File Walkthrough
+# and Review Route (issue #6) instead interleave the agent's per-file prose with
+# *that file's* diff, in route order. To keep ADR-0002 intact, the split happens on
+# **our** side of the boundary: the collector escapes each file's hunk separately
+# through :func:`diff_fragment`, so a ``<script>`` in one file renders as text and
+# the linter's per-region guarantee holds for every fragment independently. The
+# agent still never hand-pastes raw diff — it injects these per-file fragments.
+
+# Sub-directory under ``.review-agent/`` that holds the per-file escaped fragments.
+FRAGMENTS_DIRNAME = "fragments"
+
+
+def file_fragment_id(path: str) -> str:
+    """A stable, traversal-safe, collision-free id for a changed file's fragment.
+
+    The id is a hex SHA-1 prefix of the UTF-8 path, so by construction it contains
+    only ``[0-9a-f]`` — never ``/``, ``..``, a leading dot, a space, or any byte
+    that could escape the ``fragments/`` directory or collide on a
+    case-insensitive filesystem, no matter how hostile or unusual the path. The
+    hash is an identifier, not a security primitive (``usedforsecurity=False``);
+    64 bits of prefix make a collision between two distinct paths effectively
+    impossible for any real changeset, and the collector asserts uniqueness anyway.
+    """
+    digest = hashlib.sha1(path.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return digest[:16]
+
+
+def fragment_index_entry(
+    record: Mapping[str, str],
+    *,
+    omitted: bool = False,
+    reason: str | None = None,
+) -> dict[str, object]:
+    """One ordered ``fragments.json`` record for a changed file.
+
+    Maps a ``changed-files.json`` record to ``{path, path_html, status, id,
+    fragment, omitted, old_path?, old_path_html?, reason?}``. ``fragment`` is the
+    relative path of the escaped fragment file, or ``None`` when the body is omitted
+    (excluded, capped, or otherwise classified out by issue #7) — an omitted file
+    still appears in the index with its status and a **required** ``reason`` so
+    **nothing omitted is ever hidden** (DESIGN). ``path``/``old_path`` are the raw
+    agent-facing strings; ``path_html``/``old_path_html`` are the same values having
+    crossed the boundary (escaped, marker-wrapped) for injection into cockpit
+    headings.
+    """
+    if omitted and not (reason and reason.strip()):
+        raise ValueError("an omitted fragment index entry requires a non-empty reason")
+    fid = file_fragment_id(record["path"])
+    entry: dict[str, object] = {
+        "path": record["path"],
+        # ``path_html`` is the same path having *crossed the boundary* — escaped and
+        # marker-wrapped. The File Walkthrough / Review Route (issue #6) place paths
+        # inside cockpit headings, and a path is attacker-influenceable, so the agent
+        # injects ``path_html`` there verbatim and never hand-types ``path`` into HTML.
+        "path_html": fragment(record["path"]),
+        "status": record.get("status", ""),
+        "id": fid,
+        "fragment": None if omitted else f"{FRAGMENTS_DIRNAME}/{fid}.html",
+        "omitted": omitted,
+    }
+    old_path = record.get("old_path")
+    if old_path is not None:
+        entry["old_path"] = old_path
+        entry["old_path_html"] = fragment(old_path)
+    if reason is not None:
+        entry["reason"] = reason
+    return entry
