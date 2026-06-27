@@ -73,6 +73,22 @@ def test_detect_base_raises_when_no_candidate(tmp_path: Path) -> None:
         detect_base(root)
 
 
+def test_detect_base_prefers_remote_default_over_local(repo: Path) -> None:
+    # origin/HEAD -> origin/main AND a local `main` both exist. Documented
+    # precedence is origin/HEAD first: returning local `main` would risk diffing
+    # against a stale base and leaking already-merged commits into the cockpit.
+    main_sha = _git(repo, "rev-parse", "main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", main_sha)
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    # local `main` is intentionally left in place.
+
+    assert detect_base(repo) == "origin/main"
+
+    context = collect(repo)
+    assert context.base == "origin/main"
+    assert context.diff_range == "origin/main...HEAD"
+
+
 def test_detect_base_uses_remote_default_when_no_local(repo: Path) -> None:
     # Simulate a feature-only checkout: origin/HEAD -> origin/main, but no local main.
     main_sha = _git(repo, "rev-parse", "main")

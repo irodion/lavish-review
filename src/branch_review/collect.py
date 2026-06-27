@@ -80,17 +80,23 @@ def repo_root(cwd: Path) -> Path:
 def detect_base(cwd: Path) -> str:
     """Auto-detect the Base: ``origin/HEAD`` then ``main``/``develop``/``master``.
 
+    Prefer the remote default's remote-tracking ref (e.g. ``origin/main``) over a
+    same-named local branch. The diff is ``merge-base(base, HEAD)...HEAD``, so a
+    stale local ``main`` (behind ``origin/main``) would push the merge-base back
+    and surface already-merged base commits in the cockpit as false positives.
+    Local ``main``/``develop``/``master`` are only the fallback when there is no
+    ``origin/HEAD``.
+
     Raises :class:`BaseResolutionError` on ambiguity (DESIGN: ask, don't guess).
     """
     head = _run_git(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd, check=False)
     if head:
-        # Prefer the clean local name (e.g. `main`) when it exists; otherwise keep
-        # the remote-tracking ref (`origin/main`) so a remote-only default branch —
-        # common in feature-only checkouts — still resolves.
-        local = head.removeprefix("refs/remotes/origin/")
-        if _ref_exists(local, cwd):
-            return local
-        return head.removeprefix("refs/remotes/")
+        # Documented precedence: origin/HEAD first. Keep its remote-tracking ref
+        # (origin/main) rather than the local branch of the same name, falling
+        # through only if the remote default somehow doesn't resolve.
+        remote_default = head.removeprefix("refs/remotes/")
+        if _ref_exists(remote_default, cwd):
+            return remote_default
     for candidate in _BASE_CANDIDATES:
         if _ref_exists(candidate, cwd):
             return candidate
