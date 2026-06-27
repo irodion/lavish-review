@@ -57,11 +57,11 @@ A live Lavish-AXI editing/feedback connection, keyed by the canonical path of th
 _Avoid_: connection, tab.
 
 **Session State** (`session.json`):
-The persisted, on-disk record of a Review's lifecycle — `{status, base, branch, head_sha, started_at}` — written when a cockpit is generated and read on the next `/review-branch`. It is what lets a reviewer step away and come back: the live **Session** (above) is the connection; the Session State is the *memory* that outlives it. `status` is `open` (unfinished — offered for restore) or `ended` (closed — kept for its transcript, never restored).
+The persisted, on-disk record of a Review's lifecycle — `{status, base, branch, head_sha, merge_base, started_at}` — written when the review opens and read on the next `/review-branch`. It is what lets a reviewer step away and come back: the live **Session** (above) is the connection; the Session State is the *memory* that outlives it. `base`/`head_sha`/`merge_base` pin the exact `base...HEAD` diff so a base that was switched or advanced is not mistaken for the same review. `status` is `open` (unfinished — offered for restore) or `ended` (closed — kept for its transcript, never restored).
 _Avoid_: session file, save state, checkpoint.
 
 **Session Evaluator**:
-The deep module of pure policy at the centre of resume & staleness. Given the persisted Session State and the *current* git HEAD and branch, it returns exactly one disposition — `none` (nothing to resume), `fresh` (re-attach), `stale` (branch advanced — **regenerate by default**, resume-anyway available), or `different-branch` (the saved review is for another branch). It makes no git calls and reads no files, so the decision is exhaustively table-testable.
+The deep module of pure policy at the centre of resume & staleness. Given the persisted Session State and the *current* git branch plus the resolved diff identity (HEAD, base, and `merge-base(base, HEAD)`), it returns exactly one disposition — `none` (nothing to resume), `fresh` (re-attach), `stale` (the diff moved — HEAD advanced, base changed, or merge-base shifted — so **regenerate by default**, resume-anyway available), or `different-branch` (the saved review is for another branch). It makes no git calls and reads no files, so the decision is exhaustively table-testable.
 _Avoid_: staleness checker, session manager.
 
 **Feedback Loop**:

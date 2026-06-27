@@ -43,13 +43,15 @@ from branch_review.collect import (
     BaseResolutionError,
     GitError,
     current_revision,
+    detect_base,
+    merge_base,
     repo_root,
 )
 
 # The persisted session lives beside the cockpit, under the gitignored state dir.
 SESSION_NAME = "session.json"
 
-_SCHEMA = "review-session/0.1"
+_SCHEMA = "review-session/0.2"
 
 
 class SessionError(RuntimeError):
@@ -122,9 +124,12 @@ class Session:
     """One persisted Review's lifecycle state (the contents of ``session.json``).
 
     ``base``/``branch``/``head_sha`` mirror the :class:`~branch_review.collect.ReviewContext`
-    the cockpit was generated from; ``started_at`` is the ISO-8601 timestamp the review
-    began; ``status`` tracks open → ended. ``schema`` versions the on-disk shape so a
-    future field change is detectable rather than silently misread.
+    the cockpit was generated from; ``merge_base`` is ``merge-base(base, HEAD)`` — together
+    with ``head_sha`` it pins the exact ``base...HEAD`` diff, so the evaluator can tell when
+    a switched or advanced base changed the diff under a fixed branch HEAD. ``started_at``
+    is the ISO-8601 timestamp the review began; ``status`` tracks open → ended. ``schema``
+    versions the on-disk shape so a future field change is detectable rather than silently
+    misread.
     """
 
     schema: str
@@ -132,6 +137,7 @@ class Session:
     base: str
     branch: str
     head_sha: str
+    merge_base: str
     started_at: str
 
     def to_dict(self) -> dict[str, object]:
@@ -160,7 +166,7 @@ class Session:
         """
         if not isinstance(data, dict):
             raise SessionError(f"session.json must be a JSON object, got {type(data).__name__}")
-        required = ("schema", "status", "base", "branch", "head_sha", "started_at")
+        required = ("schema", "status", "base", "branch", "head_sha", "merge_base", "started_at")
         missing = [key for key in required if key not in data]
         if missing:
             raise SessionError(f"session.json missing field(s): {', '.join(missing)}")
@@ -177,14 +183,18 @@ class Session:
             base=data["base"],
             branch=data["branch"],
             head_sha=data["head_sha"],
+            merge_base=data["merge_base"],
             started_at=data["started_at"],
         )
 
 
 def evaluate(
     session: Session | None,
+    *,
     current_head: str,
     current_branch: str,
+    current_base: str,
+    current_merge_base: str,
 ) -> SessionDisposition:
     """Decide how a new ``/review-branch`` run relates to the persisted ``session``.
 
@@ -194,24 +204,32 @@ def evaluate(
     1. **none** — there is no session, or the saved one is already finished
        (``status`` not resumable). Nothing unfinished to restore; generate.
     2. **different-branch** — the saved review is for another branch than the one
-       checked out now. Checked *before* the HEAD comparison: a different branch almost
+       checked out now. Checked *before* the diff comparison: a different branch almost
        always has a different HEAD too, and reporting that as "stale" would wrongly
        imply the *same* review merely advanced.
-    3. **stale** — same branch, but HEAD has moved since the cockpit was generated. The
-       artifact no longer matches the branch, so **regenerate by default**.
-    4. **fresh** — same branch, same HEAD: the cockpit still describes reality, so
-       re-attach without regenerating.
+    3. **stale** — same branch, but the diff the cockpit was generated for is no longer
+       what ``/review-branch`` would produce now: ``HEAD`` advanced, **or** the requested
+       base differs from the saved one, **or** the base's ``merge-base`` with HEAD moved
+       (a base switched or advanced under a fixed HEAD silently changes ``base...HEAD``).
+       The artifact no longer matches, so **regenerate by default**.
+    4. **fresh** — same branch, same HEAD, same base, same merge-base: the cockpit still
+       describes the exact diff a fresh run would, so re-attach without regenerating.
 
-    Pure: it inspects only its arguments. ``current_head``/``current_branch`` come from
-    the live working tree (``git rev-parse HEAD`` / ``--abbrev-ref HEAD``); the
-    collector reports a detached HEAD as its short SHA, so a detached review compares
-    consistently here without a special case.
+    Pure: it inspects only its arguments. ``current_*`` come from the live working tree —
+    ``current_base`` is the resolved base ``/review-branch`` would diff against (explicit
+    arg or auto-detect) and ``current_merge_base`` is :func:`branch_review.collect.merge_base`
+    of it with HEAD. The collector reports a detached HEAD as its short SHA, so a detached
+    review compares consistently here without a special case.
     """
     if session is None or not session.status.is_resumable:
         return SessionDisposition.NONE
     if session.branch != current_branch:
         return SessionDisposition.DIFFERENT_BRANCH
-    if session.head_sha != current_head:
+    if (
+        session.head_sha != current_head
+        or session.base != current_base
+        or session.merge_base != current_merge_base
+    ):
         return SessionDisposition.STALE
     return SessionDisposition.FRESH
 
@@ -278,17 +296,17 @@ def save_session(state_dir: Path, session: Session) -> Path:
 def session_from_context(context_path: Path) -> Session:
     """Build the ``open`` :class:`Session` from a collected ``context.json``.
 
-    The collector already recorded ``base``/``branch``/``head_sha``/``generated_at`` for
-    the exact revision the cockpit was authored from, so the session mirrors that rather
-    than re-running git — guaranteeing the saved session and the cockpit describe the
-    same HEAD. ``started_at`` is the context's ``generated_at`` (the review began when
-    the diff was collected). Each consumed field is validated to be a string, so a
-    malformed context fails with a :class:`SessionError` rather than constructing a
-    nonsense session.
+    The collector already recorded ``base``/``branch``/``head_sha``/``merge_base``/
+    ``generated_at`` for the exact revision the cockpit was authored from, so the session
+    mirrors that rather than re-running git — guaranteeing the saved session and the
+    cockpit describe the same ``base...HEAD`` diff. ``started_at`` is the context's
+    ``generated_at`` (the review began when the diff was collected). Each consumed field
+    is validated to be a string, so a malformed context fails with a :class:`SessionError`
+    rather than constructing a nonsense session.
     """
     data = _read_json_object(context_path)
     fields: dict[str, str] = {}
-    for key in ("base", "branch", "head_sha", "generated_at"):
+    for key in ("base", "branch", "head_sha", "merge_base", "generated_at"):
         value = data.get(key)
         if not isinstance(value, str):
             raise SessionError(f"{context_path} field {key!r} is missing or not a string")
@@ -299,6 +317,7 @@ def session_from_context(context_path: Path) -> Session:
         base=fields["base"],
         branch=fields["branch"],
         head_sha=fields["head_sha"],
+        merge_base=fields["merge_base"],
         started_at=fields["generated_at"],
     )
 
@@ -322,12 +341,17 @@ def _state_dir(repo: Path, out: Path | None) -> tuple[Path, Path]:
     return root, (out if out is not None else root / ".review-agent")
 
 
-def _cmd_evaluate(repo: Path, out: Path | None) -> int:
+def _cmd_evaluate(repo: Path, out: Path | None, base: str | None) -> int:
     """Print the Session Evaluator's verdict for the current working tree as JSON.
 
     The agent reads this at step 0 of ``/review-branch`` and branches on
     ``disposition``. A corrupt ``session.json`` is reported as ``none`` with a ``note``
     (not a crash), so a broken session never blocks a review — it just regenerates.
+
+    ``base`` is the explicit base the reviewer passed to ``/review-branch`` (``None`` =
+    auto-detect, mirroring the collector). The base and its merge-base are resolved
+    **only when there is a resumable session to compare** — so an ambiguous-base repo
+    never blocks the common "nothing to resume → generate" answer.
     """
     root, out_dir = _state_dir(repo, out)
     head_sha, branch = current_revision(root)
@@ -338,12 +362,29 @@ def _cmd_evaluate(repo: Path, out: Path | None) -> int:
     except SessionError as exc:
         session, note = None, f"ignoring unreadable session.json ({exc}) — will regenerate"
 
-    disposition = evaluate(session, head_sha, branch)
+    current: dict[str, object] = {"head_sha": head_sha, "branch": branch}
+    current_base = ""
+    current_merge_base = ""
+    if session is not None and session.status.is_resumable:
+        # Resolving the base can hit BaseResolutionError on an ambiguous repo; do it only
+        # when a session's base actually needs comparing (main() turns it into a clean error).
+        current_base = base or detect_base(root)
+        current_merge_base = merge_base(current_base, root)
+        current["base"] = current_base
+        current["merge_base"] = current_merge_base
+
+    disposition = evaluate(
+        session,
+        current_head=head_sha,
+        current_branch=branch,
+        current_base=current_base,
+        current_merge_base=current_merge_base,
+    )
     payload: dict[str, object] = {
         "disposition": disposition.value,
         "offers_restore": disposition.offers_restore,
         "restore_is_default": disposition.restore_is_default,
-        "current": {"head_sha": head_sha, "branch": branch},
+        "current": current,
         "session": None if session is None else session.to_dict(),
     }
     if note is not None:
@@ -386,7 +427,16 @@ def main(argv: list[str] | None = None) -> int:
         "--out", type=Path, default=None, help="State dir (default: <repo>/.review-agent)."
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("evaluate", help="Decide restore vs regenerate for the current branch.")
+    evaluate_p = sub.add_parser(
+        "evaluate", help="Decide restore vs regenerate for the current branch."
+    )
+    evaluate_p.add_argument(
+        "base",
+        nargs="?",
+        default=None,
+        help="Base the review diffs against (default: auto-detect) — must match how "
+        "/review-branch was invoked, so a different base is seen as stale.",
+    )
     sub.add_parser("start", help="Record the open session from context.json.")
     sub.add_parser("end", help="Mark the session ended (/review-close).")
     args = parser.parse_args(argv)
@@ -395,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:
     # missing artifact surfaces as a clean error, not a traceback.
     try:
         if args.command == "evaluate":
-            return _cmd_evaluate(args.repo, args.out)
+            return _cmd_evaluate(args.repo, args.out, args.base)
         if args.command == "start":
             return _cmd_start(args.repo, args.out)
         return _cmd_end(args.repo, args.out)

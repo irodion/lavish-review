@@ -128,6 +128,17 @@ def current_revision(cwd: Path) -> tuple[str, str]:
     return head_sha, branch
 
 
+def merge_base(base: str, cwd: Path) -> str:
+    """The merge-base of ``base`` and ``HEAD`` — the commit the ``base...HEAD`` diff anchors to.
+
+    The three-dot diff the cockpit shows is exactly ``merge_base..HEAD``, so this commit
+    (together with ``HEAD``) *is* the identity of the reviewed diff. The Session Evaluator
+    compares it (issue #8) so a base that was switched or has advanced under a fixed branch
+    HEAD — which silently changes the diff — is caught as stale rather than restored.
+    """
+    return _run_git(["merge-base", base, "HEAD"], cwd)
+
+
 def detect_base(cwd: Path) -> str:
     """Auto-detect the Base: ``origin/HEAD`` then ``main``/``develop``/``master``.
 
@@ -209,7 +220,7 @@ def _build_context(
     if not _ref_exists(base, cwd):
         raise BaseResolutionError(f"Base ref {base!r} does not resolve to a commit.")
     head_sha, branch = current_revision(cwd)
-    merge_base = _run_git(["merge-base", base, "HEAD"], cwd)
+    merge_base_sha = merge_base(base, cwd)
     base_sha = _run_git(["rev-parse", base], cwd)
     files = _changed_files(base, cwd)
     context = ReviewContext(
@@ -218,7 +229,7 @@ def _build_context(
         base_sha=base_sha,
         branch=branch,
         head_sha=head_sha,
-        merge_base=merge_base,
+        merge_base=merge_base_sha,
         diff_range=f"{base}...HEAD",
         generated_at=now.isoformat(),
         changed_file_count=len(files),

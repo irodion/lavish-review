@@ -31,6 +31,10 @@ from branch_review.session import (
 
 _HEAD = "1111111111111111111111111111111111111111"
 _OTHER_HEAD = "2222222222222222222222222222222222222222"
+_MERGE_BASE = "3333333333333333333333333333333333333333"
+_OTHER_MERGE_BASE = "4444444444444444444444444444444444444444"
+_BASE = "origin/main"
+_OTHER_BASE = "origin/release"
 _NOW = datetime(2026, 6, 27, 12, 0, 0, tzinfo=UTC)
 
 
@@ -39,26 +43,32 @@ def _session(
     status: SessionStatus = SessionStatus.OPEN,
     branch: str = "feat/x",
     head_sha: str = _HEAD,
+    base: str = _BASE,
+    merge_base: str = _MERGE_BASE,
 ) -> Session:
     return Session(
-        schema="review-session/0.1",
+        schema="review-session/0.2",
         status=status,
-        base="origin/main",
+        base=base,
         branch=branch,
         head_sha=head_sha,
+        merge_base=merge_base,
         started_at=_NOW.isoformat(),
     )
 
 
-# (label, session, current_head, current_branch, expected disposition).
-_EVAL_CASES: list[tuple[str, Session | None, str, str, SessionDisposition]] = [
-    # none — nothing to resume.
-    ("no session at all", None, _HEAD, "feat/x", SessionDisposition.NONE),
+# (label, session, current_head, current_branch, current_base, current_merge_base, expected).
+_EvalCase = tuple[str, Session | None, str, str, str, str, SessionDisposition]
+_EVAL_CASES: list[_EvalCase] = [
+    # none — nothing to resume (base/merge-base are irrelevant; passed as-is).
+    ("no session at all", None, _HEAD, "feat/x", _BASE, _MERGE_BASE, SessionDisposition.NONE),
     (
         "finished session is not resumable",
         _session(status=SessionStatus.ENDED),
         _HEAD,
         "feat/x",
+        _BASE,
+        _MERGE_BASE,
         SessionDisposition.NONE,
     ),
     (
@@ -66,18 +76,48 @@ _EVAL_CASES: list[tuple[str, Session | None, str, str, SessionDisposition]] = [
         _session(status=SessionStatus.ENDED, branch="feat/old"),
         _OTHER_HEAD,
         "feat/x",
+        _BASE,
+        _MERGE_BASE,
         SessionDisposition.NONE,
     ),
-    # fresh — same branch, same HEAD: re-attach.
-    ("same branch and head", _session(), _HEAD, "feat/x", SessionDisposition.FRESH),
-    # stale — same branch, HEAD advanced: regenerate by default.
-    ("branch advanced", _session(), _OTHER_HEAD, "feat/x", SessionDisposition.STALE),
-    # different-branch — saved review belongs to another branch.
+    # fresh — same branch, HEAD, base, AND merge-base: re-attach.
+    ("all match", _session(), _HEAD, "feat/x", _BASE, _MERGE_BASE, SessionDisposition.FRESH),
+    # stale — same branch, but the diff identity moved (HEAD / base / merge-base).
+    (
+        "head advanced",
+        _session(),
+        _OTHER_HEAD,
+        "feat/x",
+        _BASE,
+        _MERGE_BASE,
+        SessionDisposition.STALE,
+    ),
+    (
+        "different base requested (same HEAD & merge-base)",
+        _session(),
+        _HEAD,
+        "feat/x",
+        _OTHER_BASE,
+        _MERGE_BASE,
+        SessionDisposition.STALE,
+    ),
+    (
+        "base advanced — merge-base moved under a fixed HEAD",
+        _session(),
+        _HEAD,
+        "feat/x",
+        _BASE,
+        _OTHER_MERGE_BASE,
+        SessionDisposition.STALE,
+    ),
+    # different-branch — saved review belongs to another branch (outranks the diff check).
     (
         "different branch, different head",
         _session(branch="feat/old"),
         _OTHER_HEAD,
         "feat/x",
+        _BASE,
+        _MERGE_BASE,
         SessionDisposition.DIFFERENT_BRANCH,
     ),
     (
@@ -85,32 +125,54 @@ _EVAL_CASES: list[tuple[str, Session | None, str, str, SessionDisposition]] = [
         _session(branch="feat/old"),
         _HEAD,
         "feat/x",
+        _BASE,
+        _MERGE_BASE,
         SessionDisposition.DIFFERENT_BRANCH,
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("session", "head", "branch", "expected"),
-    [(s, h, b, e) for _label, s, h, b, e in _EVAL_CASES],
-    ids=[label for label, _s, _h, _b, _e in _EVAL_CASES],
+    ("session", "head", "branch", "base", "merge_base", "expected"),
+    [(s, h, b, bs, mb, e) for _label, s, h, b, bs, mb, e in _EVAL_CASES],
+    ids=[c[0] for c in _EVAL_CASES],
 )
 def test_evaluate_dispositions(
-    session: Session | None, head: str, branch: str, expected: SessionDisposition
+    session: Session | None,
+    head: str,
+    branch: str,
+    base: str,
+    merge_base: str,
+    expected: SessionDisposition,
 ) -> None:
-    assert evaluate(session, head, branch) is expected
+    assert (
+        evaluate(
+            session,
+            current_head=head,
+            current_branch=branch,
+            current_base=base,
+            current_merge_base=merge_base,
+        )
+        is expected
+    )
 
 
 def test_every_disposition_is_covered() -> None:
     # The acceptance criterion: the table exercises *every* disposition value.
-    covered = {expected for _label, _s, _h, _b, expected in _EVAL_CASES}
+    covered = {c[-1] for c in _EVAL_CASES}
     assert covered == set(SessionDisposition)
 
 
 def test_stale_regenerates_by_default() -> None:
     # The headline invariant: a stale review offers restore but does NOT default to it
     # — regenerate is the default, resume-anyway available.
-    disposition = evaluate(_session(), _OTHER_HEAD, "feat/x")
+    disposition = evaluate(
+        _session(),
+        current_head=_OTHER_HEAD,
+        current_branch="feat/x",
+        current_base=_BASE,
+        current_merge_base=_MERGE_BASE,
+    )
     assert disposition is SessionDisposition.STALE
     assert disposition.offers_restore is True
     assert disposition.restore_is_default is False
@@ -227,11 +289,12 @@ def test_load_session_missing_field_raises(tmp_path: Path) -> None:
 
 def test_load_session_non_string_field_raises(tmp_path: Path) -> None:
     bad = {
-        "schema": "review-session/0.1",
+        "schema": "review-session/0.2",
         "status": "open",
         "base": "main",
         "branch": "feat/x",
         "head_sha": 12345,  # not a string
+        "merge_base": _MERGE_BASE,
         "started_at": _NOW.isoformat(),
     }
     (tmp_path / "session.json").write_text(json.dumps(bad), encoding="utf-8")
@@ -241,11 +304,12 @@ def test_load_session_non_string_field_raises(tmp_path: Path) -> None:
 
 def test_load_session_unknown_status_raises(tmp_path: Path) -> None:
     bad = {
-        "schema": "review-session/0.1",
+        "schema": "review-session/0.2",
         "status": "paused",  # not a known SessionStatus
         "base": "main",
         "branch": "feat/x",
         "head_sha": _HEAD,
+        "merge_base": _MERGE_BASE,
         "started_at": _NOW.isoformat(),
     }
     (tmp_path / "session.json").write_text(json.dumps(bad), encoding="utf-8")
@@ -278,6 +342,7 @@ def test_session_from_context_mirrors_the_collected_revision(tmp_path: Path) -> 
     assert session.base == "origin/main"
     assert session.branch == "feat/x"
     assert session.head_sha == _HEAD
+    assert session.merge_base == "def"  # the diff-identity anchor is carried through
     # started_at is the context's generated_at — the review began when the diff was collected.
     assert session.started_at == _NOW.isoformat()
 

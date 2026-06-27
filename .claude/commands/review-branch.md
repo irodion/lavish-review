@@ -9,9 +9,10 @@ Base: $ARGUMENTS (empty means auto-detect — do not guess; pass it through only
 the user named one).
 
 Follow the skill's steps exactly. **First check for an unfinished review** (step 0:
-`session.py evaluate`) — if one for this branch is still open and current, offer to
-restore it instead of regenerating (re-attach with no rebuild); if the branch has
-advanced, regenerate by default and say why. Otherwise run the collector, author
+`session.py evaluate [base]`, passing the same base) — if one for this branch is still
+open and current (same `base...HEAD` diff), offer to restore it instead of regenerating
+(re-attach with no rebuild); if the diff moved (HEAD advanced, base changed, or
+merge-base shifted), regenerate by default and say why. Otherwise run the collector, author
 `.review-agent/review.html` from the pre-escaped fragment, open it loopback-only with
 the pinned `lavish-axi`, record the session (`session.py start`), then enter the
 blocking answer loop (`review_loop.py poll` ⇄ `reply`) and stay in it, answering the
