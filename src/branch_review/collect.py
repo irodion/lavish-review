@@ -57,11 +57,18 @@ class BaseResolutionError(RuntimeError):
     """The Base could not be auto-detected; the reviewer must name one."""
 
 
-def _run_git(args: list[str], cwd: Path, *, check: bool = True) -> str:
-    """Run ``git <args>`` in ``cwd`` and return stripped stdout.
+def _run_git(args: list[str], cwd: Path, *, check: bool = True, strip: bool = True) -> str:
+    """Run ``git <args>`` in ``cwd`` and return its stdout (stripped by default).
 
     Fixed git argv, ``shell=False``, no user-controlled binary — safe by
     construction; the ``# nosec`` waives Bandit's blanket subprocess warnings.
+
+    ``strip`` trims surrounding whitespace — right for plumbing output (SHAs, refs,
+    ``-z`` records the parser re-splits anyway). Pass ``strip=False`` for **diff
+    bodies**: ``.strip()`` would eat trailing whitespace on the diff's last line, and
+    the cockpit must show the reviewed change byte-for-byte — a trailing-whitespace
+    edit is exactly the kind of change a reviewer needs to see, not one the tool
+    silently erases.
     """
     # ``-c core.quotePath=false`` keeps non-ASCII paths as raw UTF-8 instead of
     # git's default C-quoted ``"\360\237..."`` octal form, so a changed-files path
@@ -83,7 +90,7 @@ def _run_git(args: list[str], cwd: Path, *, check: bool = True) -> str:
     )
     if check and proc.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed ({proc.returncode}): {proc.stderr.strip()}")
-    return proc.stdout.strip()
+    return proc.stdout.strip() if strip else proc.stdout
 
 
 def _ref_exists(ref: str, cwd: Path) -> bool:
@@ -215,7 +222,8 @@ def _per_file_diff(diff_range: str, record: dict[str, str], cwd: Path) -> str:
     """
     old_path = record.get("old_path")
     pathspec = [old_path, record["path"]] if old_path is not None else [record["path"]]
-    return _run_git(["diff", diff_range, "--", *pathspec], cwd)
+    # strip=False: preserve the body verbatim, including trailing whitespace.
+    return _run_git(["diff", diff_range, "--", *pathspec], cwd, strip=False)
 
 
 def _file_stats(diff_range: str, files: list[dict[str, str]], cwd: Path) -> dict[str, FileStats]:
@@ -385,7 +393,8 @@ def collect(
     out.mkdir(parents=True, exist_ok=True)
 
     context, files = _build_context(resolved_base, root, now=now or datetime.now(UTC))
-    diff_text = _run_git(["diff", context.diff_range], root)
+    # strip=False: the whole diff is shown verbatim — preserve trailing whitespace.
+    diff_text = _run_git(["diff", context.diff_range], root, strip=False)
     diff_stat = _run_git(["diff", "--stat", context.diff_range], root)
     commits = _run_git(["log", "--oneline", f"{resolved_base}..HEAD"], root)
     commit_lines = commits.splitlines()
@@ -409,7 +418,9 @@ def collect(
     files_json = json.dumps(files, indent=2) + "\n"
     (out / "context.json").write_text(context_json, encoding="utf-8")
     (out / "changed-files.json").write_text(files_json, encoding="utf-8")
-    (out / "diff.patch").write_text(diff_text + ("\n" if diff_text else ""), encoding="utf-8")
+    # ``diff_text`` is raw (strip=False): already newline-terminated by git when
+    # non-empty, "" when empty — write it verbatim so the patch is byte-faithful.
+    (out / "diff.patch").write_text(diff_text, encoding="utf-8")
     (out / "diff-stat.txt").write_text(diff_stat + "\n", encoding="utf-8")
     (out / "commits.txt").write_text(commits + "\n", encoding="utf-8")
     (out / "diff.fragment.html").write_text(diff_fragment(diff_text), encoding="utf-8")

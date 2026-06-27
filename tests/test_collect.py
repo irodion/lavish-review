@@ -343,6 +343,23 @@ def test_diff_fragment_escapes_untrusted_content(repo: Path) -> None:
     assert fragment.startswith('<pre class="diff">')
 
 
+def test_trailing_whitespace_preserved_in_diff_and_fragments(repo: Path) -> None:
+    # A review tool must show the change byte-for-byte: a trailing-whitespace edit on
+    # the diff's last line must survive into diff.patch and the per-file fragment,
+    # not be silently stripped (git stdout is no longer blanket-.strip()'d).
+    _git(repo, "checkout", "feature")
+    (repo / "ws.py").write_text("a = 1   \n")  # trailing spaces on the last line
+    _git(repo, "add", "ws.py")
+    _git(repo, "commit", "-m", "feat: trailing whitespace")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    assert "+a = 1   \n" in (out / "diff.patch").read_text()
+    index = _fragments_index(out)
+    frag = (out / str(index["ws.py"]["fragment"])).read_text()
+    assert "+a = 1   " in frag  # spaces kept inside the escaped <pre>
+
+
 def test_artifacts_are_utf8(repo: Path) -> None:
     _git(repo, "checkout", "feature")
     _commit(repo, "app.py", "x = 'é你好\U0001f600'\n", "feat: café 你好 😀")
