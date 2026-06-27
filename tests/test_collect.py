@@ -138,6 +138,98 @@ def test_collect_writes_context_and_files(repo: Path) -> None:
     assert "feat: bump x" in (out / "commits.txt").read_text()
 
 
+def _fragments_index(out: Path) -> dict[str, dict[str, object]]:
+    """Load fragments.json keyed by path for assertions (order checked separately)."""
+    data = json.loads((out / "fragments.json").read_text())
+    return {rec["path"]: rec for rec in data["files"]}
+
+
+def test_per_file_fragments_written_in_changed_files_order(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _commit(repo, "b.py", "b = 1\n", "feat: add b")
+    _commit(repo, "a.py", "a = 1\n", "feat: add a")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    changed = [rec["path"] for rec in json.loads((out / "changed-files.json").read_text())]
+    indexed = [rec["path"] for rec in json.loads((out / "fragments.json").read_text())["files"]]
+    assert indexed == changed  # ordered index preserves changed-files order
+
+    # Every non-omitted entry has a real, escaped fragment file on disk.
+    for rec in _fragments_index(out).values():
+        frag = out / str(rec["fragment"])
+        assert frag.is_file()
+        assert frag.read_text().startswith('<pre class="diff">')
+
+
+def test_per_file_fragment_isolates_html_in_one_file(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _commit(repo, "safe.py", "ok = 1\n", "feat: safe file")
+    _commit(repo, "evil.py", "# <script>alert(1)</script>\n", "feat: xss bait")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    evil = (out / str(index["evil.py"]["fragment"])).read_text()
+    assert "<script>alert(1)</script>" not in evil
+    assert "&lt;script&gt;" in evil
+    # The payload stays contained in its own file's fragment, not the neighbour's.
+    safe = (out / str(index["safe.py"]["fragment"])).read_text()
+    assert "script" not in safe
+
+
+def test_per_file_fragment_records_rename(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _git(repo, "mv", "app.py", "renamed.py")
+    # Match the base content so git scores it a pure rename (R100), not add+delete.
+    (repo / "renamed.py").write_text("x = 1\n")
+    _git(repo, "add", "renamed.py")
+    _git(repo, "commit", "-m", "refactor: rename app.py")
+    collect(repo)
+    index = _fragments_index(repo / ".review-agent")
+
+    rename = index["renamed.py"]
+    assert str(rename["status"]).startswith("R")
+    assert rename["old_path"] == "app.py"
+    assert rename["fragment"] is not None
+
+
+def test_per_file_fragment_handles_unusual_path(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    odd = "weird dir/na me \U0001f600.py"
+    (repo / "weird dir").mkdir()
+    (repo / odd).write_text("x = 1\n")
+    _git(repo, "add", "--", odd)
+    _git(repo, "commit", "-m", "feat: odd path")
+    collect(repo)
+    out = repo / ".review-agent"
+    index = _fragments_index(out)
+
+    # The odd path is keyed verbatim, but its fragment file is a safe hex stem.
+    rec = index[odd]
+    frag_name = Path(str(rec["fragment"])).name
+    assert all(c in "0123456789abcdef" for c in frag_name.removesuffix(".html"))
+    assert (out / str(rec["fragment"])).is_file()
+
+
+def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
+    # First run with two files, second run with one — the dropped file's fragment
+    # must not linger in fragments/ or the index.
+    _git(repo, "checkout", "feature")
+    _commit(repo, "gone.py", "g = 1\n", "feat: temporary file")
+    collect(repo)
+    out = repo / ".review-agent"
+    assert "gone.py" in _fragments_index(out)
+    stale = out / str(_fragments_index(out)["gone.py"]["fragment"])
+    assert stale.is_file()
+
+    _git(repo, "rm", "gone.py")
+    _git(repo, "commit", "-m", "chore: drop temporary file")
+    collect(repo)
+    assert "gone.py" not in _fragments_index(out)
+    assert not stale.exists()  # fragments/ rebuilt from scratch
+
+
 def test_explicit_base_overrides_autodetect(repo: Path) -> None:
     # A second base whose merge-base with HEAD is the same initial commit.
     _git(repo, "branch", "develop", "main")

@@ -21,9 +21,14 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from shutil import copy2
+from shutil import copy2, rmtree
 
-from branch_review.escape import build_fragments, diff_fragment
+from branch_review.escape import (
+    FRAGMENTS_DIRNAME,
+    build_fragments,
+    diff_fragment,
+    fragment_index_entry,
+)
 
 # Base auto-detect fallbacks, tried in order when origin/HEAD is absent.
 _BASE_CANDIDATES = ("main", "develop", "master")
@@ -32,6 +37,7 @@ _BASE_CANDIDATES = ("main", "develop", "master")
 _ASSET_NAMES = ("cockpit.css", "app.js")
 
 _SCHEMA = "review-context/0.1-skeleton"
+_FRAGMENTS_SCHEMA = "review-fragments/0.1"
 
 
 class GitError(RuntimeError):
@@ -48,8 +54,12 @@ def _run_git(args: list[str], cwd: Path, *, check: bool = True) -> str:
     Fixed git argv, ``shell=False``, no user-controlled binary — safe by
     construction; the ``# nosec`` waives Bandit's blanket subprocess warnings.
     """
+    # ``-c core.quotePath=false`` keeps non-ASCII paths as raw UTF-8 instead of
+    # git's default C-quoted ``"\360\237..."`` octal form, so a changed-files path
+    # round-trips verbatim — both as a JSON key the agent reads and as the pathspec
+    # the per-file fragment diff (#21) feeds back to ``git diff``.
     proc = subprocess.run(  # nosec B603 B607
-        ["git", *args],
+        ["git", "-c", "core.quotePath=false", *args],
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -164,6 +174,50 @@ def _build_context(
     return context, files
 
 
+def _per_file_diff(diff_range: str, record: dict[str, str], cwd: Path) -> str:
+    """The unified diff for a single changed file (path-scoped ``git diff``).
+
+    Scoping by pathspec gives an authoritative path→hunk association — no fragile
+    re-parsing of the combined diff to guess file boundaries. For a rename/copy we
+    pass **both** the old and new path so git emits the rename header and any
+    content delta together.
+    """
+    old_path = record.get("old_path")
+    pathspec = [old_path, record["path"]] if old_path is not None else [record["path"]]
+    return _run_git(["diff", diff_range, "--", *pathspec], cwd)
+
+
+def _write_file_fragments(
+    out: Path, diff_range: str, files: list[dict[str, str]], cwd: Path
+) -> list[dict[str, object]]:
+    """Write one escaped ``fragments/<id>.html`` per changed file + the ordered index.
+
+    The substrate the File Walkthrough / Review Route (issue #6) consume: each
+    file's hunk is escaped independently through the boundary, keyed by a
+    traversal-safe id, and the returned records preserve ``changed-files.json``
+    order so the agent can walk files in a deliberate route. The ``fragments/``
+    dir is rebuilt from scratch each run so a prior review's files never linger as
+    orphans in the new index (**nothing shown that isn't in this range**).
+    """
+    frag_dir = out / FRAGMENTS_DIRNAME
+    if frag_dir.exists():
+        rmtree(frag_dir)
+    frag_dir.mkdir(parents=True, exist_ok=True)
+
+    entries: list[dict[str, object]] = []
+    seen: dict[str, str] = {}
+    for record in files:
+        entry = fragment_index_entry(record)  # body omitted/reason is issue #7's call
+        fid = str(entry["id"])
+        if seen.get(fid, record["path"]) != record["path"]:
+            raise GitError(f"fragment id collision on {fid!r}: {seen[fid]!r} vs {record['path']!r}")
+        seen[fid] = record["path"]
+        diff_text = _per_file_diff(diff_range, record, cwd)
+        (frag_dir / f"{fid}.html").write_text(diff_fragment(diff_text), encoding="utf-8")
+        entries.append(entry)
+    return entries
+
+
 def copy_assets(assets_dir: Path, dest_dir: Path) -> list[str]:
     """Copy the vendored cockpit assets into ``dest_dir`` for relative reference."""
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +280,22 @@ def collect(
     (out / "commits.txt").write_text(commits + "\n", encoding="utf-8")
     (out / "diff.fragment.html").write_text(diff_fragment(diff_text), encoding="utf-8")
     (out / "fragments.html").write_text(fragments, encoding="utf-8")
+
+    # Per-file escaped fragments + ordered index (issue #21) — the File Walkthrough
+    # substrate. The whole-diff diff.fragment.html above is preserved unchanged.
+    fragment_index = _write_file_fragments(out, context.diff_range, files, root)
+    fragments_json = (
+        json.dumps(
+            {
+                "schema": _FRAGMENTS_SCHEMA,
+                "diff_range": context.diff_range,
+                "files": fragment_index,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    (out / "fragments.json").write_text(fragments_json, encoding="utf-8")
 
     if assets_dir is not None:
         copy_assets(assets_dir, out / "assets")

@@ -24,6 +24,7 @@ See ``DESIGN.md``, ``CONTEXT.md`` (Review Cockpit), and
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping
 from html import escape as _html_escape
 
@@ -148,3 +149,65 @@ def build_fragments(
         parts.append('<p class="commits-empty">No commits in this range.</p>')
 
     return "\n".join(parts) + "\n"
+
+
+# --- Per-file diff fragments (File Walkthrough substrate, issue #21) ----------
+#
+# The whole-diff ``diff_fragment`` above is one big ``<pre>``; the File Walkthrough
+# and Review Route (issue #6) instead interleave the agent's per-file prose with
+# *that file's* diff, in route order. To keep ADR-0002 intact, the split happens on
+# **our** side of the boundary: the collector escapes each file's hunk separately
+# through :func:`diff_fragment`, so a ``<script>`` in one file renders as text and
+# the linter's per-region guarantee holds for every fragment independently. The
+# agent still never hand-pastes raw diff — it injects these per-file fragments.
+
+# Sub-directory under ``.review-agent/`` that holds the per-file escaped fragments.
+FRAGMENTS_DIRNAME = "fragments"
+
+
+def file_fragment_id(path: str) -> str:
+    """A stable, traversal-safe, collision-free id for a changed file's fragment.
+
+    The id is a hex SHA-1 prefix of the UTF-8 path, so by construction it contains
+    only ``[0-9a-f]`` — never ``/``, ``..``, a leading dot, a space, or any byte
+    that could escape the ``fragments/`` directory or collide on a
+    case-insensitive filesystem, no matter how hostile or unusual the path. The
+    hash is an identifier, not a security primitive (``usedforsecurity=False``);
+    64 bits of prefix make a collision between two distinct paths effectively
+    impossible for any real changeset, and the collector asserts uniqueness anyway.
+    """
+    digest = hashlib.sha1(path.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return digest[:16]
+
+
+def fragment_index_entry(
+    record: Mapping[str, str],
+    *,
+    omitted: bool = False,
+    reason: str | None = None,
+) -> dict[str, object]:
+    """One ordered ``fragments.json`` record for a changed file.
+
+    Maps a ``changed-files.json`` record to ``{path, status, id, fragment,
+    omitted, old_path?, reason?}``. ``fragment`` is the relative path of the
+    escaped fragment file, or ``None`` when the body is omitted (excluded, capped,
+    or otherwise classified out by issue #7) — the file still appears in the index
+    with its status and a ``reason`` so **nothing omitted is ever hidden**
+    (DESIGN). The path itself is not stored escaped here: ``fragments.json`` is
+    agent-facing data the agent reads, not HTML injected into the cockpit; when a
+    path reaches the Review Cockpit it crosses the boundary via :func:`fragment`.
+    """
+    fid = file_fragment_id(record["path"])
+    entry: dict[str, object] = {
+        "path": record["path"],
+        "status": record.get("status", ""),
+        "id": fid,
+        "fragment": None if omitted else f"{FRAGMENTS_DIRNAME}/{fid}.html",
+        "omitted": omitted,
+    }
+    old_path = record.get("old_path")
+    if old_path is not None:
+        entry["old_path"] = old_path
+    if reason is not None:
+        entry["reason"] = reason
+    return entry
