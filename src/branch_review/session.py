@@ -261,11 +261,17 @@ def save_session(state_dir: Path, session: Session) -> Path:
     """Write ``session`` to ``<state_dir>/session.json`` and return the file path.
 
     The state dir is created if needed (the collector normally made it already). UTF-8
-    to match every other artifact, so a non-ASCII branch name round-trips.
+    to match every other artifact, so a non-ASCII branch name round-trips. A filesystem
+    failure (unwritable dir, full disk) is wrapped as :class:`SessionError`, the one
+    error type ``main`` already handles, so ``start``/``end`` fail with a clean message
+    rather than an escaping ``OSError`` traceback.
     """
-    state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / SESSION_NAME
-    path.write_text(session.to_json(), encoding="utf-8")
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(session.to_json(), encoding="utf-8")
+    except OSError as exc:
+        raise SessionError(f"cannot write {path}: {exc}") from exc
     return path
 
 

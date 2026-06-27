@@ -11,6 +11,7 @@ rather than crash.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -152,11 +153,12 @@ def test_status_is_resumable(status: SessionStatus, resumable: bool) -> None:
 
 
 def test_end_session_transitions_open_to_ended() -> None:
-    ended = end_session(_session())
+    original = _session()
+    ended = end_session(original)
     assert ended.status is SessionStatus.ENDED
-    # Only the status changes; everything else is preserved.
-    assert ended.base == "origin/main"
-    assert ended.branch == "feat/x"
+    # ONLY the status changes — every other field (schema, base, branch, head_sha,
+    # started_at) is carried through verbatim.
+    assert ended == replace(original, status=SessionStatus.ENDED)
 
 
 def test_end_session_is_idempotent() -> None:
@@ -193,6 +195,15 @@ def test_save_session_creates_missing_parent(tmp_path: Path) -> None:
     nested = tmp_path / "deep" / ".review-agent"
     save_session(nested, _session())
     assert (nested / "session.json").is_file()
+
+
+def test_save_session_wraps_filesystem_error(tmp_path: Path) -> None:
+    # A state dir whose parent is a regular file can't be created — the OSError must
+    # surface as SessionError (the one type the CLI's main() handles), not escape raw.
+    blocker = tmp_path / "afile"
+    blocker.write_text("not a dir", encoding="utf-8")
+    with pytest.raises(SessionError, match="cannot write"):
+        save_session(blocker / "sub", _session())
 
 
 def test_load_session_malformed_json_raises(tmp_path: Path) -> None:
