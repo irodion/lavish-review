@@ -230,6 +230,55 @@ def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
     assert not stale.exists()  # fragments/ rebuilt from scratch
 
 
+def test_authored_cockpit_from_fragments_passes_lint(repo: Path) -> None:
+    """End-to-end: a cockpit assembled the way the SKILL instructs is lint-clean.
+
+    Proves the Escape Boundary holds through the new #6 sections — a hostile path
+    and an HTML-in-hunk are injected only via ``path_html`` and the per-file
+    fragment, and the Cockpit Linter (issue #4) finds nothing to complain about.
+    """
+    from branch_review.escape import STRICT_CSP
+    from branch_review.lint import lint_cockpit
+
+    _git(repo, "checkout", "feature")
+    odd = "src/inj<x>&'.py"  # hostile but filesystem-legal (no path separator)
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / odd).write_text('html = "<img src=x onerror=alert(1)>"\n')
+    _git(repo, "add", "--", odd)
+    _git(repo, "commit", "-m", "feat: hostile path and hunk")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    header = (out / "fragments.html").read_text(encoding="utf-8")
+    index = _fragments_index(out)
+    entry = index[odd]
+    diff_frag = (out / str(entry["fragment"])).read_text(encoding="utf-8")
+
+    # Build the File Walkthrough exactly as the SKILL prescribes: path from
+    # `path_html` (escaped), body from the per-file fragment (escaped), prose ours.
+    cockpit = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<meta http-equiv='Content-Security-Policy' content=\"{STRICT_CSP}\">"
+        "<link rel='stylesheet' href='assets/cockpit.css'></head><body><main>"
+        f"<header class='cockpit-head'>{header}</header>"
+        "<section><h2>Executive Summary</h2><p class='intent'>A test branch.</p></section>"
+        "<section><h2>File Walkthrough</h2>"
+        "<div class='walkthrough-file'>"
+        f"<h3>{entry['path_html']}</h3>"
+        "<p class='explanation'>This file is hostile by design.</p>"
+        f"{diff_frag}</div></section>"
+        "<script src='assets/app.js'></script></body></html>"
+    )
+
+    errors = lint_cockpit(cockpit, styling="vendored")
+    assert errors == [], errors
+    # And the payloads really are neutralised, not merely tolerated: every hostile
+    # angle bracket became an entity, so neither the path nor the hunk can form a tag.
+    assert "inj<x>" not in cockpit  # the angle brackets in the path are escaped
+    assert "<img" not in cockpit  # the hunk's tag is escaped to &lt;img (inert text)
+    assert "&lt;img" in cockpit
+
+
 def test_explicit_base_overrides_autodetect(repo: Path) -> None:
     # A second base whose merge-base with HEAD is the same initial commit.
     _git(repo, "branch", "develop", "main")

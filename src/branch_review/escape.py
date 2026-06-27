@@ -200,6 +200,11 @@ def fragment_index_entry(
     fid = file_fragment_id(record["path"])
     entry: dict[str, object] = {
         "path": record["path"],
+        # ``path_html`` is the same path having *crossed the boundary* — escaped and
+        # marker-wrapped. The File Walkthrough / Review Route (issue #6) place paths
+        # inside cockpit headings, and a path is attacker-influenceable, so the agent
+        # injects ``path_html`` there verbatim and never hand-types ``path`` into HTML.
+        "path_html": fragment(record["path"]),
         "status": record.get("status", ""),
         "id": fid,
         "fragment": None if omitted else f"{FRAGMENTS_DIRNAME}/{fid}.html",
@@ -208,6 +213,7 @@ def fragment_index_entry(
     old_path = record.get("old_path")
     if old_path is not None:
         entry["old_path"] = old_path
+        entry["old_path_html"] = fragment(old_path)
     if reason is not None:
         entry["reason"] = reason
     return entry

@@ -135,6 +135,122 @@ pre.diff .ln-add { color: var(--add); }
 pre.diff .ln-del { color: var(--del); }
 pre.diff .ln-hunk { color: var(--accent); }
 
+/* --- Analytical sections (issue #6) ---------------------------------------
+   Styling for the agent-authored sections driven by analysis.json: Review Route,
+   Behavior Changes, Risk Map, File Walkthrough, Suspicious Omissions, Test
+   Checklist. Self-contained — no remote assets (strict CSP / linter). */
+
+:root {
+  --warn: #d29922;
+  --level-low: #3fb950;
+  --level-medium: #d29922;
+  --level-high: #f85149;
+}
+
+/* Review Route — an ordered, reasoned path through the diff. */
+ol.review-route { margin: 0; padding-left: 1.4rem; }
+ol.review-route li { margin: 0.5rem 0; }
+ol.review-route .route-path {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+ol.review-route .route-reason { color: var(--muted); }
+
+/* Behavior Changes / Suspicious Omissions — labelled prose blocks. */
+.change, .omission {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+.omission { border-left-color: var(--warn); }
+.change .summary, .omission .summary { font-weight: 600; }
+.change .detail, .omission .detail { margin: 0.35rem 0 0; color: var(--muted); }
+.omission .kind {
+  display: inline-block;
+  margin-left: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Risk Map — one card per category, each with a level badge, reason, and the
+   challenge questions that make the risk auditable rather than a verdict. */
+.risk {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+.risk-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+.risk-category {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.risk-level {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.risk-level.low { color: var(--level-low); }
+.risk-level.medium { color: var(--level-medium); }
+.risk-level.high { color: var(--level-high); }
+.risk .reason { margin: 0 0 0.4rem; }
+.risk .challenge-questions {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+.risk .challenge-questions li { margin: 0.2rem 0; }
+
+/* File Walkthrough — per-file heading + explanation interleaved with that file's
+   pre-escaped diff fragment, walked in Review Route order. */
+.walkthrough-file { margin: 1.25rem 0; }
+.walkthrough-file > h3 {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  color: var(--accent);
+  margin: 0 0 0.35rem;
+}
+.walkthrough-file .explanation { margin: 0 0 0.6rem; }
+.walkthrough-file .omitted {
+  color: var(--warn);
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+/* Test Checklist — the suggested (never executed) runner plus check items. */
+.checklist .runner {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+}
+.checklist .runner code {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  color: var(--fg);
+}
+.checklist ul { margin: 0; padding-left: 1.2rem; }
+.checklist li { margin: 0.3rem 0; }
+
 footer {
   margin-top: 3rem;
   padding-top: 1rem;

@@ -204,6 +204,7 @@ def test_fragment_index_entry_normal_file() -> None:
     fid = file_fragment_id("src/app.py")
     assert entry == {
         "path": "src/app.py",
+        "path_html": fragment("src/app.py"),
         "status": "M",
         "id": fid,
         "fragment": f"{FRAGMENTS_DIRNAME}/{fid}.html",
@@ -211,9 +212,21 @@ def test_fragment_index_entry_normal_file() -> None:
     }
 
 
+def test_fragment_index_entry_escapes_path_html() -> None:
+    # The cockpit-facing path string must arrive escaped — a hostile filename can't
+    # carry live markup into a Walkthrough/Route heading.
+    entry = fragment_index_entry({"status": "A", "path": "x/<script>.py"})
+    path_html = entry["path_html"]
+    assert isinstance(path_html, str)
+    assert "<script>" not in path_html
+    assert "&lt;script&gt;" in path_html
+    assert path_html.startswith(UNTRUSTED_OPEN) and path_html.endswith(UNTRUSTED_CLOSE)
+
+
 def test_fragment_index_entry_rename_keeps_old_path() -> None:
     entry = fragment_index_entry({"status": "R100", "path": "new.py", "old_path": "old.py"})
     assert entry["old_path"] == "old.py"
+    assert entry["old_path_html"] == fragment("old.py")
     assert entry["status"] == "R100"
     assert entry["fragment"] is not None
 
