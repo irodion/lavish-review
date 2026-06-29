@@ -47,15 +47,16 @@ import io
 import json
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from branch_review.escape import STRICT_CSP, escape_text, fragment
+from branch_review.feedback import DEFAULT_COCKPIT, QA_NAME
 
 # Files the bake reads and writes, all under the cockpit's own (gitignored) dir.
-DEFAULT_COCKPIT = Path(".review-agent/review.html")
-QA_NAME = "qa.jsonl"  # the live Q&A transcript (matches feedback.QA_NAME)
+# ``DEFAULT_COCKPIT`` (the cockpit path) and ``QA_NAME`` (the transcript) are the loop's
+# contract, owned by :mod:`branch_review.feedback`; we consume them rather than redefine.
 ANALYSIS_NAME = "analysis.json"  # the structured Analysis (for the Markdown export)
 DEFAULT_MD_NAME = "review.md"  # the optional Markdown export
 
@@ -334,6 +335,8 @@ def bake_html(
 
 # --- Markdown export --------------------------------------------------------
 
+_BACKTICK_RUN = re.compile(r"`+")
+
 
 def _fenced(text: str, *, lang: str = "") -> str:
     """Wrap ``text`` in a fenced code block whose fence outlives any backtick run inside.
@@ -343,9 +346,31 @@ def _fenced(text: str, *, lang: str = "") -> str:
     sized one longer than the longest run in the body. This keeps untrusted content from
     breaking out of its block in a Markdown paste.
     """
-    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    longest = max((len(run) for run in _BACKTICK_RUN.findall(text)), default=0)
     fence = "`" * max(3, longest + 1)
     return f"{fence}{lang}\n{text}\n{fence}"
+
+
+def _bullet_list(items: object, render: Callable[[Mapping[str, object]], str]) -> str:
+    """Render an Analysis list section as Markdown bullets via ``render``, or ``""``.
+
+    Centralises the shape shared by the simple list sections (Behavior Changes,
+    Suspicious Omissions): tolerate a non-list (returns ``""``, which :func:`_md_section`
+    then skips) and render only the mapping entries. The per-section ``render`` supplies
+    the one differing part — the bullet template.
+    """
+    if not isinstance(items, list):
+        return ""
+    return "\n".join(render(item) for item in items if isinstance(item, Mapping))
+
+
+def _format_risk_block(risk: Mapping[str, object]) -> str:
+    """One Risk Map entry as a ``### category (level)`` heading, reason, and questions."""
+    head = f"### {risk.get('category', '')} ({risk.get('level', '')})"
+    reason = str(risk.get("reason", ""))
+    questions = risk.get("challenge_questions")
+    bullets = "\n".join(f"- {q}" for q in questions) if isinstance(questions, list) else ""
+    return "\n".join((head, "", reason, "", bullets)).rstrip()
 
 
 def render_qa_markdown(exchanges: Sequence[Exchange]) -> str:
@@ -389,44 +414,30 @@ def build_markdown(analysis: Mapping[str, object] | None, exchanges: Sequence[Ex
     title = str(analysis.get("title") or "Branch Review")
     out: list[str] = [f"# {title}", ""]
 
-    summary = str(analysis.get("intent_summary") or "")
-    out += _md_section("Executive Summary", summary)
-
-    behavior = analysis.get("behavior_changes")
-    if isinstance(behavior, list) and behavior:
-        body = "\n".join(
-            f"- **{c.get('summary', '')}** — {c.get('detail', '')}"
-            for c in behavior
-            if isinstance(c, Mapping)
-        )
-        out += _md_section("Behavior Changes", body)
+    out += _md_section("Executive Summary", str(analysis.get("intent_summary") or ""))
+    out += _md_section(
+        "Behavior Changes",
+        _bullet_list(
+            analysis.get("behavior_changes"),
+            lambda c: f"- **{c.get('summary', '')}** — {c.get('detail', '')}",
+        ),
+    )
 
     risks = analysis.get("risk_map")
-    if isinstance(risks, list) and risks:
-        blocks: list[str] = []
-        for risk in risks:
-            if not isinstance(risk, Mapping):
-                continue
-            head = f"### {risk.get('category', '')} ({risk.get('level', '')})"
-            reason = str(risk.get("reason", ""))
-            questions = risk.get("challenge_questions")
-            qs = (
-                "\n".join(f"- {q}" for q in questions)
-                if isinstance(questions, list) and questions
-                else ""
-            )
-            block = "\n".join(part for part in (head, "", reason, "", qs)).rstrip()
-            blocks.append(block)
-        out += _md_section("Risk Map", "\n\n".join(blocks))
+    risk_body = (
+        "\n\n".join(_format_risk_block(r) for r in risks if isinstance(r, Mapping))
+        if isinstance(risks, list)
+        else ""
+    )
+    out += _md_section("Risk Map", risk_body)
 
-    omissions = analysis.get("suspicious_omissions")
-    if isinstance(omissions, list) and omissions:
-        body = "\n".join(
-            f"- **{o.get('kind', '')}: {o.get('summary', '')}** — {o.get('detail', '')}"
-            for o in omissions
-            if isinstance(o, Mapping)
-        )
-        out += _md_section("Suspicious Omissions", body)
+    out += _md_section(
+        "Suspicious Omissions",
+        _bullet_list(
+            analysis.get("suspicious_omissions"),
+            lambda o: f"- **{o.get('kind', '')}: {o.get('summary', '')}** — {o.get('detail', '')}",
+        ),
+    )
 
     checklist = analysis.get("test_checklist")
     if isinstance(checklist, Mapping):
@@ -515,9 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--md",
         nargs="?",
-        type=Path,
-        const=Path(""),  # bare --md → review.md beside the cockpit (resolved below)
-        default=None,
+        const="",  # bare --md → review.md beside the cockpit; --md PATH → that path
+        default=None,  # --md absent → no Markdown export
         help="Also write a Markdown export (default path: <cockpit dir>/review.md).",
     )
     parser.add_argument(
@@ -533,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
 
     markdown_path: Path | None = None
     if args.md is not None:
-        markdown_path = args.md if str(args.md) else args.cockpit.parent / DEFAULT_MD_NAME
+        markdown_path = Path(args.md) if args.md else args.cockpit.parent / DEFAULT_MD_NAME
 
     result = bake_review(
         args.cockpit,
