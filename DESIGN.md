@@ -55,9 +55,9 @@ All Focus Lens findings fold into the existing Risk Map categories and answers �
 ## Feedback loop (ADR-0003)
 
 - One command enters a **blocking answer loop**: `lavish-axi poll` (no-timeout) returns queued feedback; agent answers and re-polls with `--agent-reply`.
-- **Verified I/O contract** ([spike](./docs/spikes/lavish-poll-format.md), v0.1.31): `poll` writes **TOON** to stdout with `session.status` ∈ `feedback | waiting | ended | missing`; feedback carries `prompts[N]` of `{uid, prompt, selector, tag, text, target?}` where `tag` ∈ `message | annotation | choice | …`. **No TOON parser is written** — the agent reads poll stdout directly as its own input (TOON is built for agent consumption, and the tool's `next_step` field states the next command). `--agent-reply` both shows the prior answer in the browser *and* resumes blocking. Interrupt exits 130/143 with feedback preserved — this is the mechanism behind `Esc`/`/review-resume`.
+- **Verified I/O contract** ([spike](./docs/spikes/lavish-poll-format.md), v0.1.31): `poll` writes **TOON** to stdout with `session.status` ∈ `feedback | waiting | ended | missing`; feedback carries `prompts[N]` of `{uid, prompt, selector, tag, text, target?}` where `tag` ∈ `message | annotation | choice | …`. **No TOON parser is written in the live loop** — the agent reads poll stdout directly as its own input (TOON is built for agent consumption, and the tool's `next_step` field states the next command). The one bounded exception is offline at close: the Q&A bake lifts the reviewer's questions from the stored poll TOON with a single-block `prompts[N]` extractor ([ADR-0007](./docs/adr/0007-bake-prompt-extractor.md)). `--agent-reply` both shows the prior answer in the browser *and* resumes blocking. Interrupt exits 130/143 with feedback preserved — this is the mechanism behind `Esc`/`/review-resume`.
 - **Controls:** `Esc` (hard interrupt — queued feedback preserved) · `/review-resume` (re-attach to the file-path-keyed session, no regeneration) · `/review-close` (`lavish-axi end`). Optional `pause` sentinel (installer config).
-- **Persistence:** `qa.jsonl` appended during the session; folded into `review.html` (+ optional `review.md`) once at close. Mid-session answers render live in the Lavish chat — no per-answer HTML regeneration.
+- **Persistence:** `qa.jsonl` appended during the session; folded into `review.html` (+ optional `review.md`) once at close by the **Q&A bake** ([ADR-0007](./docs/adr/0007-bake-prompt-extractor.md)) — escaped through the Escape Boundary, idempotent via a `<!--brc:qa-log-->` seam, and re-CSP'd to strict so the saved cockpit is self-contained (opens in a plain browser, no Lavish). Mid-session answers render live in the Lavish chat — no per-answer HTML regeneration.
 - **Resume + staleness:** `session.json` carries `{status, base, branch, head_sha, merge_base, started_at}`, written `open` when the review opens and marked `ended` at close. The **Session Evaluator** (a deep module of pure policy) compares it against the current git branch and the resolved `base...HEAD` diff identity (HEAD, base, and `merge-base(base, HEAD)` — so a base that was switched or has advanced under a fixed HEAD is caught), returning one of `none | fresh | stale | different-branch`; `/review-branch` checks first (step 0) and acts on the verdict — restore a `fresh` review without regenerating, **regenerate by default** on `stale` (HEAD advanced, base changed, or merge-base moved; resume-anyway available), generate on `none`/`different-branch`. v1.1: ambient detection via Lavish's `SessionStart` hook.
 
 ## On-disk layout
@@ -65,7 +65,7 @@ All Focus Lens findings fold into the existing Risk Map categories and answers �
 ```
 .review-agent/            (gitignored — generated)
   context.json  diff.patch  diff-stat.txt  changed-files.json  commits.txt
-  analysis.json  review.html  qa.jsonl  session.json
+  analysis.json  review.html  review.md  qa.jsonl  session.json
   assets/  cockpit.css  app.js
 .lavish-axi/              (gitignored — Lavish session state)
 .review-agent.yaml        (committed — repo policy)

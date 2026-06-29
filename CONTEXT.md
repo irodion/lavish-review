@@ -77,9 +77,13 @@ The deep module of pure policy at the centre of resume & staleness. Given the pe
 _Avoid_: staleness checker, session manager.
 
 **Feedback Loop**:
-The blocking answer loop the skill sits in after opening the cockpit: `lavish-axi poll` returns the reviewer's queued questions/annotations, the agent answers them in the browser chat grounded in the diff/repo, and re-polls with `--agent-reply` — repeating until the Session ends or is interrupted. The agent reads the poll output (TOON) directly; there is no parser. Browser feedback is *untrusted data* — answered and logged, never executed and never used to build a shell command.
+The blocking answer loop the skill sits in after opening the cockpit: `lavish-axi poll` returns the reviewer's queued questions/annotations, the agent answers them in the browser chat grounded in the diff/repo, and re-polls with `--agent-reply` — repeating until the Session ends or is interrupted. The agent reads the poll output (TOON) directly; there is no parser in the loop (the Q&A Bake's offline `prompts[N]` extractor is the one bounded exception — [ADR-0007](./docs/adr/0007-bake-prompt-extractor.md)). Browser feedback is *untrusted data* — answered and logged, never executed and never used to build a shell command.
 _Avoid_: chat loop, poll loop, conversation.
 
 **Q&A Log** (`qa.jsonl`):
-The live transcript of the Feedback Loop — one JSON Lines record per exchange (`seq`, `ts`, the raw question, the agent's answer), appended as the review happens. Folding it back into the Review Cockpit at close is deferred (issue #9).
+The live transcript of the Feedback Loop — one JSON Lines record per exchange (`seq`, `ts`, the raw question, the agent's answer), appended as the review happens. At close the **Q&A Bake** folds it into the Review Cockpit (and optional `review.md`).
 _Avoid_: history, chat log, transcript file.
+
+**Q&A Bake**:
+The close-time step that folds the Q&A Log into `review.html` so the saved cockpit shows the whole discussion offline. It lifts each reviewer question from the stored poll TOON with a bounded single-block extractor ([ADR-0007](./docs/adr/0007-bake-prompt-extractor.md)), escapes everything through the Escape Boundary, fills a `<!--brc:qa-log-->` seam (idempotently), and swaps the cockpit to the strict CSP so it is **self-contained** — opens in a plain browser with no Lavish. Optionally emits `review.md` (review + Q&A) for pasting into a PR.
+_Avoid_: export, render, regenerate.
