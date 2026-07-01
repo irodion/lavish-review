@@ -105,14 +105,21 @@ finding so they can choose.
 ### 1. Collect the deterministic context
 
 Run the collector from the repo you want to review. Pass an explicit base only if
-the user named one (precedence: command arg > config > auto-detect):
+the user named one — the collector resolves the rest itself through the **Config
+Resolver** (issue #10), layering **command arg > repo `.review-agent.yaml` > machine
+`~/.review-agent/config.yaml` > defaults**:
 
 ```sh
 python3 .claude/skills/branch-review-cockpit/scripts/collect_review_context.py [base]
 ```
 
-It auto-detects the Base (`origin/HEAD`, else `main`/`develop`/`master`), computes
-the `base...HEAD` diff, and writes to `.review-agent/`:
+The base is your arg, else the repo config's `base_branch`, else auto-detect
+(`origin/HEAD`, then `main`/`develop`/`master`). The repo config also folds its
+`exclude`/`exclude_reset`/`limits` into the Change Classifier, and its `styling`,
+`focus`, and `language_hints` (plus the machine `pause`/`lavish_version`/
+`sessionstart_hook`) are surfaced for later steps. A malformed config is a clean error —
+relay it and stop. The collector computes the `base...HEAD` diff and writes to
+`.review-agent/`:
 
 - `context.json` — base, branch, head SHA, merge-base, changed-file count
 - `diff.patch`, `diff-stat.txt`, `changed-files.json`, `commits.txt`
@@ -129,6 +136,10 @@ the `base...HEAD` diff, and writes to `.review-agent/`:
   omitted). The top-level `too_large` / `too_large_reason` flag the total-diff
   fallback — when `true`, **every** file's body is omitted and the cockpit shows a
   file-list + stats banner (carry `too_large_reason` into it) rather than diffs.
+- `resolved-config.json` — the resolved policy for this run: `{base, styling, focus,
+  language_hints, pause, lavish_version, sessionstart_hook}`. Read it after collecting:
+  `styling` drives step 5's assets and step 6's `--styling`; `focus`/`language_hints`
+  are the authoring lenses for step 3.
 - `assets/cockpit.css`, `assets/app.js` — vendored, copied for relative reference
 
 Escaped fragments carry invisible `<!--brc:untrusted-->…<!--/brc:untrusted-->`
@@ -139,9 +150,10 @@ and stop — do not guess.
 
 ### 2. Read the context and detect the test runner
 
-Read `context.json`, `changed-files.json`, `fragments.json`, `diff-stat.txt`, and
-`commits.txt`. Read `diff.patch` (and, deliberately, individual changed files where
-risk warrants) to understand what the branch actually does. Then detect the runner
+Read `context.json`, `changed-files.json`, `fragments.json`, `resolved-config.json`,
+`diff-stat.txt`, and `commits.txt`. Read `diff.patch` (and, deliberately, individual
+changed files where risk warrants) to understand what the branch actually does. Then
+detect the runner
 for the Test Checklist — **read-only, never executed**:
 
 ```sh
@@ -153,7 +165,11 @@ checklist's suggestion (verbatim) and `evidence` to say *why* it was suggested.
 
 ### 3. Author `.review-agent/analysis.json`
 
-Write your structured Analysis. It must validate against the Review Analysis schema
+Write your structured Analysis. If `resolved-config.json` names a `focus` (a Focus
+Lens, e.g. `security`) or `language_hints` (e.g. `cpp`, `python`), let them **sharpen**
+the analysis — re-weight and re-frame the Risk Map and Review Route toward that concern
+or language. A Lens never adds a section or a risk category; it folds into the existing
+ones (DESIGN "Lenses"). It must validate against the Review Analysis schema
 (`review-analysis/0.1`). A complete, annotated example lives at
 `.claude/skills/branch-review-cockpit/reference/analysis.example.json` — read it
 first and mirror its shape. Sections:
@@ -198,10 +214,14 @@ cockpit from a malformed analysis. Errors are located (e.g. `risk_map[2].level`)
 
 ### 5. Author `.review-agent/review.html` from the Analysis
 
-Write a self-contained cockpit. In `<head>`, include the **interactive** CSP meta
-**exactly** as below (it trusts `'self'` + the Lavish CDN so Lavish's annotation UI
-renders — ADR-0004) and reference your own assets by **relative path with no leading
-`/`** (Lavish serves the HTML's own directory):
+Write a self-contained cockpit. **Styling** comes from `resolved-config.json`: with
+the default `vendored`, reference only your local vendored assets (no remote
+`src`/`href` — the linter enforces it); with `cdn` (the opt-in), you may additionally
+pull Lavish's Tailwind/DaisyUI stack from the Lavish CDN the interactive CSP already
+allows. In `<head>`, include the **interactive** CSP meta **exactly** as below (it
+trusts `'self'` + the Lavish CDN so Lavish's annotation UI renders — ADR-0004) and
+reference your own assets by **relative path with no leading `/`** (Lavish serves the
+HTML's own directory):
 
 ```html
 <meta http-equiv="Content-Security-Policy"
@@ -255,11 +275,13 @@ escaped fragment/`path_html`, never a hand-typed copy.
 ### 6. Lint the cockpit (post-write tripwire)
 
 ```sh
-python3 .claude/skills/branch-review-cockpit/scripts/lint_cockpit.py .review-agent/review.html --csp-mode interactive
+python3 .claude/skills/branch-review-cockpit/scripts/lint_cockpit.py .review-agent/review.html --csp-mode interactive [--styling cdn]
 ```
 
-It fails on unescaped `<`/`>` in an untrusted region, inline JS, a remote
-`src`/`href` under vendored styling, or a missing/weak CSP. `--csp-mode interactive`
+Pass `--styling cdn` **only** when `resolved-config.json` resolved `styling: cdn`;
+otherwise omit it (the default `vendored` rejects any remote asset). It fails on
+unescaped `<`/`>` in an untrusted region, inline JS, a remote `src`/`href` under
+vendored styling, or a missing/weak CSP. `--csp-mode interactive`
 accepts the interactive CSP from step 5 (still bounded — a wildcard or arbitrary
 remote host fails); omit it (or pass `--csp-mode strict`) only for a portable
 `file://` export. If it exits non-zero,
@@ -357,6 +379,7 @@ written) now hold the full Q&A, and `qa.jsonl` keeps the raw transcript.
   context.json  diff.patch  diff-stat.txt  changed-files.json  commits.txt
   diff.fragment.html  fragments.html  fragments.json
   fragments/<id>.html     (one pre-escaped diff per changed file)
+  resolved-config.json    (resolved policy: base, styling, focus, language_hints, machine settings)
   analysis.json           (your structured Analysis — validated before authoring)
   review.html             (cockpit; the Q&A is baked in at /review-close)
   review.md               (optional Markdown export of review + Q&A, from bake_review.py --md)

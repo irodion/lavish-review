@@ -32,6 +32,7 @@ from branch_review.classify import (
     classify_file,
     downgrade_to_listing,
 )
+from branch_review.config import ConfigError, resolve_config, resolved_config_dict
 from branch_review.escape import (
     FRAGMENTS_DIRNAME,
     build_fragments,
@@ -423,19 +424,27 @@ def collect(
     out_dir: Path | None = None,
     assets_dir: Path | None = None,
     config: ClassifierConfig | None = None,
+    home: Path | None = None,
     now: datetime | None = None,
 ) -> ReviewContext:
     """Collect the Review context for the current branch into ``out_dir``.
 
-    Resolves the Base (explicit ``base`` wins over auto-detect), computes the
-    ``base...HEAD`` diff, and writes the deterministic context files. ``review.html``
-    is intentionally NOT written here — the agent authors it (ADR-0001). ``config``
-    is the Change Classifier policy (issue #7); the built-in defaults apply when it
-    is omitted (repo ``.review-agent.yaml`` wiring is issue #10).
+    Resolves the effective policy via the Config Resolver (issue #10):
+    ``base`` arg > repo ``.review-agent.yaml`` ``base_branch`` > auto-detect (asking on
+    ambiguity), and the repo's ``exclude``/``exclude_reset``/``limits`` fold into the
+    Change Classifier policy. Then computes the ``base...HEAD`` diff and writes the
+    deterministic context files (plus ``resolved-config.json``, the resolved styling / lens
+    / machine settings the skill threads into authoring, linting, and the open/loop steps).
+    ``review.html`` is intentionally NOT written here — the agent authors it (ADR-0001).
+
+    An explicit ``config`` overrides the resolved Change Classifier policy (used in tests);
+    ``home`` overrides the machine-config location (also for tests). The base still comes
+    from the resolver so an explicit ``config`` doesn't disable repo ``base_branch``.
     """
     root = repo_root(cwd)
-    classifier_config = config or ClassifierConfig()
-    resolved_base = base or detect_base(root)
+    resolved = resolve_config(root, arg_base=base, home=home)
+    classifier_config = config or resolved.classifier
+    resolved_base = resolved.base_branch or detect_base(root)
     out = out_dir or (root / ".review-agent")
     out.mkdir(parents=True, exist_ok=True)
     # A new generation begins a new session: clear the prior transcript so a stale or
@@ -484,6 +493,12 @@ def collect(
     # UTF-8 the cockpit's <meta charset="utf-8"> promises the browser.
     context_json = json.dumps(asdict(context), indent=2) + "\n"
     files_json = json.dumps(files, indent=2) + "\n"
+    # The resolved policy the skill reads back: styling (for the cockpit + lint --styling),
+    # the authoring lenses (focus/language_hints), and the machine settings for open/loop.
+    resolved_config_json = (
+        json.dumps(resolved_config_dict(resolved, base=context.base), indent=2) + "\n"
+    )
+    (out / "resolved-config.json").write_text(resolved_config_json, encoding="utf-8")
     (out / "context.json").write_text(context_json, encoding="utf-8")
     (out / "changed-files.json").write_text(files_json, encoding="utf-8")
     (out / "diff.patch").write_text(diff_text, encoding="utf-8")
@@ -537,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         context = collect(args.repo, base=args.base, out_dir=args.out, assets_dir=args.assets_dir)
-    except (GitError, BaseResolutionError, FileNotFoundError) as exc:
+    except (GitError, BaseResolutionError, FileNotFoundError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
