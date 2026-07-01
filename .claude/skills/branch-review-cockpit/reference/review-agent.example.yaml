@@ -1,0 +1,40 @@
+# Example repo review policy — copy to `.review-agent.yaml` at your repo root and commit it.
+# Every key is OPTIONAL; omit what you don't need and the built-in defaults apply.
+# Resolution precedence: command arg > this file > machine ~/.review-agent/config.yaml > defaults.
+#
+# The loader accepts a small, strict YAML subset (see docs/adr/0008-stdlib-config-loader.md):
+# key: value, one nested block (limits:), block/flow lists, comments, and typed scalars.
+# An unknown key or an out-of-range value is a clean error, not a silent fallback.
+
+# The Base to diff against. Overrides auto-detect (origin/HEAD, then main/develop/master);
+# a command arg to /review-branch still wins over this. Quote refs that look numeric.
+base_branch: develop
+
+# Extra paths whose diff body is omitted (existence + stats always kept). fnmatch globs,
+# matched against the full POSIX path or the basename. These EXTEND the built-in excludes
+# (lockfiles, node_modules/vendor/dist/build, *.min.js, *.generated.*, linguist-generated).
+exclude:
+  - "docs/**/*.snap"
+  - "**/__generated__/*"
+
+# Replace the built-in dir/glob excludes with only the `exclude` list above.
+# Lockfile detection and .gitattributes linguist-generated are never reset.
+exclude_reset: false
+
+# Authoring lenses (they sharpen the analysis; they never add sections or risk categories).
+# focus: a Focus Lens — one of security | regressions | simplification | supply-chain.
+focus: security
+# language_hints: nudge the Language Lens when detection is ambiguous.
+language_hints:
+  - python
+  - cpp
+
+# Cockpit styling: `vendored` (default — local assets only, enforced by the linter) or
+# `cdn` (opt into Lavish's Tailwind/DaisyUI CDN stack).
+styling: vendored
+
+# Diff-size caps for the Change Classifier. Over the per-file cap a file's body is omitted;
+# over the total cap the whole cockpit degrades to a file-list + stats banner.
+limits:
+  max_file_diff_lines: 1500
+  max_total_diff_lines: 25000

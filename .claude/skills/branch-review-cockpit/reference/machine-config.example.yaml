@@ -1,0 +1,16 @@
+# Example per-machine review policy — copy to ~/.review-agent/config.yaml (NOT committed).
+# Per-developer defaults that layer UNDER the repo's committed .review-agent.yaml.
+# Every key is OPTIONAL. See docs/adr/0008-stdlib-config-loader.md for the accepted subset.
+
+# A sentinel word that pauses the feedback loop when typed in the browser (installer wiring).
+pause: PAUSE
+
+# Default cockpit styling when the repo config doesn't set one: vendored (default) or cdn.
+# The repo's `styling` always wins over this.
+styling: vendored
+
+# The Lavish-AXI version the skill pins when opening the cockpit. Quote it (it is a string).
+lavish_version: "0.1.31"
+
+# Whether the Lavish SessionStart hook is installed for ambient resume detection (v1.1).
+sessionstart_hook: false

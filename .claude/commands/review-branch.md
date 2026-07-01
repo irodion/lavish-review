@@ -5,8 +5,9 @@ argument-hint: "[base]"
 
 Review the current Git branch using the **branch-review-cockpit** skill.
 
-Base: $ARGUMENTS (empty means auto-detect — do not guess; pass it through only if
-the user named one).
+Base: $ARGUMENTS (empty means fall to the repo `.review-agent.yaml` `base_branch`, then
+auto-detect — do not guess; pass the arg through only if the user named one. Precedence:
+arg > repo `base_branch` > auto-detect).
 
 Follow the skill's steps exactly. **First check for an unfinished review** (step 0:
 `session.py evaluate [base]`, passing the same base) — if one for this branch is still
