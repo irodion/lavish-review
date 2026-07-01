@@ -205,9 +205,16 @@ def load_exchanges(qa_path: Path) -> list[Exchange]:
             continue
         if not isinstance(record, dict):
             continue
+        # ``seq`` is our own field (feedback.append_exchange writes it as an int), but a
+        # hand-edited or truncated record could carry ``null``/``"bad"``; fall back to the
+        # positional index rather than let one malformed line abort the whole bake.
+        try:
+            seq = int(record.get("seq", len(exchanges) + 1))
+        except (TypeError, ValueError):
+            seq = len(exchanges) + 1
         exchanges.append(
             Exchange(
-                seq=int(record.get("seq", len(exchanges) + 1)),
+                seq=seq,
                 ts=str(record.get("ts", "")),
                 prompts=extract_prompts(str(record.get("feedback_raw", ""))),
                 answer=str(record.get("answer", "")),
@@ -351,6 +358,19 @@ def _fenced(text: str, *, lang: str = "") -> str:
     return f"{fence}{lang}\n{text}\n{fence}"
 
 
+def _inline(text: str) -> str:
+    """Collapse all whitespace to single spaces so untrusted prose is safe inline Markdown.
+
+    A reviewer's question is prose, so it belongs inline in the ``### Q`` heading rather
+    than in a code fence — but a raw newline in it would end the heading and let the
+    remainder reshape the pasted PR body as new blocks (headings, lists, rules). Collapsing
+    every whitespace run to a single space removes that structural-injection vector; any
+    remaining Markdown punctuation is inline-only (it cannot open a new block mid-line) and
+    GitHub sanitises raw HTML in a rendered paste.
+    """
+    return " ".join(text.split())
+
+
 def _bullet_list(items: object, render: Callable[[Mapping[str, object]], str]) -> str:
     """Render an Analysis list section as Markdown bullets via ``render``, or ``""``.
 
@@ -382,7 +402,7 @@ def render_qa_markdown(exchanges: Sequence[Exchange]) -> str:
         return "\n".join(lines)
     for exchange in exchanges:
         for prompt in exchange.prompts:
-            lines.append(f"### Q{exchange.seq}. {prompt.prompt}")
+            lines.append(f"### Q{exchange.seq}. {_inline(prompt.prompt)}")
             lines.append("")
             if prompt.is_annotation and prompt.text:
                 lines.append(_fenced(prompt.text))

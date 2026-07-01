@@ -20,6 +20,7 @@ from branch_review.bake import (
     QA_SEAM_CLOSE,
     QA_SEAM_OPEN,
     Exchange,
+    Prompt,
     bake_review,
     build_markdown,
     extract_prompts,
@@ -38,7 +39,7 @@ from branch_review.lint import lint_cockpit
 # followed by the ``next_step:`` top-level key that must terminate the row scan.
 
 _TOON_SPAN = (
-    'prompts[1]{uid,prompt,selector,tag,text}:\n'
+    "prompts[1]{uid,prompt,selector,tag,text}:\n"
     '  "2",what does this line do?,'
     '"body > main > section > pre > span:nth-of-type(727)",span,'
     '"+ _git(repo, \\"checkout\\", \\"feature\\")"\n'
@@ -46,13 +47,13 @@ _TOON_SPAN = (
 )
 
 _TOON_MESSAGE = (
-    'prompts[1]{uid,prompt,selector,tag,text}:\n'
+    "prompts[1]{uid,prompt,selector,tag,text}:\n"
     '  "",what it the main goal of the branch,"",message,Freeform message\n'
     'next_step: "..."\n'
 )
 
 _TOON_LI = (
-    'prompts[1]{uid,prompt,selector,tag,text}:\n'
+    "prompts[1]{uid,prompt,selector,tag,text}:\n"
     '  "1",What changed in this file?,'
     '"section#changed-files > ul:nth-of-type(1) > li:nth-of-type(4)",li,'
     "A .claude/skills/branch-review-cockpit/scripts/detect_test_runner.py\n"
@@ -61,7 +62,7 @@ _TOON_LI = (
 
 # A poll that carried two prompts at once — the row scan must collect exactly two.
 _TOON_MULTI = (
-    'prompts[2]{uid,prompt,selector,tag,text}:\n'
+    "prompts[2]{uid,prompt,selector,tag,text}:\n"
     '  "5",first question,"sel-a",span,"line a"\n'
     '  "6",second question,"sel-b",li,"line b"\n'
     'next_step: "..."\n'
@@ -143,12 +144,26 @@ def test_load_exchanges_skips_blank_and_corrupt_lines(tmp_path: Path) -> None:
     assert exchanges[0].prompts[0].prompt == "what it the main goal of the branch"
 
 
+def test_load_exchanges_tolerates_malformed_seq(tmp_path: Path) -> None:
+    # A valid JSON object with a non-numeric seq must not abort the bake — it falls
+    # back to the positional index rather than crashing on int(None)/int("bad").
+    qa = tmp_path / "qa.jsonl"
+    records = [
+        {"seq": None, "ts": "t", "feedback_raw": _TOON_MESSAGE, "answer": "first"},
+        {"seq": "bad", "ts": "t", "feedback_raw": _TOON_LI, "answer": "second"},
+    ]
+    qa.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    exchanges = load_exchanges(qa)
+    assert [e.seq for e in exchanges] == [1, 2]
+    assert [e.answer for e in exchanges] == ["first", "second"]
+
+
 # --- HTML rendering ---------------------------------------------------------
 
 
 def test_render_escapes_hostile_prompt_and_answer() -> None:
     toon = (
-        'prompts[1]{uid,prompt,selector,tag,text}:\n'
+        "prompts[1]{uid,prompt,selector,tag,text}:\n"
         '  "9","<script>alert(1)</script>","s",span,"<img src=x>"\n'
         'next_step: "."\n'
     )
@@ -181,7 +196,7 @@ _NO_SEAM_HTML = "<html><body><main>x</main></body></html>"
 
 def test_inject_fills_the_seam() -> None:
     out = inject_qa(_SEAM_HTML, "<section id='qa-log'>Q</section>\n")
-    assert out.count('id=') == 1
+    assert out.count("id=") == 1
     assert "Q</section>" in out
     assert QA_SEAM_OPEN in out and QA_SEAM_CLOSE in out
 
@@ -218,10 +233,7 @@ def test_swap_csp_interactive_to_strict() -> None:
 
 
 def test_swap_csp_handles_multiline_meta() -> None:
-    html = (
-        '<meta http-equiv="Content-Security-Policy"\n'
-        f'      content="{INTERACTIVE_CSP}">'
-    )
+    html = f'<meta http-equiv="Content-Security-Policy"\n      content="{INTERACTIVE_CSP}">'
     out, swapped = swap_csp(html)
     assert swapped and STRICT_CSP in out
 
@@ -265,12 +277,28 @@ def test_markdown_without_analysis_still_has_qa() -> None:
 def test_markdown_fences_outlive_backtick_runs() -> None:
     # An annotated line containing a triple-backtick must not break out of its fence.
     toon = (
-        'prompts[1]{uid,prompt,selector,tag,text}:\n'
+        "prompts[1]{uid,prompt,selector,tag,text}:\n"
         '  "1",see this,"s",span,"text with ``` fence"\n'
         'next_step: "."\n'
     )
     md = render_qa_markdown([_exchange(1, toon, "a")])
     assert "````" in md  # fence widened past the inner triple-backtick
+
+
+def test_markdown_collapses_newlines_in_prompt_heading() -> None:
+    # A reviewer prompt carrying a newline + Markdown must not inject new blocks into
+    # the pasted PR body — it is collapsed inline onto the question heading.
+    exchange = Exchange(
+        seq=1,
+        ts="t",
+        prompts=[
+            Prompt(uid="1", prompt="real q?\n## Injected", selector="", tag="message", text="")
+        ],
+        answer="a",
+    )
+    md = render_qa_markdown([exchange])
+    assert "\n## Injected" not in md  # never a standalone heading block
+    assert "### Q1. real q? ## Injected" in md  # collapsed inline into the heading
 
 
 # --- End-to-end: the issue's acceptance criterion ---------------------------
