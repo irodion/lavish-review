@@ -50,6 +50,14 @@ AGENT_REPLY_NAME = "agent-reply.txt"  # the agent writes its answer here; we rea
 QA_NAME = "qa.jsonl"  # the live Q&A transcript, one JSON object per line
 LAST_POLL_NAME = "last-poll.toon"  # raw stdout of the most recent poll (the question)
 
+# The run-scoped feedback-loop artifacts: the live transcript, the most recent
+# question, and the pending answer. They belong to *one* review session, so a fresh
+# generation must clear them — otherwise a prior branch's Q&A would be folded into the
+# new cockpit at close (bake reads the default ``qa.jsonl``). The Diff Collector resets
+# these when it (re)generates a context; a no-regeneration resume keeps them. Kept here,
+# beside the names, so there is one owner of "what a session's transcript comprises".
+RUN_SCOPED_ARTIFACTS = (QA_NAME, LAST_POLL_NAME, AGENT_REPLY_NAME)
+
 # Exit codes that mean the answer reached the browser even though the poll did not
 # return normally: ``--agent-reply`` POSTs the answer *before* the long-poll begins,
 # so a SIGINT (130) / SIGTERM (143) during the wait still delivered it.

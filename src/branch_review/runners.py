@@ -68,7 +68,13 @@ def _load_json(path: Path) -> dict[str, object]:
 
 
 def _detect_python(root: Path) -> Runner | None:
-    """pytest if its config markers are present, else unittest if there are tests."""
+    """pytest when its config markers are present (Python-specific evidence only).
+
+    A bare ``tests``/``test`` directory is *not* enough here: it is ecosystem-agnostic
+    (a JS, Go, or Rust repo can have one too), so treating it as Python would shadow the
+    Node/Go/Rust detectors that run after this one. That weak signal is handled last by
+    :func:`_detect_unittest_fallback`.
+    """
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
         data = _load_toml(pyproject)
@@ -89,9 +95,6 @@ def _detect_python(root: Path) -> Runner | None:
     )
     if (root / "conftest.py").is_file() or nested_conftest:
         return Runner("pytest", "pytest", "conftest.py")
-
-    if (root / "tests").is_dir() or (root / "test").is_dir():
-        return Runner("unittest", "python -m unittest discover", "tests/")
 
     return None
 
@@ -142,13 +145,29 @@ def _detect_make(root: Path) -> Runner | None:
     return None
 
 
-# Ordered most-specific ecosystem first; the first detector to match wins.
+def _detect_unittest_fallback(root: Path) -> Runner | None:
+    """Last-resort ``unittest`` for a bare ``tests``/``test`` dir with no stronger signal.
+
+    A top-level test directory is ecosystem-agnostic, so this runs **after** every
+    ecosystem-specific detector (Python config, Node, Go, Rust, Make) has declined — a JS
+    repo with ``package.json`` + ``tests/`` is caught by :func:`_detect_node` first. By the
+    time we get here, a ``tests/`` dir most plausibly means a stdlib-``unittest`` project.
+    """
+    if (root / "tests").is_dir() or (root / "test").is_dir():
+        return Runner("unittest", "python -m unittest discover", "tests/")
+    return None
+
+
+# Ordered most-specific ecosystem first; the first detector to match wins. The bare
+# ``tests/``-dir unittest guess is deliberately LAST — it is ecosystem-agnostic evidence
+# and must not shadow a Node/Go/Rust/Make repo that merely also has a test directory.
 _DETECTORS: tuple[Callable[[Path], Runner | None], ...] = (
     _detect_python,
     _detect_node,
     _detect_go,
     _detect_rust,
     _detect_make,
+    _detect_unittest_fallback,
 )
 
 

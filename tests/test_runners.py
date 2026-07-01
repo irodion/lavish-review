@@ -104,6 +104,29 @@ def test_python_wins_over_node_when_both_present(tmp_path: Path) -> None:
     assert _detected(tmp_path).name == "pytest"
 
 
+def test_node_repo_with_tests_dir_is_npm_not_unittest(tmp_path: Path) -> None:
+    # A JS repo with package.json AND a top-level tests/ dir must report npm, not
+    # unittest: the bare tests-dir guess is ecosystem-agnostic and runs last, so it
+    # never shadows the more-specific Node detector.
+    _write(tmp_path, "package.json", '{"scripts": {"test": "node t.js"}}')
+    _write(tmp_path, "tests/app.test.js", "// test\n")
+    assert detect_runner(tmp_path) == runners.Runner("npm", "npm test", "package.json")
+
+
+def test_bare_tests_dir_still_falls_back_to_unittest(tmp_path: Path) -> None:
+    # With no ecosystem-specific marker, a lone tests/ dir is still a unittest project.
+    _write(tmp_path, "tests/test_x.py", "def test_x():\n    assert True\n")
+    assert detect_runner(tmp_path) == runners.Runner(
+        "unittest", "python -m unittest discover", "tests/"
+    )
+
+
+def test_go_repo_with_tests_dir_is_go_not_unittest(tmp_path: Path) -> None:
+    _write(tmp_path, "go.mod", "module example.com/x\n")
+    _write(tmp_path, "tests/x_test.go", "package x\n")
+    assert detect_runner(tmp_path) == runners.Runner("go", "go test ./...", "go.mod")
+
+
 def test_malformed_config_does_not_raise(tmp_path: Path) -> None:
     _write(tmp_path, "pyproject.toml", "this is : not [ valid toml")
     _write(tmp_path, "package.json", "{not json")
