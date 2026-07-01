@@ -1,0 +1,21 @@
+# The Q&A bake reads the poll TOON through a bounded, single-block prompt extractor — not a TOON parser
+
+The Feedback Loop's load-bearing simplification is that **no TOON parser is written**: `lavish-axi poll` emits TOON (built for agent consumption), the agent reads that stdout directly as its own input, and `--agent-reply` both shows the answer and resumes blocking ([ADR-0003](./0003-single-blocking-poll-loop.md); the [poll-format spike](../spikes/lavish-poll-format.md)). To keep that contract mechanical, the loop logs each exchange by capturing the poll's **raw** TOON verbatim into `qa.jsonl` (`feedback_raw`) — the agent never hand-builds a log record around untrusted text, and nothing parses TOON at runtime.
+
+The **Q&A bake at close** (issue #9) folds `qa.jsonl` into `review.html` so the saved cockpit shows the discussion offline. Rendering the *raw* `feedback_raw` is faithful but unusable: a single record is ~50 KB, almost all of it the poll's `dom_snapshot` of the whole page — fine to store, hostile to read, and absurd to paste into a PR via `review.md`. The reviewer's actual question lives in one small part of that blob: the `prompts[N]{uid,prompt,selector,tag,text}:` tabular array Lavish emits.
+
+**Decision.** The bake lifts the reviewer's prompts out of the stored TOON with a **bounded prompt extractor** (`branch_review.bake.extract_prompts`), under these invariants:
+
+- **One block, nothing else.** The extractor finds the single `prompts[N]{…}:` header **anchored at column 0** and reads exactly `N` following indented rows. The column-0 anchor is what distinguishes it from a TOON parser: the `prompts[N]` literals that appear inside the quoted `dom_snapshot` scalar are indented/quoted and are never matched. It reads no other TOON construct.
+- **Offline, at close — never in the live loop.** This runs once, at `/review-close`, over already-stored data. The live answer loop still parses nothing and reads poll stdout directly, exactly as ADR-0003 specifies. The "no TOON parser" rule is about the *loop*; this is a bake-time reader of one stored field.
+- **Output is re-hardened through the Escape Boundary.** Every extracted value (the question, the annotated line, the selector) is reviewer-originated untrusted data and crosses `branch_review.escape.fragment` ([ADR-0002](./0002-deterministic-escape-boundary.md)) before it lands in the HTML — entity-escaped, marker-wrapped, and verified by the Cockpit Linter. The baked file passes `lint_cockpit.py --csp-mode strict`.
+- **Degrade, never crash.** A poll with no prompts block (a `waiting`/`ended` capture) or a malformed row yields no prompt rather than an error — a missing question degrades the log, it never fails the bake.
+
+**Why extract rather than dump the raw.** The two alternatives were rejected: dumping raw `feedback_raw` verbatim (collapsed in a `<details>`) keeps the "no parser" letter but produces a 200 KB, dom-snapshot-laden artifact and an unpastable `review.md`; changing the loop's logging to capture a distilled question at reply time reopens the hardened #5 contract and adds agent burden mid-loop. A small, offline, single-block reader gives a clean Q&A log in both HTML and Markdown while leaving the live loop's no-parser guarantee fully intact.
+
+## Consequences
+
+- The "no TOON parser is written" statement in DESIGN.md, CONTEXT.md, and the poll-format spike is refined: it holds for the **live loop** (the load-bearing case); the bake adds this one bounded, offline, single-block exception, pointing here.
+- The bake depends on the shape of Lavish's `prompts[N]{…}:` block. That shape is already pinned by the poll-format spike; if a future Lavish release changes it, the extractor's tests (which encode the real row shapes, including the `dom_snapshot` decoy) fail loudly rather than silently dropping questions.
+- The baked cockpit and `review.md` carry the reviewer's questions and the agent's answers — not the page snapshot. Provenance beyond the question text stays in `qa.jsonl`, which is retained on disk.
+- This does not change the "browser feedback is untrusted data" rule: the extractor's output is escaped exactly like every other untrusted string, so a `<script>` typed into a prompt renders as text in the baked artifact.

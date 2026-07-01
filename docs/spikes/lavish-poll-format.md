@@ -52,7 +52,9 @@ agent runs `lavish-axi poll <file>`   (blocking bash; reads TOON stdout as its o
 repeat until status: ended  (or Esc)
 ```
 
-We write **no parser**. The agent reads the poll stdout directly. `--agent-reply` both displays the prior answer in the browser chat *and* resumes blocking — one call does both.
+We write **no parser** in the loop. The agent reads the poll stdout directly. `--agent-reply` both displays the prior answer in the browser chat *and* resumes blocking — one call does both.
+
+> Refinement (issue #9): the Q&A bake at close needs the reviewer's questions out of the stored poll TOON to fold them into `review.html`/`review.md`. That is the one bounded exception — an offline, single-block `prompts[N]` extractor scoped to the table documented above, never used in the live loop. See [ADR-0007](../adr/0007-bake-prompt-extractor.md).
 
 ## Operational notes
 

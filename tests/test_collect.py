@@ -275,6 +275,23 @@ def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
     assert not stale.exists()  # fragments/ rebuilt from scratch
 
 
+def test_regeneration_clears_prior_session_transcript(repo: Path) -> None:
+    # A prior review left a Q&A transcript in .review-agent; regenerating (the collect
+    # step) must clear it so a stale/different-branch review never bakes old questions
+    # into the new cockpit at close. A no-regeneration resume doesn't call collect.
+    from branch_review.feedback import RUN_SCOPED_ARTIFACTS
+
+    out = repo / ".review-agent"
+    out.mkdir()
+    for name in RUN_SCOPED_ARTIFACTS:
+        (out / name).write_text("stale from a previous session\n", encoding="utf-8")
+
+    collect(repo)
+
+    for name in RUN_SCOPED_ARTIFACTS:
+        assert not (out / name).exists(), f"{name} should be cleared on regeneration"
+
+
 def test_authored_cockpit_from_fragments_passes_lint(repo: Path) -> None:
     """End-to-end: a cockpit assembled the way the SKILL instructs is lint-clean.
 

@@ -39,6 +39,7 @@ from branch_review.escape import (
     fragment_index_entry,
     notice_fragment,
 )
+from branch_review.feedback import RUN_SCOPED_ARTIFACTS
 
 # Base auto-detect fallbacks, tried in order when origin/HEAD is absent.
 _BASE_CANDIDATES = ("main", "develop", "master")
@@ -388,6 +389,20 @@ def _write_file_fragments(
     return entries, changeset
 
 
+def _reset_run_scoped_artifacts(out_dir: Path) -> None:
+    """Delete the prior session's feedback-loop transcript so a regenerated Review is clean.
+
+    ``collect`` runs only when a cockpit is (re)generated — never on a no-regeneration
+    resume — so clearing ``qa.jsonl``/``last-poll.toon``/``agent-reply.txt`` here is what
+    keeps a stale or different-branch regeneration from folding a previous session's Q&A
+    into the new ``review.html``/``review.md`` at close (the bake reads the default
+    ``qa.jsonl`` beside the cockpit). A ``fresh`` resume keeps them because it does not
+    call ``collect``. ``missing_ok`` so the ordinary "no prior transcript" case is a no-op.
+    """
+    for name in RUN_SCOPED_ARTIFACTS:
+        (out_dir / name).unlink(missing_ok=True)
+
+
 def copy_assets(assets_dir: Path, dest_dir: Path) -> list[str]:
     """Copy the vendored cockpit assets into ``dest_dir`` for relative reference."""
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -423,6 +438,9 @@ def collect(
     resolved_base = base or detect_base(root)
     out = out_dir or (root / ".review-agent")
     out.mkdir(parents=True, exist_ok=True)
+    # A new generation begins a new session: clear the prior transcript so a stale or
+    # different-branch regeneration never bakes an earlier branch's Q&A into the cockpit.
+    _reset_run_scoped_artifacts(out)
 
     context, files = _build_context(resolved_base, root, now=now or datetime.now(UTC))
     diff_stat = _run_git(["diff", "--stat", context.diff_range], root)

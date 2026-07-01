@@ -237,6 +237,16 @@ sections **in this order**, each a `<section>` with an `<h2>`:
 8. **Test Checklist** — a `<div class="checklist">`: the suggested runner/command in
    `<p class="runner">` (e.g. `<code>pytest</code>`, with evidence), then a `<ul>`
    of items. Make clear these are **suggestions you did not run**.
+9. **Q&A Log seam** — emit an *empty* placeholder, exactly:
+
+   ```html
+   <!--brc:qa-log--><!--/brc:qa-log-->
+   ```
+
+   Leave it empty — do **not** author Q&A here. At `/review-close` the bake folds
+   `qa.jsonl` between these markers (escaped, idempotent; issue #9, ADR-0007). If you
+   omit the seam the bake still works (it falls back to inserting before `</body>`),
+   but the seam keeps the Q&A in place among the sections.
 
 Render **every** non-empty Analysis section — don't drop one for brevity. When you
 must show a literal path or code token from the diff inside your prose, use the
@@ -321,15 +331,24 @@ ends the session with `review_loop.py end`.
 ### 9. Close
 
 When the session ends (`status: ended`) or the user runs `/review-close`, stop the
-loop and **mark the session ended** so a later `/review-branch` sees a finished review
-(disposition `none`) rather than offering to restore a closed one:
+loop, **bake the Q&A into the cockpit**, then **mark the session ended** so a later
+`/review-branch` sees a finished review (disposition `none`) rather than offering to
+restore a closed one:
 
 ```sh
+python3 .claude/skills/branch-review-cockpit/scripts/bake_review.py --md
+python3 .claude/skills/branch-review-cockpit/scripts/lint_cockpit.py .review-agent/review.html --csp-mode strict
 python3 .claude/skills/branch-review-cockpit/scripts/session.py end
 ```
 
-Then tell the user the review is closed; `qa.jsonl` holds the transcript. (Folding
-`qa.jsonl` back into `review.html` at close is issue #9.)
+The bake folds `qa.jsonl` back into `review.html` (escaped via the Escape Boundary,
+idempotent) and swaps to the **strict** CSP, so the saved cockpit is self-contained —
+it opens in a plain browser with no Lavish running (issue #9, ADR-0007). `--md` also
+writes `review.md` (review + Q&A) for pasting into a PR. The strict lint is the
+post-bake tripwire — never share a cockpit that fails it.
+
+Then tell the user the review is closed; the baked `review.html` (and `review.md`, if
+written) now hold the full Q&A, and `qa.jsonl` keeps the raw transcript.
 
 ## On-disk layout
 
@@ -339,7 +358,8 @@ Then tell the user the review is closed; `qa.jsonl` holds the transcript. (Foldi
   diff.fragment.html  fragments.html  fragments.json
   fragments/<id>.html     (one pre-escaped diff per changed file)
   analysis.json           (your structured Analysis — validated before authoring)
-  review.html
+  review.html             (cockpit; the Q&A is baked in at /review-close)
+  review.md               (optional Markdown export of review + Q&A, from bake_review.py --md)
   session.json            (lifecycle state for resume & staleness — {status, base, branch, head_sha, merge_base, started_at})
   agent-reply.txt         (your answer, read by review_loop.py reply)
   qa.jsonl                (live Q&A transcript, one exchange per line)
