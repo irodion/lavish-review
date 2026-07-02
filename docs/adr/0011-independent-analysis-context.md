@@ -11,6 +11,6 @@ The main session remains the **orchestrator**: it runs the collector, spawns the
 ## Consequences
 
 - `SKILL.md`'s pipeline splits into orchestrator steps and an isolated analysis step with an explicit input manifest; the analysis prompt travels with the skill so the isolation boundary is inspectable.
-- The analysis context must state what it *widened into* (files read beyond the diff) in `analysis.json`, so the reviewer can see the evidence basis — blind does not mean unaccountable.
+- The analysis context must state what it *widened into* (files read beyond the diff) in `analysis.json` — as a **required, possibly-empty `widened_into` list in `review-analysis/0.2`** ([ADR-0009](./0009-layered-claim-evidence-cockpit.md)), so writer and validator cannot diverge; the current `0.1` validator predates the field and this lands with the schema bump (#39). The reviewer can then see the evidence basis — blind does not mean unaccountable.
 - Cost: one additional context's tokens per review. Accepted; it is the price of the premise.
 - The orchestrator never edits claims it disagrees with; discrepancies it notices are surfaced to the reviewer as questions, preserving the isolated pass's integrity.

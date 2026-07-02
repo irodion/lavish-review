@@ -10,7 +10,7 @@ Every cockpit section to date reasons from the diff alone; `intent_summary` is *
 
 When no goal is found, L0 says so plainly — "no stated goal found; intent inferred from the diff" — and the cockpit degrades to today's behavior. An inferred intent is never presented as a stated goal; provenance is always attributed (issue #N, commit trailer, user-provided).
 
-**Goal Evidence is untrusted data.** Issue bodies and commit messages are attacker-writable text; they cross the Escape Boundary ([ADR-0002](./0002-deterministic-escape-boundary.md)) like diff bodies, are rendered and never executed, and are never used to build a shell command. They are also *unverified claims about intent*: the analysis treats the goal as what the change is measured against, not as ground truth about what the change does.
+**Goal Evidence is untrusted data.** Issue bodies, commit messages, and **branch names** are attacker-writable text; they cross the Escape Boundary ([ADR-0002](./0002-deterministic-escape-boundary.md)) like diff bodies, are rendered and never executed, and are never used to build a shell command. That includes the parsing step itself: extracting an issue reference from a branch name or commit message treats the string as data (escaped on render, passed as `argv` never shell-interpolated), the same rules the collector already applies to branch names as diff inputs. They are also *unverified claims about intent*: the analysis treats the goal as what the change is measured against, not as ground truth about what the change does.
 
 ## Consequences
 
