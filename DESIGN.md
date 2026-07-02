@@ -43,7 +43,7 @@ A **Lens** sharpens the neutral-by-default analysis; it is not separate machiner
 - **Language Lens** (issue #11): a bundled, language-specific risk checklist (C++/Python/TS) folded into the Risk Map, selected by detected language + `language_hints`.
 - **Focus Lens**: a reviewer-chosen *perspective* that re-weights and re-frames the Risk Map, Review Route, and feedback-loop answers toward a concern. Two activation paths: **authoring-time** via the `focus` config key / CLI (shapes the whole cockpit), and **mid-review** via a **Lens Pass** through the feedback loop (re-analyzes a slice, answers live, appends to `analysis.json` + `qa.jsonl` for bake-at-close — **no `review.html` regeneration**, per ADR-0003). The re-invokable mid-review path is what distinguishes a Focus Lens from a one-shot authoring choice, and is why it waited on the loop (#5).
 
-**v1 Focus Lens Catalog** (bundled definitions, same shape as Language Lenses):
+**Focus Lens Catalog** (designed — bundled definitions, same shape as Language Lenses; **not yet implemented**, paused pending re-targeting onto the Layered Review v2 claim model, ADR-0009 / #31–#34):
 
 - **security / OWASP** — reframes toward attack surface; maps risks to OWASP Top 10 / CWE. Pure agent reasoning.
 - **regressions** — reframes toward what could break that used to work (changed public surface, untouched callers; leans on Suspicious Omissions). Pure agent reasoning.
@@ -89,6 +89,6 @@ The collector writes the resolved policy to `.review-agent/resolved-config.json`
 
 ## v1 scope
 
-**In:** the full pipeline above — `/review-branch [base]`, agent analysis + cockpit, escaping + CSP + lint, blocking loop with the three controls, `qa.jsonl` + bake-at-close, `session.json` + staleness offer, minimal `.review-agent.yaml`, C++/Python/TS Language Lenses, the Focus Lens Catalog (security/OWASP, regressions, simplification, supply-chain) with authoring-time + mid-review (Lens Pass) activation, installer.
+**In:** the full pipeline above — `/review-branch [base]`, agent analysis + cockpit, escaping + CSP + lint, blocking loop with the three controls, `qa.jsonl` + bake-at-close, `session.json` + staleness offer, minimal `.review-agent.yaml`, C++/Python/TS Language Lenses, installer.
 
-**Deferred (roadmap, retained):** Mermaid rendering (vendored), `diff2html` side-by-side, Python Lavish fallback, further external-tool-findings lenses (`semgrep`/`ruff`/`clang-tidy` on the substrate the supply-chain lens establishes), additional-skills config, user-defined language hints, user-defined Focus Lenses, ambient SessionStart-hook resume.
+**Deferred (roadmap, retained):** the Focus Lens Catalog (security/OWASP, regressions, simplification, supply-chain) with authoring-time + mid-review (Lens Pass) activation — designed (ADR-0005, ADR-0006) but unimplemented, paused pending re-targeting onto the Layered Review v2 claim model (ADR-0009; #31–#34), Mermaid rendering (vendored), `diff2html` side-by-side, Python Lavish fallback, further external-tool-findings lenses (`semgrep`/`ruff`/`clang-tidy` on the substrate the supply-chain lens establishes), additional-skills config, user-defined language hints, user-defined Focus Lenses, ambient SessionStart-hook resume.
