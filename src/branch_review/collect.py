@@ -447,14 +447,18 @@ def collect(
     resolved_base = resolved.base_branch or detect_base(root)
     out = out_dir or (root / ".review-agent")
     out.mkdir(parents=True, exist_ok=True)
-    # A new generation begins a new session: clear the prior transcript so a stale or
-    # different-branch regeneration never bakes an earlier branch's Q&A into the cockpit.
-    _reset_run_scoped_artifacts(out)
 
     context, files = _build_context(resolved_base, root, now=now or datetime.now(UTC))
     diff_stat = _run_git(["diff", "--stat", context.diff_range], root)
     commits = _run_git(["log", "--oneline", f"{resolved_base}..HEAD"], root)
     commit_lines = commits.splitlines()
+
+    # A new generation begins a new session: clear the prior transcript so a stale or
+    # different-branch regeneration never bakes an earlier branch's Q&A into the cockpit.
+    # Deliberately AFTER every failure-prone git read above: if the requested/configured
+    # base doesn't resolve, the existing review's transcript must survive so
+    # /review-close can still bake the discussion. Clear only once the new run is viable.
+    _reset_run_scoped_artifacts(out)
 
     # Untrusted data crosses the Escape Boundary here: the diff and the
     # path/commit/branch fragments are pre-escaped and marker-delimited so the

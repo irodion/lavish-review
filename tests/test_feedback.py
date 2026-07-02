@@ -235,6 +235,60 @@ def test_end_invokes_lavish_end(tmp_path: Path) -> None:
     assert runner.calls == [["npx", "-y", feedback.LAVISH_PKG, "end", str(cockpit)]]
 
 
+# --- lavish_version threading (issue #10 machine config) --------------------------
+
+
+def _pin_version(cockpit: Path, version: object) -> None:
+    (cockpit.parent / feedback.RESOLVED_CONFIG_NAME).write_text(
+        json.dumps({"lavish_version": version}), encoding="utf-8"
+    )
+
+
+def test_poll_uses_configured_lavish_version(tmp_path: Path) -> None:
+    cockpit = _cockpit(tmp_path)
+    _pin_version(cockpit, "0.2.0")
+    runner = FakeRunner(LavishResult(0, "session:\n  status: waiting\n"))
+
+    poll(cockpit, runner=runner, echo=False)
+
+    assert runner.calls == [["npx", "-y", "lavish-axi@0.2.0", "poll", str(cockpit)]]
+
+
+def test_reply_and_end_use_configured_lavish_version(tmp_path: Path) -> None:
+    cockpit = _cockpit(tmp_path)
+    _pin_version(cockpit, "0.2.0")
+    answer = cockpit.parent / AGENT_REPLY_NAME
+    answer.write_text("because X\n", encoding="utf-8")
+    runner = FakeRunner(LavishResult(0, "session:\n  status: waiting\n"))
+
+    reply(cockpit, runner=runner, echo=False, now=_NOW)
+    end(cockpit, runner=runner)
+
+    assert runner.calls[0][:3] == ["npx", "-y", "lavish-axi@0.2.0"]
+    assert runner.calls[1] == ["npx", "-y", "lavish-axi@0.2.0", "end", str(cockpit)]
+
+
+def test_resolve_lavish_pkg_defaults_when_unset(tmp_path: Path) -> None:
+    cockpit = _cockpit(tmp_path)
+    # No resolved-config.json at all -> bundled default.
+    assert feedback.resolve_lavish_pkg(cockpit) == feedback.LAVISH_PKG
+    # Present but the machine config left the version null -> bundled default.
+    _pin_version(cockpit, None)
+    assert feedback.resolve_lavish_pkg(cockpit) == feedback.LAVISH_PKG
+
+
+def test_resolve_lavish_pkg_degrades_on_malformed_config(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A corrupt resolved-config.json must never block the answer loop: fall back to
+    # the bundled default and say so on stderr.
+    cockpit = _cockpit(tmp_path)
+    (cockpit.parent / feedback.RESOLVED_CONFIG_NAME).write_text("{not json", encoding="utf-8")
+
+    assert feedback.resolve_lavish_pkg(cockpit) == feedback.LAVISH_PKG
+    assert "warning" in capsys.readouterr().err
+
+
 # --- CLI dispatch ----------------------------------------------------------------
 
 

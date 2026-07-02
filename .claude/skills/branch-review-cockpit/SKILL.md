@@ -139,7 +139,8 @@ relay it and stop. The collector computes the `base...HEAD` diff and writes to
 - `resolved-config.json` — the resolved policy for this run: `{base, styling, focus,
   language_hints, pause, lavish_version, sessionstart_hook}`. Read it after collecting:
   `styling` drives step 5's assets and step 6's `--styling`; `focus`/`language_hints`
-  are the authoring lenses for step 3.
+  are the authoring lenses for step 3; a non-null `lavish_version` pins the Lavish
+  package for step 7 (the answer loop reads the same key itself).
 - `assets/cockpit.css`, `assets/app.js` — vendored, copied for relative reference
 
 Escaped fragments carry invisible `<!--brc:untrusted-->…<!--/brc:untrusted-->`
@@ -294,6 +295,9 @@ never silence it by stripping the untrusted markers.
 npx -y lavish-axi@0.1.31 .review-agent/review.html
 ```
 
+When `resolved-config.json` (step 2) has a non-null `lavish_version`, substitute it
+for `0.1.31` — the machine config pins the Lavish release, and the answer loop
+(`review_loop.py`) reads the same key, so open and loop never drift apart.
 Loopback default. Then **record the session** so a later `/review-branch` can resume
 it (step 0) instead of blindly regenerating — this writes
 `.review-agent/session.json` (`status: open`) from the `context.json` you just
