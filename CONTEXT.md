@@ -16,6 +16,10 @@ _Avoid_: target, trunk, parent.
 The current branch whose changes are being audited — the `HEAD` side of the diff.
 _Avoid_: feature branch, source.
 
+**Config Resolver**:
+The deep module that resolves a run's effective review policy by layering four sources, most specific first: **command arg > repo `.review-agent.yaml` > machine `~/.review-agent/config.yaml` > built-in defaults**. Two non-overlapping scopes travel separately — *repo policy* (committed: `base_branch`, `exclude`, `focus`, `language_hints`, `styling`, `limits`) makes review policy travel with the repo; *machine policy* (`pause`, default `styling`, pinned Lavish version, SessionStart-hook on/off) is per-developer. Configured `exclude` globs **extend** the Change Classifier's built-ins; `exclude_reset: true` replaces them (never the lockfile or `.gitattributes` rules). Like the Change Classifier and Session Evaluator, the merge is pure policy over already-parsed mappings (exhaustively table-testable); a thin shell reads the two YAML files, and absent files resolve to defaults. It ships a small, strict stdlib loader for the flat YAML subset the schema uses — no third-party dependency ([ADR-0008](./docs/adr/0008-stdlib-config-loader.md)).
+_Avoid_: settings, options, preferences.
+
 **Review Route**:
 The ordered path the cockpit recommends a reviewer follow through the changes ("start here, then these files, then verify tests"). A first-class section, not just a file list.
 _Avoid_: walkthrough order, reading order.

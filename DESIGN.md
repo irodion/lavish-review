@@ -65,6 +65,7 @@ All Focus Lens findings fold into the existing Risk Map categories and answers �
 ```
 .review-agent/            (gitignored — generated)
   context.json  diff.patch  diff-stat.txt  changed-files.json  commits.txt
+  resolved-config.json
   analysis.json  review.html  review.md  qa.jsonl  session.json
   assets/  cockpit.css  app.js
 .lavish-axi/              (gitignored — Lavish session state)
@@ -73,10 +74,12 @@ All Focus Lens findings fold into the existing Risk Map categories and answers �
 
 ## Configuration
 
-Two non-overlapping scopes:
+Resolved by the **Config Resolver** (a pure-policy deep module + thin file-reading shell), which layers **command arg > repo `.review-agent.yaml` > machine `~/.review-agent/config.yaml` > defaults**. Absent files fall back to defaults; unknown keys and out-of-range values are located errors, never silent fallbacks. It ships a strict stdlib loader for the flat YAML subset the schema uses — **no third-party YAML dependency** ([ADR-0008](./docs/adr/0008-stdlib-config-loader.md)). Two non-overlapping scopes:
 
-- **Repo policy** — `.review-agent.yaml` (committed): `base_branch`, `exclude` (**extends** built-ins; `exclude_reset: true` to replace), `focus`, `language_hints`, `styling`, `limits.{max_file_diff_lines, max_total_diff_lines}`. All optional. **Precedence: command arg > config > defaults/auto-detect.**
+- **Repo policy** — `.review-agent.yaml` (committed): `base_branch`, `exclude` (**extends** built-ins; `exclude_reset: true` to replace), `focus`, `language_hints`, `styling`, `limits.{max_file_diff_lines, max_total_diff_lines}`. All optional.
 - **Per-machine** — `~/.review-agent/config.yaml`: `pause` sentinel word, default `styling`, pinned Lavish version, SessionStart-hook on/off.
+
+The collector writes the resolved policy to `.review-agent/resolved-config.json` so the agent threads `styling` (cockpit assets + lint), `focus`/`language_hints` (authoring lenses), and the machine settings into the later steps.
 
 ## Packaging & security
 

@@ -47,6 +47,7 @@ from branch_review.collect import (
     merge_base,
     repo_root,
 )
+from branch_review.config import ConfigError, resolve_config
 
 # The persisted session lives beside the cockpit, under the gitignored state dir.
 SESSION_NAME = "session.json"
@@ -349,9 +350,12 @@ def _cmd_evaluate(repo: Path, out: Path | None, base: str | None) -> int:
     (not a crash), so a broken session never blocks a review — it just regenerates.
 
     ``base`` is the explicit base the reviewer passed to ``/review-branch`` (``None`` =
-    auto-detect, mirroring the collector). The base and its merge-base are resolved
-    **only when there is a resumable session to compare** — so an ambiguous-base repo
-    never blocks the common "nothing to resume → generate" answer.
+    auto-detect, mirroring the collector). It layers over the repo's ``.review-agent.yaml``
+    ``base_branch`` through the same Config Resolver the collector uses (issue #10), so a
+    review generated against a config-set base is compared against that base — not a
+    different auto-detected one that would wrongly read as stale. The base and its
+    merge-base are resolved **only when there is a resumable session to compare** — so an
+    ambiguous-base repo never blocks the common "nothing to resume → generate" answer.
     """
     root, out_dir = _state_dir(repo, out)
     head_sha, branch = current_revision(root)
@@ -368,7 +372,7 @@ def _cmd_evaluate(repo: Path, out: Path | None, base: str | None) -> int:
     if session is not None and session.status.is_resumable:
         # Resolving the base can hit BaseResolutionError on an ambiguous repo; do it only
         # when a session's base actually needs comparing (main() turns it into a clean error).
-        current_base = base or detect_base(root)
+        current_base = resolve_config(root, arg_base=base).base_branch or detect_base(root)
         current_merge_base = merge_base(current_base, root)
         current["base"] = current_base
         current["merge_base"] = current_merge_base
@@ -449,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "start":
             return _cmd_start(args.repo, args.out)
         return _cmd_end(args.repo, args.out)
-    except (SessionError, GitError, BaseResolutionError) as exc:
+    except (SessionError, GitError, BaseResolutionError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

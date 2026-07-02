@@ -644,3 +644,71 @@ def test_existence_and_stats_survive_every_omission(repo: Path) -> None:
             assert rec["fragment"] is None
         else:
             assert (out / str(rec["fragment"])).is_file()
+
+
+# --- Config Resolver wiring (issue #10) ------------------------------------
+#
+# The Config Resolver's precedence and validation are unit-tested in test_config.py;
+# these pin that collect() actually threads the resolved policy through git: a repo
+# ``.review-agent.yaml`` sets the base, extends the excludes, and surfaces in
+# resolved-config.json — end to end against real plumbing.
+
+
+def test_repo_config_base_branch_resolves_the_base(repo: Path) -> None:
+    # A second base branch the auto-detector would never pick (main is the default);
+    # the repo config must steer the diff to it.
+    _git(repo, "checkout", "main")
+    _git(repo, "checkout", "-b", "develop")
+    _commit(repo, "app.py", "x = 3\n", "develop: bump")
+    _git(repo, "checkout", "feature")
+    (repo / ".review-agent.yaml").write_text("base_branch: develop\n", encoding="utf-8")
+
+    context = collect(repo, home=repo)
+    assert context.base == "develop"
+    resolved = json.loads((repo / ".review-agent" / "resolved-config.json").read_text())
+    assert resolved["base"] == "develop"
+
+
+def test_arg_base_overrides_repo_config_base_branch(repo: Path) -> None:
+    _git(repo, "checkout", "main")
+    _git(repo, "checkout", "-b", "develop")
+    _commit(repo, "app.py", "x = 3\n", "develop: bump")
+    _git(repo, "checkout", "feature")
+    (repo / ".review-agent.yaml").write_text("base_branch: develop\n", encoding="utf-8")
+
+    # Explicit arg beats the config (precedence: arg > repo).
+    context = collect(repo, base="main", home=repo)
+    assert context.base == "main"
+
+
+def test_repo_config_exclude_extends_builtins(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    _add_lines(repo, "notes/secret.txt", 10, "docs: notes")
+    (repo / ".review-agent.yaml").write_text("exclude:\n  - notes/*.txt\n", encoding="utf-8")
+    collect(repo, home=repo)
+    index = _fragments_index(repo / ".review-agent")
+    entry = index["notes/secret.txt"]
+    assert entry["omitted"] is True
+    assert entry["disposition"] == "omit:excluded"
+    assert "notes/*.txt" in str(entry["reason"])
+
+
+def test_resolved_config_written_with_styling(repo: Path) -> None:
+    _git(repo, "checkout", "feature")
+    (repo / ".review-agent.yaml").write_text(
+        "styling: cdn\nfocus: security\nlanguage_hints:\n  - python\n", encoding="utf-8"
+    )
+    collect(repo, home=repo)
+    resolved = json.loads((repo / ".review-agent" / "resolved-config.json").read_text())
+    assert resolved["styling"] == "cdn"
+    assert resolved["focus"] == "security"
+    assert resolved["language_hints"] == ["python"]
+
+
+def test_malformed_repo_config_is_a_clean_error(repo: Path) -> None:
+    from branch_review.config import ConfigError
+
+    _git(repo, "checkout", "feature")
+    (repo / ".review-agent.yaml").write_text("styling: fancy\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        collect(repo, home=repo)
