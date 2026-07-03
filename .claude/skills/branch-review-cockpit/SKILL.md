@@ -505,13 +505,16 @@ The bake folds the close-time record into `review.html` (escaped via the Escape
 Boundary, idempotent) and swaps to the **strict** CSP, so the saved cockpit is
 self-contained — it opens in a plain browser with no Lavish running (issue #9,
 ADR-0007). The record is the **Review outcome** — the reviewer's dispositions
-from `dispositions.json`, aggregated and listed per claim, unreviewed claims
-included (never hidden), attributed to the reviewer (ADR-0012: the tool prints
-no verdict of its own) — followed by the Q&A log (disposition updates filtered
-out: they are state, not conversation). `--md` also
-writes `review.md` (review + outcome + Q&A) for pasting into a PR as the
-*human's* review. The strict lint is the
-post-bake tripwire — never share a cockpit that fails it.
+from `dispositions.json`, aggregated with per-thread totals and listed per
+claim, unreviewed claims included (never hidden), attributed to the reviewer
+(ADR-0012: the tool prints no verdict of its own) — followed by the Q&A log
+(disposition updates filtered out: they are state, not conversation). Each
+claim's disposition is also stamped onto its `<details>` tag, so the saved
+page shows the tints statically — no script runs on `file://`. `--md` also
+writes `review.md` (review + outcome + Q&A, verify-claim checkboxes checked
+only where the reviewer set `verified`) for pasting into a PR as the *human's*
+review. The strict lint is the post-bake tripwire — never share a cockpit that
+fails it.
 
 Then tell the user the review is closed; the baked `review.html` (and `review.md`, if
 written) now hold the outcome and the full Q&A, and `qa.jsonl` keeps the raw

@@ -357,6 +357,19 @@ details.claim[data-disposition="question-open"] { border-left: 3px solid var(--w
 
 /* Review outcome — the baked, close-time account of the reviewer's dispositions. */
 #review-outcome .outcome-counts { font-family: var(--mono); font-size: 0.85rem; }
+#review-outcome .outcome-threads {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding-left: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+#review-outcome .outcome-threads li { margin: 0.15rem 0; }
+#review-outcome .outcome-threads code {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--accent);
+}
 #review-outcome .outcome-list { margin: 0; padding-left: 1.1rem; }
 #review-outcome .outcome-list li { margin: 0.25rem 0; }
 #review-outcome .outcome-list code {

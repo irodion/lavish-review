@@ -21,6 +21,7 @@ from branch_review.bake import (
     QA_SEAM_OPEN,
     Exchange,
     Prompt,
+    bake_dispositions_html,
     bake_review,
     build_markdown,
     extract_prompts,
@@ -332,6 +333,13 @@ def test_markdown_null_alignment_has_no_goal_line() -> None:
     assert "(drive-by)" not in md
 
 
+def test_markdown_checklist_unchecked_unless_reviewer_verified() -> None:
+    # Only the reviewer's own "verified" checks a box; any other disposition (or
+    # none) leaves it open — the checklist never reflects mere existence.
+    md = build_markdown(_ANALYSIS, [], dispositions={"t1.c2": "question-open"})
+    assert "\n- [ ] [verify] run it (confidence: high; reviewer: question-open)" in md
+
+
 def test_markdown_without_analysis_still_has_qa() -> None:
     md = build_markdown(None, [_exchange(1, _TOON_MESSAGE, "ans")])
     assert "# Branch Review" in md
@@ -365,6 +373,37 @@ def test_markdown_collapses_newlines_in_prompt_heading() -> None:
     assert "### Q1. real q? ## Injected" in md  # collapsed inline into the heading
 
 
+# --- Baking dispositions onto the claims themselves (issue #44) --------------
+
+
+def test_bake_dispositions_stamps_and_restamps_idempotently() -> None:
+    html = (
+        '<details class="claim" id="t1.c1"><summary>s</summary></details>\n'
+        '<details class="claim" id="t1.c2"><summary>s</summary></details>'
+    )
+    once = bake_dispositions_html(html, {"t1.c1": "concern"})
+    assert '<details class="claim" id="t1.c1" data-disposition="concern">' in once
+    assert 'id="t1.c2" data-disposition' not in once  # unreviewed stays unmarked
+    # A later re-bake replaces the stamp in place — never a second attribute.
+    again = bake_dispositions_html(once, {"t1.c1": "verified"})
+    assert again.count("data-disposition") == 1
+    assert 'data-disposition="verified"' in again
+    # Cleared back to unreviewed (absence in the store) strips the attribute.
+    assert "data-disposition" not in bake_dispositions_html(again, {})
+
+
+def test_bake_dispositions_stamps_only_vocabulary_values_on_claim_details() -> None:
+    html = (
+        '<details id="file-src-a-py" open><summary>a file fold</summary></details>\n'
+        '<details class="claim" id="t1.c1"><summary>s</summary></details>'
+    )
+    out = bake_dispositions_html(html, {"t1.c1": '"><script>', "file-src-a-py": "concern"})
+    # A value outside the closed vocabulary is never stamped, and a non-claim
+    # <details> (no claim-shaped id) is never touched.
+    assert "data-disposition" not in out
+    assert out == html
+
+
 # --- End-to-end: the issue's acceptance criterion ---------------------------
 
 _BASE_COCKPIT = f"""<!doctype html>
@@ -372,7 +411,14 @@ _BASE_COCKPIT = f"""<!doctype html>
 <meta http-equiv="Content-Security-Policy" content="{INTERACTIVE_CSP}">
 <link rel="stylesheet" href="assets/cockpit.css">
 </head><body>
-<main><section id="exec"><h2>Summary</h2><p>prose</p></section></main>
+<main><section id="exec"><h2>Summary</h2><p>prose</p></section>
+<section class="thread" id="t1"><h2>The thing</h2>
+<details class="claim" id="t1.c1"><summary>R</summary></details>
+<details class="claim" id="t1.c2"><summary>run it</summary></details>
+</section>
+<section class="thread" id="t2"><h2>A rename that rode along</h2>
+<details class="claim" id="t2.c1"><summary>B</summary></details>
+</section></main>
 {QA_SEAM_OPEN}{QA_SEAM_CLOSE}
 <script src="assets/app.js"></script>
 </body></html>
@@ -437,7 +483,7 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
         json.dumps(
             {
                 "schema": "review-dispositions/0.1",
-                "dispositions": {"t1.c1": "concern", "t2.c1": "verified"},
+                "dispositions": {"t1.c1": "concern", "t1.c2": "verified"},
             }
         ),
         encoding="utf-8",
@@ -458,7 +504,15 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
     # The aggregate is the reviewer's; every claim is accounted for, unreviewed listed.
     assert "verified 1 · concern 1 · question-open 0 · unreviewed 1" in baked
     assert '<span class="disposition concern">concern</span> <code>t1.c1</code>' in baked
-    assert '<span class="disposition unreviewed">unreviewed</span> <code>t1.c2</code>' in baked
+    assert '<span class="disposition unreviewed">unreviewed</span> <code>t2.c1</code>' in baked
+    # Per-thread totals in the outcome (issue #44).
+    assert "<code>t1</code> The thing — 2/2 reviewed · 1 concern" in baked
+    assert "<code>t2</code> A rename that rode along — 0/1 reviewed" in baked
+    # Each claim's state is stamped onto its own <details>, so the file:// artifact
+    # shows the tints with no script (app.js renders nothing on file://).
+    assert '<details class="claim" id="t1.c1" data-disposition="concern">' in baked
+    assert '<details class="claim" id="t1.c2" data-disposition="verified">' in baked
+    assert 'id="t2.c1" data-disposition' not in baked  # unreviewed = no attribute
     # The disposition exchange is state, not conversation — gone from the Q&A log.
     assert "Disposition set:" not in baked
     assert "Recorded." not in baked
@@ -466,13 +520,30 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
     assert lint_cockpit(baked, csp_mode="strict") == []
     assert result.exchanges == 1  # only the real exchange was folded
 
+    # Re-baking is still idempotent with the stamps in place — for the Markdown
+    # export too (regenerated wholesale, so the md_text asserts below read the
+    # SECOND bake's output and the heading count proves nothing duplicated).
+    bake_review(cockpit, qa_path=qa, analysis_path=analysis, markdown_path=md)
+    rebaked = cockpit.read_text(encoding="utf-8")
+    assert rebaked.count("data-disposition") == baked.count("data-disposition")
+    assert rebaked.count('id="review-outcome"') == 1
+
     md_text = md.read_text(encoding="utf-8")
-    assert "## Review outcome" in md_text
+    assert md_text.count("## Review outcome") == 1
     assert "Reviewer dispositions — verified 1 · concern 1 · question-open 0 · unreviewed 1." in (
         md_text
     )
+    assert (
+        "Per thread: t1 (The thing) 2/2 reviewed · 1 concern; "
+        "t2 (A rename that rode along) 0/1 reviewed."
+    ) in md_text
     assert "- **concern** — t1.c1: R" in md_text
-    assert "- **unreviewed** — t1.c2: run it" in md_text
+    assert "- **unreviewed** — t2.c1: B" in md_text
+    # The pasted checklist reflects real verification state (issue #44): the verify
+    # claim the reviewer marked verified is checked, and dispositions ride along as
+    # reviewer badges beside the agent's confidence.
+    assert "\n- [x] [verify] run it (confidence: high; reviewer: verified)" in md_text
+    assert "[risk] R (confidence: medium; security; level: high; reviewer: concern)" in md_text
     assert "Disposition set:" not in md_text
     assert "no overall verdict" in md_text  # the attribution note (verdict line, ADR-0012)
 
