@@ -47,7 +47,7 @@ import io
 import json
 import re
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -371,26 +371,29 @@ def _inline(text: str) -> str:
     return " ".join(text.split())
 
 
-def _bullet_list(items: object, render: Callable[[Mapping[str, object]], str]) -> str:
-    """Render an Analysis list section as Markdown bullets via ``render``, or ``""``.
-
-    Centralises the shape shared by the simple list sections (Behavior Changes,
-    Suspicious Omissions): tolerate a non-list (returns ``""``, which :func:`_md_section`
-    then skips) and render only the mapping entries. The per-section ``render`` supplies
-    the one differing part — the bullet template.
-    """
-    if not isinstance(items, list):
-        return ""
-    return "\n".join(render(item) for item in items if isinstance(item, Mapping))
-
-
-def _format_risk_block(risk: Mapping[str, object]) -> str:
-    """One Risk Map entry as a ``### category (level)`` heading, reason, and questions."""
-    head = f"### {risk.get('category', '')} ({risk.get('level', '')})"
-    reason = str(risk.get("reason", ""))
-    questions = risk.get("challenge_questions")
+def _format_claim_block(claim: Mapping[str, object]) -> str:
+    """One claim as a ``### [kind] summary`` heading with its badges and questions."""
+    kind = str(claim.get("kind", ""))
+    badges = [f"confidence: {claim.get('confidence', '')}"]
+    if claim.get("category"):
+        badges.append(str(claim["category"]))
+    if claim.get("level"):
+        badges.append(f"level: {claim['level']}")
+    checkbox = "- [ ] " if kind == "verify" else ""
+    head = f"### {checkbox}[{kind}] {claim.get('summary', '')} ({'; '.join(badges)})"
+    detail = str(claim.get("detail", ""))
+    questions = claim.get("challenge_questions")
     bullets = "\n".join(f"- {q}" for q in questions) if isinstance(questions, list) else ""
-    return "\n".join((head, "", reason, "", bullets)).rstrip()
+    return "\n".join((head, "", detail, "", bullets)).rstrip()
+
+
+def _format_thread(thread: Mapping[str, object]) -> str:
+    """One thread: its summary then every claim block (ADR-0009's L1/L2 in Markdown)."""
+    parts = [str(thread.get("summary", ""))]
+    claims = thread.get("claims")
+    if isinstance(claims, list):
+        parts += [_format_claim_block(c) for c in claims if isinstance(c, Mapping)]
+    return "\n\n".join(part for part in parts if part.strip())
 
 
 def render_qa_markdown(exchanges: Sequence[Exchange]) -> str:
@@ -424,8 +427,8 @@ def _md_section(title: str, body: str) -> list[str]:
 def build_markdown(analysis: Mapping[str, object] | None, exchanges: Sequence[Exchange]) -> str:
     """Build ``review.md`` from the Analysis and the Q&A — for pasting into a PR.
 
-    Renders the reviewer-facing Analysis sections (Executive Summary, Behavior Changes,
-    Risk Map, Suspicious Omissions, Test Checklist) followed by the Q&A Log. ``analysis``
+    Renders the reviewer-facing Analysis (the L0 orientation, then each thread with
+    its claims — verify claims as checkboxes) followed by the Q&A Log. ``analysis``
     may be ``None`` (no ``analysis.json``) — the export then carries the Q&A alone rather
     than failing. The Analysis is the agent's own trusted prose; reviewer-originated text
     in the Q&A goes through :func:`_fenced` so it cannot break the Markdown.
@@ -434,42 +437,24 @@ def build_markdown(analysis: Mapping[str, object] | None, exchanges: Sequence[Ex
     title = str(analysis.get("title") or "Branch Review")
     out: list[str] = [f"# {title}", ""]
 
-    out += _md_section("Executive Summary", str(analysis.get("intent_summary") or ""))
-    out += _md_section(
-        "Behavior Changes",
-        _bullet_list(
-            analysis.get("behavior_changes"),
-            lambda c: f"- **{c.get('summary', '')}** — {c.get('detail', '')}",
-        ),
-    )
+    out += _md_section("Orientation", str(analysis.get("intent_summary") or ""))
 
-    risks = analysis.get("risk_map")
-    risk_body = (
-        "\n\n".join(_format_risk_block(r) for r in risks if isinstance(r, Mapping))
-        if isinstance(risks, list)
-        else ""
-    )
-    out += _md_section("Risk Map", risk_body)
+    threads = analysis.get("threads")
+    if isinstance(threads, list):
+        for thread in threads:
+            if not isinstance(thread, Mapping):
+                continue
+            heading = f"{thread.get('id', '')} — {thread.get('title', '')}".strip(" —")
+            out += _md_section(heading, _format_thread(thread))
 
-    out += _md_section(
-        "Suspicious Omissions",
-        _bullet_list(
-            analysis.get("suspicious_omissions"),
-            lambda o: f"- **{o.get('kind', '')}: {o.get('summary', '')}** — {o.get('detail', '')}",
-        ),
-    )
-
-    checklist = analysis.get("test_checklist")
-    if isinstance(checklist, Mapping):
-        runner = str(checklist.get("command") or checklist.get("runner") or "")
-        items = checklist.get("items")
-        body_lines: list[str] = ["_Suggested checks — not run by the review._", ""]
+    runner_block = analysis.get("test_runner")
+    if isinstance(runner_block, Mapping):
+        runner = str(runner_block.get("command") or runner_block.get("runner") or "")
         if runner:
-            body_lines.append(f"Suggested runner: `{runner}`")
-            body_lines.append("")
-        if isinstance(items, list):
-            body_lines += [f"- [ ] {item}" for item in items]
-        out += _md_section("Test Checklist", "\n".join(body_lines))
+            out += _md_section(
+                "Test runner",
+                f"Suggested runner (not run by the review): `{runner}`",
+            )
 
     out.append(render_qa_markdown(exchanges))
     return "\n".join(out).rstrip("\n") + "\n"

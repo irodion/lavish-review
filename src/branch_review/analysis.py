@@ -1,45 +1,51 @@
-"""The Analysis Schema Validator — a deep module guarding ``analysis.json`` (issue #6).
+"""The Analysis Schema Validator — a deep module guarding ``analysis.json`` (issues #6, #39).
 
 ``analysis.json`` is the agent's structured intermediate reasoning about the diff
 (CONTEXT: *Analysis*): the substrate the Review Cockpit is authored from and the
-substrate the feedback loop answers from (ADR-0001). The cockpit's correctness
-depends on that substrate being well-formed — a Risk Map entry missing its
-``level``, a route step with no ``path``, a ``category`` outside the canonical set
-would all surface as a broken or misleading section. This module is the single
-deterministic gate the agent runs *before* authoring the HTML: it proves the
-analysis has every required section, each shaped correctly, with risk categories
-and levels drawn from the fixed vocabularies (CONTEXT: *Risk Map*).
+substrate the feedback loop answers from (ADR-0001). Since ADR-0009 the shape is
+**claim-centric**: the changeset is decomposed into narrative **Threads** (the
+feature, the drive-by refactor, the config churn), each carrying the **Claims** a
+reviewer must judge — behavior changes, risks, suspicious omissions, verification
+steps — and every claim carries the agent's **confidence**, at least one challenge
+question, and **evidence references** into the diff. The cockpit's L1/L2/L3 layers
+are authored straight from this structure, so its correctness depends on the
+substrate being well-formed: a claim with no evidence, a risk without a level, an
+id that can't anchor a disposition (ADR-0012) would all surface as a broken or
+misleading layer.
 
 Deep module (a simple surface over fussy internals): the only entry point is
 :func:`validate_analysis`, which returns a list of :class:`AnalysisError` — empty
 means the file is structurally sound. It mirrors the Cockpit Linter
 (:mod:`branch_review.lint`): a tripwire that *refuses* a malformed analysis, never
-one that edits it. It validates **structure, types, and vocabulary**, not editorial
-quality — whether a risk reason is *insightful* is the agent's job; whether the
-section is *shaped right* is this module's.
+one that edits it. It validates **structure, types, vocabulary, and id integrity**,
+not editorial quality — whether a claim is *insightful* is the agent's job; whether
+it is *shaped right* is this module's.
 
 The canonical vocabularies (:data:`RISK_CATEGORIES`, :data:`RISK_LEVELS`,
-:data:`OMISSION_KINDS`) live here as the single source of truth the SKILL guidance
-and the cockpit share. See ``CONTEXT.md`` and ``DESIGN.md`` ("Cockpit sections").
+:data:`OMISSION_KINDS`, :data:`CLAIM_KINDS`, :data:`CONFIDENCE_LEVELS`) live here
+as the single source of truth the SKILL guidance and the cockpit share. See
+``CONTEXT.md``, ``DESIGN.md``, and ADR-0009/0011/0012.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 # The schema tag a valid analysis must carry; bump the suffix on a breaking change.
-SCHEMA = "review-analysis/0.1"
+# 0.2 is the Layered Review shape (ADR-0009): threads > claims > evidence, plus the
+# isolated-analysis accountability field ``widened_into`` (ADR-0011).
+SCHEMA = "review-analysis/0.2"
 
-# The Risk Map's fixed categories (CONTEXT: *Risk Map*; DESIGN "Cockpit sections").
-# A closed set so the cockpit can group deterministically and the agent can't coin
-# ad-hoc categories that fragment the map. Language-specific concerns ride *inside*
-# these via the Language Lens (e.g. C++ lifetime → correctness/security), not as new
-# top-level categories.
+# The risk categories a claim may carry (CONTEXT: *Risk Map*). A closed set so the
+# cockpit can badge deterministically and the agent can't coin ad-hoc categories.
+# Language-specific concerns ride *inside* these via the Language Lens (e.g. C++
+# lifetime → correctness/security), not as new top-level categories.
 RISK_CATEGORIES = (
     "correctness",
     "compatibility",
@@ -50,13 +56,28 @@ RISK_CATEGORIES = (
     "test_coverage",
 )
 
-# Severity levels a Risk Map entry may carry, low→high.
+# Severity levels a risk claim must carry, low→high.
 RISK_LEVELS = ("low", "medium", "high")
 
 # What a Suspicious Omission is adjacent to (CONTEXT: *Suspicious Omission*) — the
 # untouched thing the diff arguably should have changed. ``other`` is the escape
 # hatch so the vocabulary never forces a miscategorisation.
 OMISSION_KINDS = ("tests", "callers", "docs", "config", "error_handling", "other")
+
+# What kind of assertion a claim makes (ADR-0009's L2 vocabulary):
+#   behavior — something observably changes ("retries are now exponential")
+#   risk     — something could be wrong (carries category + level + reasons)
+#   omission — something the diff did NOT change but arguably should have
+#   verify   — something the reviewer should check/run (the old Test Checklist items)
+CLAIM_KINDS = ("behavior", "risk", "omission", "verify")
+
+# The agent's stated confidence in a claim (ADR-0012: confidence, never a verdict).
+CONFIDENCE_LEVELS = ("high", "medium", "low")
+
+# Id shapes: threads are ``t<N>``; claims are ``<thread-id>.c<N>`` (ADR-0012's
+# stable claim ids — the keys dispositions attach to, and the cockpit element ids).
+_THREAD_ID = re.compile(r"^t\d+$")
+_CLAIM_ID_SUFFIX = re.compile(r"^c\d+$")
 
 
 @dataclass(frozen=True)
@@ -120,7 +141,7 @@ def _as_objects(
     The index is the position in the *original* list, not the filtered one: a
     non-object entry is reported and skipped, but the surviving objects keep their
     real indices so a later field error still locates correctly (e.g. a bad entry
-    at original index 2 reports ``risk_map[2]``, not ``[1]``).
+    at original index 2 reports ``threads[2]``, not ``[1]``).
     """
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         return [], [AnalysisError(location, f"expected a list, got {_typename(value)}")]
@@ -136,87 +157,152 @@ def _as_objects(
     return objects, errors
 
 
-# --- Section validators -------------------------------------------------------
+# --- Claim / thread validators (ADR-0009's L1/L2) ------------------------------
 
 
-def _validate_review_route(value: object) -> list[AnalysisError]:
-    """``review_route``: ordered ``{path, reason}`` steps (CONTEXT: *Review Route*)."""
-    objects, errors = _as_objects(value, "review_route")
-    for i, step in objects:
-        loc = f"review_route[{i}]"
-        errors.extend(_require_str(step.get("path"), f"{loc}.path"))
-        errors.extend(_require_str(step.get("reason"), f"{loc}.reason"))
-    return errors
+def _validate_evidence(value: object, loc: str) -> list[AnalysisError]:
+    """``evidence``: ≥1 ``{path?, note?}`` refs — a claim must be substantiated.
 
-
-def _validate_behavior_changes(value: object) -> list[AnalysisError]:
-    """``behavior_changes``: ``{summary, detail?, paths?}`` records."""
-    objects, errors = _as_objects(value, "behavior_changes")
-    for i, change in objects:
-        loc = f"behavior_changes[{i}]"
-        errors.extend(_require_str(change.get("summary"), f"{loc}.summary"))
-        if "detail" in change:
-            errors.extend(_require_str(change["detail"], f"{loc}.detail", allow_empty=True))
-        if "paths" in change:
-            errors.extend(_require_str_list(change["paths"], f"{loc}.paths"))
-    return errors
-
-
-def _validate_risk_map(value: object) -> list[AnalysisError]:
-    """``risk_map``: ``{category, level, reason, challenge_questions[]}`` (CONTEXT: *Risk Map*).
-
-    Category and level come from the closed vocabularies; every entry must carry a
-    reason and at least one challenge question — that triplet *is* the Risk Map's
-    contract.
+    ``path`` links the claim to a changed (or widened-into) file's L3 fragment;
+    ``note`` anchors evidence that has no single file ("no test touches this").
+    Each entry needs at least one of the two.
     """
-    objects, errors = _as_objects(value, "risk_map")
-    for i, entry in objects:
-        loc = f"risk_map[{i}]"
-        errors.extend(_require_enum(entry.get("category"), f"{loc}.category", RISK_CATEGORIES))
-        errors.extend(_require_enum(entry.get("level"), f"{loc}.level", RISK_LEVELS))
-        errors.extend(_require_str(entry.get("reason"), f"{loc}.reason"))
-        questions = entry.get("challenge_questions")
-        errors.extend(_require_str_list(questions, f"{loc}.challenge_questions", min_len=1))
+    objects, errors = _as_objects(value, loc)
+    if not errors and not objects:
+        errors.append(AnalysisError(loc, "expected at least 1 item(s), got 0"))
+    for i, ref in objects:
+        ref_loc = f"{loc}[{i}]"
+        if "path" not in ref and "note" not in ref:
+            errors.append(AnalysisError(ref_loc, "must carry a path and/or a note"))
+            continue
+        if "path" in ref:
+            errors.extend(_require_str(ref["path"], f"{ref_loc}.path"))
+        if "note" in ref:
+            errors.extend(_require_str(ref["note"], f"{ref_loc}.note"))
     return errors
 
 
-def _validate_file_walkthrough(value: object) -> list[AnalysisError]:
-    """``file_walkthrough``: ``{path, explanation}`` per file the route visits."""
-    objects, errors = _as_objects(value, "file_walkthrough")
-    for i, item in objects:
-        loc = f"file_walkthrough[{i}]"
-        errors.extend(_require_str(item.get("path"), f"{loc}.path"))
-        errors.extend(_require_str(item.get("explanation"), f"{loc}.explanation"))
+def _validate_claim(
+    claim: Mapping[str, object], loc: str, thread_id: str, seen_ids: dict[str, str]
+) -> list[AnalysisError]:
+    """One L2 claim: the assertion a reviewer judges (ADR-0009, ADR-0012).
+
+    The contract: a stable id (``<thread-id>.c<N>`` — the disposition key and the
+    cockpit element id), a kind from the closed vocabulary, the agent's confidence,
+    at least one challenge question (what makes a claim auditable instead of a
+    verdict), and at least one evidence reference. Risk claims additionally carry
+    ``category`` + ``level``; ``level`` means risk severity and is risk-only.
+    """
+    errors: list[AnalysisError] = []
+
+    claim_id = claim.get("id")
+    errors.extend(_require_str(claim_id, f"{loc}.id"))
+    if isinstance(claim_id, str) and claim_id.strip():
+        prefix, dot, suffix = claim_id.partition(".")
+        if prefix != thread_id or dot != "." or not _CLAIM_ID_SUFFIX.match(suffix):
+            errors.append(
+                AnalysisError(
+                    f"{loc}.id",
+                    f"must be '{thread_id}.c<N>' (its thread's id + '.c<N>'), got {claim_id!r}",
+                )
+            )
+        elif claim_id in seen_ids:
+            errors.append(AnalysisError(f"{loc}.id", f"duplicate id {claim_id!r}"))
+        else:
+            seen_ids[claim_id] = loc
+
+    kind = claim.get("kind")
+    errors.extend(_require_enum(kind, f"{loc}.kind", CLAIM_KINDS))
+    errors.extend(_require_str(claim.get("summary"), f"{loc}.summary"))
+    if "detail" in claim:
+        errors.extend(_require_str(claim["detail"], f"{loc}.detail", allow_empty=True))
+    errors.extend(_require_enum(claim.get("confidence"), f"{loc}.confidence", CONFIDENCE_LEVELS))
+    errors.extend(
+        _require_str_list(claim.get("challenge_questions"), f"{loc}.challenge_questions", min_len=1)
+    )
+    errors.extend(_validate_evidence(claim.get("evidence"), f"{loc}.evidence"))
+
+    # category: required on risk claims, optional framing elsewhere; always vocabulary.
+    if kind == "risk" and "category" not in claim:
+        errors.append(AnalysisError(f"{loc}.category", "required on a risk claim"))
+    if "category" in claim:
+        errors.extend(_require_enum(claim["category"], f"{loc}.category", RISK_CATEGORIES))
+
+    # level: risk severity — required on risk claims, meaningless (so rejected) elsewhere.
+    if kind == "risk":
+        errors.extend(_require_enum(claim.get("level"), f"{loc}.level", RISK_LEVELS))
+    elif "level" in claim:
+        errors.append(AnalysisError(f"{loc}.level", "only a risk claim carries a level"))
+
+    # omission_kind: what the omission is adjacent to — omission claims only.
+    if "omission_kind" in claim:
+        if kind == "omission":
+            errors.extend(
+                _require_enum(claim["omission_kind"], f"{loc}.omission_kind", OMISSION_KINDS)
+            )
+        else:
+            errors.append(
+                AnalysisError(
+                    f"{loc}.omission_kind", "only an omission claim carries omission_kind"
+                )
+            )
+
     return errors
 
 
-def _validate_suspicious_omissions(value: object) -> list[AnalysisError]:
-    """``suspicious_omissions``: ``{summary, kind?, detail?}`` (CONTEXT: *Suspicious Omission*)."""
-    objects, errors = _as_objects(value, "suspicious_omissions")
-    for i, omission in objects:
-        loc = f"suspicious_omissions[{i}]"
-        errors.extend(_require_str(omission.get("summary"), f"{loc}.summary"))
-        if "kind" in omission:
-            errors.extend(_require_enum(omission["kind"], f"{loc}.kind", OMISSION_KINDS))
-        if "detail" in omission:
-            errors.extend(_require_str(omission["detail"], f"{loc}.detail", allow_empty=True))
+def _validate_threads(value: object) -> list[AnalysisError]:
+    """``threads``: ≥1 narrative threads in descent order (ADR-0009's L1).
+
+    Thread order *is* the Review Route — the recommended reading order. Each thread
+    carries a stable id (``t<N>``), a title, a summary, the changed files it covers
+    (``paths``, may be empty for a purely-adjacent thread), and ≥1 claims.
+    """
+    objects, errors = _as_objects(value, "threads")
+    if not errors and not objects:
+        errors.append(AnalysisError("threads", "expected at least 1 item(s), got 0"))
+
+    seen_ids: dict[str, str] = {}
+    for i, thread in objects:
+        loc = f"threads[{i}]"
+        thread_id = thread.get("id")
+        errors.extend(_require_str(thread_id, f"{loc}.id"))
+        tid = thread_id if isinstance(thread_id, str) else ""
+        if tid.strip():
+            if not _THREAD_ID.match(tid):
+                errors.append(AnalysisError(f"{loc}.id", f"must be 't<N>', got {tid!r}"))
+            elif tid in seen_ids:
+                errors.append(AnalysisError(f"{loc}.id", f"duplicate id {tid!r}"))
+            else:
+                seen_ids[tid] = loc
+
+        errors.extend(_require_str(thread.get("title"), f"{loc}.title"))
+        errors.extend(_require_str(thread.get("summary"), f"{loc}.summary"))
+        errors.extend(_require_str_list(thread.get("paths"), f"{loc}.paths"))
+
+        claims, claim_errors = _as_objects(thread.get("claims"), f"{loc}.claims")
+        errors.extend(claim_errors)
+        if not claim_errors and not claims:
+            errors.append(AnalysisError(f"{loc}.claims", "expected at least 1 item(s), got 0"))
+        for j, claim in claims:
+            errors.extend(_validate_claim(claim, f"{loc}.claims[{j}]", tid, seen_ids))
+
     return errors
 
 
-def _validate_test_checklist(value: object) -> list[AnalysisError]:
-    """``test_checklist``: ``{runner, runner_evidence?, command?, items[]}``.
+def _validate_test_runner(value: object) -> list[AnalysisError]:
+    """``test_runner``: ``{runner, runner_evidence?, command?}`` — all nullable.
 
-    ``runner``/``command`` are nullable — the detector may find no runner — but
-    ``items`` is always a list of suggestions. The runner is *suggested, never
-    executed* (DESIGN: "checklist + read-only runner detection, no execution").
+    The read-only runner detection from step 2. Concrete things to *check* are
+    ``verify`` claims on their threads (ADR-0009: the old checklist items became
+    claims so dispositions can attach to them, ADR-0012); this block only records
+    what runner exists. The runner is *suggested, never executed* (DESIGN).
     """
     if not isinstance(value, Mapping):
-        return [AnalysisError("test_checklist", f"expected an object, got {_typename(value)}")]
+        return [AnalysisError("test_runner", f"expected an object, got {_typename(value)}")]
     errors: list[AnalysisError] = []
     for key in ("runner", "runner_evidence", "command"):
         if value.get(key) is not None:
-            errors.extend(_require_str(value[key], f"test_checklist.{key}"))
-    errors.extend(_require_str_list(value.get("items"), "test_checklist.items"))
+            errors.extend(_require_str(value[key], f"test_runner.{key}"))
     return errors
 
 
@@ -231,15 +317,10 @@ def _validate_diagrams(value: object) -> list[AnalysisError]:
     return errors
 
 
-# Each required section → its validator. List sections may be empty (an empty diff
-# has no route); the validators check shape, not editorial completeness.
+# Each required section → its validator.
 _SECTION_VALIDATORS = {
-    "review_route": _validate_review_route,
-    "behavior_changes": _validate_behavior_changes,
-    "risk_map": _validate_risk_map,
-    "file_walkthrough": _validate_file_walkthrough,
-    "suspicious_omissions": _validate_suspicious_omissions,
-    "test_checklist": _validate_test_checklist,
+    "threads": _validate_threads,
+    "test_runner": _validate_test_runner,
     "diagrams": _validate_diagrams,
 }
 
@@ -248,26 +329,35 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
     """Validate a parsed ``analysis.json``; return every problem (empty == valid).
 
     Checks the top-level object carries the schema tag, a non-empty ``title`` and
-    ``intent_summary`` (the Executive Summary's source), and every required
-    section, each structurally sound with risk categories/levels and omission
-    kinds drawn from the canonical vocabularies. Returns a flat list of
-    :class:`AnalysisError` with ``location`` paths (e.g. ``risk_map[2].level``) so a
-    malformed file points the agent straight at what to fix.
+    ``intent_summary`` (L0's source until Goal Evidence lands, ADR-0010), ≥1
+    threads each with ≥1 substantiated claims (ids well-formed and unique — the
+    disposition keys of ADR-0012), the ``widened_into`` accountability list
+    (ADR-0011: files read beyond the diff, possibly empty), the ``test_runner``
+    block, and ``diagrams``. Returns a flat list of :class:`AnalysisError` with
+    ``location`` paths (e.g. ``threads[0].claims[2].level``) so a malformed file
+    points the agent straight at what to fix.
     """
     if not isinstance(obj, Mapping):
         return [AnalysisError("$", f"analysis must be a JSON object, got {_typename(obj)}")]
 
     errors: list[AnalysisError] = []
 
-    # Pin to the exact supported revision: this validator encodes the 0.1 shape, so
-    # an unknown future tag (e.g. review-analysis/0.2) must fail rather than be
-    # validated against rules it may no longer match. Bump SCHEMA when the shape changes.
+    # Pin to the exact supported revision: this validator encodes the 0.2 shape, so
+    # an older or unknown tag (e.g. review-analysis/0.1) must fail rather than be
+    # validated against rules it does not match. Bump SCHEMA when the shape changes.
     schema = obj.get("schema")
     if schema != SCHEMA:
         errors.append(AnalysisError("schema", f"must be {SCHEMA!r}, got {schema!r}"))
 
     errors.extend(_require_str(obj.get("title"), "title"))
     errors.extend(_require_str(obj.get("intent_summary"), "intent_summary"))
+
+    # ADR-0011: the analysis states what it widened into. Required so writer and
+    # validator cannot diverge; an honest "nothing" is an empty list, never absence.
+    if "widened_into" not in obj:
+        errors.append(AnalysisError("widened_into", "required section is missing"))
+    else:
+        errors.extend(_require_str_list(obj["widened_into"], "widened_into"))
 
     for name, validator in _SECTION_VALIDATORS.items():
         if name not in obj:

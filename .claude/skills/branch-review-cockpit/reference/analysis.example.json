@@ -1,111 +1,99 @@
 {
-  "schema": "review-analysis/0.1",
-  "title": "Per-file escaped diff fragments + full cockpit sections",
-  "intent_summary": "Adds the File Walkthrough substrate (one independently-escaped diff fragment per changed file) and the agent-authored analytical sections — Executive Summary, Review Route, Behavior Changes, Risk Map, File Walkthrough, Suspicious Omissions, and a Test Checklist driven by read-only runner detection.",
-  "review_route": [
+  "schema": "review-analysis/0.2",
+  "title": "Retry backoff becomes exponential; config key renamed",
+  "intent_summary": "Replaces the fixed 1s retry delay with capped exponential backoff so a struggling upstream is not hammered at a constant rate, and renames the RETRY_DELAY config key to RETRY_BASE_DELAY to match the new meaning.",
+  "widened_into": ["src/client/pool.py"],
+  "threads": [
     {
-      "path": "src/branch_review/analysis.py",
-      "reason": "Start here: the schema and validator define the shape every other section must honour."
-    },
-    {
-      "path": "src/branch_review/escape.py",
-      "reason": "The per-file fragment id and index helpers — the substrate the walkthrough renders."
-    },
-    {
-      "path": "src/branch_review/collect.py",
-      "reason": "Wires per-file diffs into the collection step; check the fragments dir is rebuilt cleanly."
-    },
-    {
-      "path": "src/branch_review/runners.py",
-      "reason": "Verify detection is genuinely read-only before trusting the Test Checklist."
-    }
-  ],
-  "behavior_changes": [
-    {
-      "summary": "The collector now emits one escaped diff fragment per changed file plus an ordered index.",
-      "detail": "fragments/<id>.html and fragments.json are written alongside the preserved whole-diff fragment.",
-      "paths": ["src/branch_review/collect.py", "src/branch_review/escape.py"]
-    },
-    {
-      "summary": "Non-ASCII paths now round-trip as raw UTF-8 (core.quotePath disabled).",
-      "detail": "Previously git C-quoted them, so the stored path no longer matched the file on disk.",
-      "paths": ["src/branch_review/collect.py"]
-    }
-  ],
-  "risk_map": [
-    {
-      "category": "security",
-      "level": "medium",
-      "reason": "Untrusted file paths are turned into on-disk fragment filenames; a naive mapping could allow path traversal or collisions.",
-      "challenge_questions": [
-        "Can any path produce a fragment filename that escapes the fragments/ directory?",
-        "Do two distinct paths ever map to the same fragment id, silently overwriting one?"
+      "id": "t1",
+      "title": "Exponential backoff",
+      "summary": "The retry loop's delay policy changes from fixed to exponential with a 60s cap — the behavioral heart of the branch. Read this first: everything else is consequence.",
+      "paths": ["src/retry.py", "src/config.py"],
+      "claims": [
+        {
+          "id": "t1.c1",
+          "kind": "behavior",
+          "summary": "Retries now back off exponentially from RETRY_BASE_DELAY, doubling per attempt, capped at 60s.",
+          "detail": "The delay computation moves from a constant to base * 2**attempt with an explicit cap; attempt count semantics are unchanged.",
+          "confidence": "high",
+          "challenge_questions": [
+            "Is the cap applied before or after the doubling — can a single delay exceed 60s?"
+          ],
+          "evidence": [
+            { "path": "src/retry.py" }
+          ]
+        },
+        {
+          "id": "t1.c2",
+          "kind": "risk",
+          "category": "concurrency",
+          "level": "medium",
+          "summary": "No jitter: concurrent clients that fail together will retry in lockstep.",
+          "detail": "Every caller computes the same schedule from the same base, so a thundering herd re-forms at each backoff step. The connection pool shares one retry policy across workers.",
+          "confidence": "medium",
+          "challenge_questions": [
+            "How many concurrent callers share this policy in production?",
+            "Would full-jitter change the p99 recovery time here?"
+          ],
+          "evidence": [
+            { "path": "src/retry.py", "note": "the schedule is deterministic per attempt" },
+            { "path": "src/client/pool.py", "note": "widened: the pool shares one policy instance" }
+          ]
+        },
+        {
+          "id": "t1.c3",
+          "kind": "verify",
+          "summary": "Run the retry timing tests and check one pins the 60s cap.",
+          "confidence": "high",
+          "challenge_questions": [
+            "Does any test fail if the cap is removed?"
+          ],
+          "evidence": [
+            { "note": "tests/test_retry.py exists but the diff does not touch it" }
+          ]
+        }
       ]
     },
     {
-      "category": "correctness",
-      "level": "medium",
-      "reason": "The per-file index must preserve changed-files order and represent renames, or the Review Route walks files in the wrong sequence.",
-      "challenge_questions": [
-        "Is fragments.json order identical to changed-files.json?",
-        "Are rename/copy records carrying both old and new path?"
+      "id": "t2",
+      "title": "Config key rename (drive-by)",
+      "summary": "RETRY_DELAY becomes RETRY_BASE_DELAY. Mechanical, but it is a public config surface — compatibility is the question, not the code.",
+      "paths": ["src/config.py"],
+      "claims": [
+        {
+          "id": "t2.c1",
+          "kind": "risk",
+          "category": "compatibility",
+          "level": "high",
+          "summary": "Deployments setting RETRY_DELAY silently lose their override — the old key is neither read nor warned about.",
+          "confidence": "high",
+          "challenge_questions": [
+            "Should the old key be honored for one release with a deprecation warning?"
+          ],
+          "evidence": [
+            { "path": "src/config.py" }
+          ]
+        },
+        {
+          "id": "t2.c2",
+          "kind": "omission",
+          "omission_kind": "docs",
+          "summary": "README still documents RETRY_DELAY; nothing in the diff updates it.",
+          "confidence": "high",
+          "challenge_questions": [
+            "Is the key documented anywhere else (deploy templates, runbooks)?"
+          ],
+          "evidence": [
+            { "note": "README.md is not among the changed files" }
+          ]
+        }
       ]
-    },
-    {
-      "category": "test_coverage",
-      "level": "low",
-      "reason": "Runner detection and the validator are new surfaces; under-testing them would let malformed analyses or wrong runner suggestions slip through.",
-      "challenge_questions": [
-        "Is every required analysis section exercised by a malformed-input case?",
-        "Is the read-only guarantee of runner detection asserted, not just assumed?"
-      ]
     }
   ],
-  "file_walkthrough": [
-    {
-      "path": "src/branch_review/analysis.py",
-      "explanation": "New deep module: the Analysis Schema Validator. Validates structure, types, and the closed risk/omission vocabularies, returning located errors."
-    },
-    {
-      "path": "src/branch_review/escape.py",
-      "explanation": "Adds file_fragment_id (traversal-safe hex id) and fragment_index_entry (one ordered index record, with omitted/reason for capped files)."
-    },
-    {
-      "path": "src/branch_review/collect.py",
-      "explanation": "Writes per-file fragments and fragments.json; rebuilds the fragments dir each run; disables core.quotePath for raw UTF-8 paths."
-    },
-    {
-      "path": "src/branch_review/runners.py",
-      "explanation": "Read-only test-runner detection across Python/Node/Go/Rust/Make, returning a suggested command and the marker file that justifies it."
-    }
-  ],
-  "suspicious_omissions": [
-    {
-      "summary": "No per-file cap or exclusion is applied yet.",
-      "kind": "other",
-      "detail": "The index carries omitted/reason fields, but the Change Classifier that populates them is issue #7; large/excluded files are not yet omitted."
-    },
-    {
-      "summary": "The cockpit's new sections are exercised end-to-end only by the lint tripwire, not a rendered-DOM assertion.",
-      "kind": "tests",
-      "detail": "Section structure is validated via analysis.json; the HTML authoring itself relies on the post-write lint."
-    }
-  ],
-  "test_checklist": {
+  "test_runner": {
     "runner": "pytest",
-    "runner_evidence": "pyproject.toml",
-    "command": "pytest",
-    "items": [
-      "Run the per-file fragment table tests (multi-file order, rename, HTML-in-one-file, unusual path).",
-      "Run the analysis validator tables (a complete file passes; each malformed section reports a located error).",
-      "Run the runner-detection tables, including the read-only (no process-spawning import) assertion."
-    ]
+    "runner_evidence": "pyproject.toml [tool.pytest.ini_options]",
+    "command": "pytest"
   },
-  "diagrams": [
-    {
-      "title": "Collection → analysis → cockpit",
-      "kind": "mermaid",
-      "source": "graph LR; collect[collect_review_context] --> frags[per-file fragments]; frags --> analysis[analysis.json]; analysis --> validate[validate_analysis]; validate --> cockpit[review.html]"
-    }
-  ]
+  "diagrams": []
 }

@@ -312,12 +312,14 @@ def test_failed_collect_preserves_prior_session_transcript(repo: Path) -> None:
         )
 
 
-def test_authored_cockpit_from_fragments_passes_lint(repo: Path) -> None:
-    """End-to-end: a cockpit assembled the way the SKILL instructs is lint-clean.
+def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None:
+    """End-to-end: a layered cockpit assembled the way the SKILL instructs is lint-clean.
 
-    Proves the Escape Boundary holds through the new #6 sections — a hostile path
+    Proves the Escape Boundary holds through the ADR-0009 layers — a hostile path
     and an HTML-in-hunk are injected only via ``path_html`` and the per-file
-    fragment, and the Cockpit Linter (issue #4) finds nothing to complain about.
+    fragment, wrapped in the L1/L2/L3 structure (thread section, claim <details>
+    with an evidence link, file <details> anchor, qa seam) — and the Cockpit
+    Linter (issue #4) finds nothing to complain about.
     """
     from branch_review.escape import STRICT_CSP
     from branch_review.lint import lint_cockpit
@@ -335,20 +337,38 @@ def test_authored_cockpit_from_fragments_passes_lint(repo: Path) -> None:
     index = _fragments_index(out)
     entry = index[odd]
     diff_frag = (out / str(entry["fragment"])).read_text(encoding="utf-8")
+    file_anchor = f"file-{entry['id']}"
 
-    # Build the File Walkthrough exactly as the SKILL prescribes: path from
-    # `path_html` (escaped), body from the per-file fragment (escaped), prose ours.
+    # Build the layers exactly as the SKILL prescribes: paths from `path_html`
+    # (escaped), diff bodies from the per-file fragments (escaped), prose ours.
     cockpit = (
         "<!doctype html><html><head><meta charset='utf-8'>"
         f"<meta http-equiv='Content-Security-Policy' content=\"{STRICT_CSP}\">"
         "<link rel='stylesheet' href='assets/cockpit.css'></head><body><main>"
         f"<header class='cockpit-head'>{header}</header>"
-        "<section><h2>Executive Summary</h2><p class='intent'>A test branch.</p></section>"
-        "<section><h2>File Walkthrough</h2>"
-        "<div class='walkthrough-file'>"
-        f"<h3>{entry['path_html']}</h3>"
-        "<p class='explanation'>This file is hostile by design.</p>"
-        f"{diff_frag}</div></section>"
+        "<section class='l0'><h2>Orientation</h2>"
+        "<p class='intent-read'>A test branch that adds a hostile file.</p>"
+        "<ul class='orientation'><li><a href='#t1'>t1 Hostile file</a></li></ul></section>"
+        "<section class='thread' id='t1'>"
+        "<h2><span class='thread-id'>t1</span> Hostile file</h2>"
+        "<p class='thread-summary'>One file designed to break escaping.</p>"
+        f"<p class='thread-paths'>{entry['path_html']}</p>"
+        "<details class='claim' id='t1.c1'><summary>"
+        "<span class='chip kind-risk'>risk</span> The payload could execute "
+        "<span class='chip confidence-high'>confidence: high</span>"
+        "<span class='chip risk-level medium'>medium</span></summary>"
+        "<div class='claim-body'><h4>Challenge</h4>"
+        "<ul class='challenge-questions'><li>Does the hunk render inert?</li></ul>"
+        "<h4>Evidence</h4><ul class='evidence-list'>"
+        f"<li><a href='#{file_anchor}'>{entry['path_html']}</a></li></ul>"
+        "</div></details></section>"
+        "<section><h2>Evidence</h2>"
+        f"<details class='file' id='{file_anchor}'>"
+        f"<summary>{entry['path_html']} <span class='file-stats'>"
+        f"<span class='added'>+{entry['added']}</span></span></summary>"
+        f"<div class='file-body'>{diff_frag}</div></details></section>"
+        "<section><h2>Test runner</h2><p class='runner-note'>none detected</p></section>"
+        "<!--brc:qa-log--><!--/brc:qa-log-->"
         "<script src='assets/app.js'></script></body></html>"
     )
 
