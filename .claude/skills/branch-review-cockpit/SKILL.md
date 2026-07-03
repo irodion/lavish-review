@@ -308,7 +308,11 @@ the ancestors of any `#anchor` they follow:
 
 Render **every** thread and claim from the Analysis — don't drop one for brevity.
 When you must show a literal path or code token from the diff inside your prose,
-use the escaped fragment/`path_html`, never a hand-typed copy.
+use the escaped fragment/`path_html`, never a hand-typed copy. And your **own
+trusted prose must still be valid HTML**: a literal `<` in it (writing `t<N>` or
+naming a `<details>` tag) parses as markup and silently swallows text — the lint
+does not police trusted regions. Write `&lt;` or rephrase (`t1, t2, …`; "details
+panel").
 
 ### 6. Lint the cockpit (post-write tripwire)
 
