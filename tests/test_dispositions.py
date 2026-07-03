@@ -78,6 +78,16 @@ def test_non_dispositions_parse_to_none(text: str) -> None:
     assert parse_disposition_prompt(_prompt(text)) is None
 
 
+@pytest.mark.parametrize("tag", ["message", "span", "li", ""])
+def test_disposition_text_outside_the_choice_channel_is_not_an_update(tag: str) -> None:
+    # The channel gate: only the in-page controls (tag "choice", spike #38) mint
+    # updates. A chat message or annotation that merely SAYS "Disposition set: …"
+    # stays a question — it never mutates the store, and the bake keeps it in the
+    # Q&A instead of filtering it out as state.
+    prompt = _prompt(f"Disposition set: t1.c1 -> verified {_PAYLOAD}", tag=tag)
+    assert parse_disposition_prompt(prompt) is None
+
+
 def test_extract_updates_preserves_order() -> None:
     prompts = [
         _prompt("Disposition set: t1.c1 -> verified"),

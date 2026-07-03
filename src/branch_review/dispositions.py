@@ -63,13 +63,20 @@ _PROMPT_LINE = re.compile(
 def parse_disposition_prompt(prompt: Prompt) -> tuple[str, str] | None:
     """Read one poll prompt as a disposition update, or ``None`` if it isn't one.
 
-    Prefers the structured ``Context data:`` JSON (``{kind: "disposition", claim,
-    disposition}``); falls back to the control's own prompt line. Both paths are
+    Gated on the control channel first: the in-page controls send ``tag: "choice"``
+    (the #38 spike's verified contract), so a free-form chat message
+    (``tag: "message"``) that merely *says* "Disposition set: …" is never an
+    update — it stays a question, is answered in chat, and survives in the baked
+    Q&A instead of being filtered out as state. Within the channel, prefers the
+    structured ``Context data:`` JSON (``{kind: "disposition", claim,
+    disposition}``) and falls back to the control's own prompt line. Both paths are
     strict: the claim id must have the ``t<N>.c<N>`` shape and the disposition must
     be in the closed vocabulary — hostile text that fails either is simply **not a
-    disposition** (it stays an ordinary question for the loop to answer), and text
-    that passes can only ever name an enum value, which is inert by construction.
+    disposition**, and text that passes can only ever name an enum value, which is
+    inert by construction.
     """
+    if prompt.tag != "choice":
+        return None
     match = _CONTEXT_DATA.search(prompt.prompt)
     if match:
         try:
