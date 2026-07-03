@@ -66,6 +66,12 @@ _FRAGMENTS_SCHEMA = "review-fragments/0.1"
 # owns "what a session's transcript comprises"; this is the analysis stage's file.)
 _ANALYSIS_NAME = "analysis.json"
 
+# The reviewer's disposition store (ADR-0012). Run-scoped by design: disposition
+# keys are the analysis's claim ids, which a regeneration re-mints — stale state
+# keyed by dead ids must not leak into the new review. A resume keeps it (no
+# collect), which is what carries dispositions across Esc / /review-resume.
+_DISPOSITIONS_NAME = "dispositions.json"
+
 
 class GitError(RuntimeError):
     """A ``git`` invocation failed."""
@@ -436,10 +442,12 @@ def _reset_run_scoped_artifacts(out_dir: Path) -> None:
     into the new ``review.html``/``review.md`` at close (the bake reads the default
     ``qa.jsonl`` beside the cockpit). ``analysis.json`` is cleared for the same reason
     in the analysis stage: a stale analysis must not survive into a run whose analyst
-    never wrote one (ADR-0011). A ``fresh`` resume keeps them all because it does not
-    call ``collect``. ``missing_ok`` so the ordinary "no prior run" case is a no-op.
+    never wrote one (ADR-0011). ``dispositions.json`` is keyed by that analysis's claim
+    ids, so it resets with it (ADR-0012). A ``fresh`` resume keeps them all because it
+    does not call ``collect``. ``missing_ok`` so the ordinary "no prior run" case is a
+    no-op.
     """
-    for name in (*RUN_SCOPED_ARTIFACTS, _ANALYSIS_NAME):
+    for name in (*RUN_SCOPED_ARTIFACTS, _ANALYSIS_NAME, _DISPOSITIONS_NAME):
         (out_dir / name).unlink(missing_ok=True)
 
 

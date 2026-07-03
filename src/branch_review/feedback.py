@@ -28,7 +28,10 @@ poll's raw output as-is (:data:`LAST_POLL_NAME`), pairing it with the answer.
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
+import re
 import subprocess  # nosec B404 — fixed npx/lavish-axi argv, shell=False (see _default_runner)
 import sys
 from collections.abc import Callable
@@ -62,6 +65,107 @@ LAST_POLL_NAME = "last-poll.toon"  # raw stdout of the most recent poll (the que
 # these when it (re)generates a context; a no-regeneration resume keeps them. Kept here,
 # beside the names, so there is one owner of "what a session's transcript comprises".
 RUN_SCOPED_ARTIFACTS = (QA_NAME, LAST_POLL_NAME, AGENT_REPLY_NAME)
+
+
+# --- The bounded prompt extractor (ADR-0007) ---------------------------------
+#
+# Owned here because this module owns the poll format: the loop writes each poll's
+# raw TOON (``last-poll.toon``), and everything that later reads prompts out of it —
+# the bake's Q&A fold, the dispositions bridge (ADR-0012) — goes through this one
+# extractor rather than re-parsing the TOON its own way.
+
+# Lavish emits queued feedback as one TOON tabular array: a header line declaring the
+# field order, then one indented data row per prompt. Anchored at column 0 so it can
+# never match the ``prompts[N]`` literals that appear *inside* the quoted
+# ``dom_snapshot`` scalar (which are indented/quoted), and bounded by the declared
+# count so the row scan stops before the next top-level key (e.g. ``next_step:``).
+_PROMPTS_HEADER = re.compile(r"^prompts\[(\d+)\]\{([^}]*)\}:[ \t]*$", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class Prompt:
+    """One queued reviewer prompt, lifted from the poll TOON's ``prompts[]`` block.
+
+    ``prompt`` is the reviewer's question. For a free-form chat message ``tag`` is
+    ``message`` and there is no anchored element; for an annotation ``tag`` is the
+    element's tag (``span``/``li``/…) and ``selector``/``text`` locate and quote the
+    annotated element or diff line. Every field is reviewer-originated untrusted data —
+    it crosses the Escape Boundary before rendering.
+    """
+
+    uid: str
+    prompt: str
+    selector: str
+    tag: str
+    text: str
+
+    @property
+    def is_annotation(self) -> bool:
+        """True when the prompt is anchored to a page element rather than free-form.
+
+        A free-form message (``tag == "message"``) has no meaningful ``selector``/``text``
+        to show; an annotation does, so the renderer shows its anchored line for context.
+        """
+        return self.tag not in ("", "message")
+
+
+def _split_toon_row(row: str) -> list[str]:
+    """Split one TOON data row into its fields, honouring TOON's quoting.
+
+    TOON quotes a field with double quotes and escapes an inner quote with a backslash
+    (``\\"``), not by doubling it — so the CSV reader runs with ``doublequote=False`` and
+    ``escapechar='\\'``. Unquoted fields (a question with no comma) pass through verbatim.
+    """
+    reader = csv.reader(
+        io.StringIO(row),
+        quotechar='"',
+        doublequote=False,
+        escapechar="\\",
+    )
+    try:
+        return next(reader)
+    except StopIteration:
+        return []
+
+
+def extract_prompts(toon: str) -> list[Prompt]:
+    """Lift the reviewer prompts from one poll's raw TOON — the bounded extractor (ADR-0007).
+
+    Finds the single column-0 ``prompts[N]{fields}:`` header, reads the field order from
+    its ``{…}``, and parses exactly ``N`` following indented rows into :class:`Prompt`
+    records. Returns ``[]`` when there is no prompts block (a ``waiting``/``ended`` poll)
+    or the header is malformed — a missing question degrades to an empty log, never a
+    crash. This is the *only* place anything is read out of the stored TOON, and it reads
+    nothing but this one block.
+    """
+    header = _PROMPTS_HEADER.search(toon)
+    if header is None:
+        return []
+    count = int(header.group(1))
+    fields = [name.strip() for name in header.group(2).split(",")]
+
+    prompts: list[Prompt] = []
+    for line in toon[header.end() :].splitlines():
+        if len(prompts) >= count:
+            break
+        if line.startswith((" ", "\t")):
+            if not line.strip():
+                continue
+            values = _split_toon_row(line.strip())
+            record = dict(zip(fields, values, strict=False))
+            prompts.append(
+                Prompt(
+                    uid=record.get("uid", ""),
+                    prompt=record.get("prompt", ""),
+                    selector=record.get("selector", ""),
+                    tag=record.get("tag", ""),
+                    text=record.get("text", ""),
+                )
+            )
+        elif line.strip():
+            break  # a non-indented, non-blank line is the next top-level key — block ended
+    return prompts
+
 
 # Exit codes that mean the answer reached the browser even though the poll did not
 # return normally: ``--agent-reply`` POSTs the answer *before* the long-poll begins,

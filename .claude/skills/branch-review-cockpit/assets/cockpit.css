@@ -311,6 +311,76 @@ details.file > .file-body { padding: 0.5rem 0.9rem 0.9rem; }
   font-size: 0.9rem;
 }
 
+/* Reviewer dispositions (ADR-0012) — JS-injected controls on each claim summary,
+   per-claim state tint, and per-thread progress. Absent entirely on file://. */
+.disposition-controls {
+  display: inline-flex;
+  gap: 0.3rem;
+  margin-left: auto; /* pushes the controls to the summary's right edge */
+}
+.disposition-controls button {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.disposition-controls button:hover { border-color: var(--accent); color: var(--fg); }
+.disposition-controls button[aria-pressed="true"] {
+  border-color: currentcolor;
+  font-weight: 600;
+}
+.disposition-controls button[aria-pressed="true"][data-disposition="verified"] {
+  color: var(--level-low);
+}
+.disposition-controls button[aria-pressed="true"][data-disposition="concern"] {
+  color: var(--level-high);
+}
+.disposition-controls button[aria-pressed="true"][data-disposition="question-open"] {
+  color: var(--warn);
+}
+details.claim[data-disposition="verified"] { border-left: 3px solid var(--level-low); }
+details.claim[data-disposition="concern"] { border-left: 3px solid var(--level-high); }
+details.claim[data-disposition="question-open"] { border-left: 3px solid var(--warn); }
+.thread-progress {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 0.6rem;
+}
+.thread-progress.has-concern { color: var(--warn); }
+
+/* Review outcome — the baked, close-time account of the reviewer's dispositions. */
+#review-outcome .outcome-counts { font-family: var(--mono); font-size: 0.85rem; }
+#review-outcome .outcome-list { margin: 0; padding-left: 1.1rem; }
+#review-outcome .outcome-list li { margin: 0.25rem 0; }
+#review-outcome .outcome-list code {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+#review-outcome .disposition {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid currentcolor;
+  white-space: nowrap;
+}
+#review-outcome .disposition.verified { color: var(--level-low); }
+#review-outcome .disposition.concern { color: var(--level-high); }
+#review-outcome .disposition.question-open { color: var(--warn); }
+#review-outcome .disposition.unreviewed { color: var(--muted); }
+#review-outcome .outcome-note { color: var(--muted); font-size: 0.85rem; font-style: italic; }
+
 /* Deep-link feedback: the element navigated to from a claim's evidence link. */
 :target { scroll-margin-top: 1rem; }
 details.file:target > summary,

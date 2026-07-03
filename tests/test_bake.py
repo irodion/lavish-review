@@ -419,6 +419,72 @@ def test_bake_review_contains_every_question_escaped_and_self_contained(tmp_path
     assert result.exchanges == 3 and result.prompts == 3 and result.csp_swapped
 
 
+_TOON_DISPOSITION = (
+    "prompts[1]{uid,prompt,selector,tag,text}:\n"
+    '  "9",Disposition set: t1.c1 -> concern,"summary > button",choice,disposition:concern\n'
+    'next_step: "..."\n'
+)
+
+
+def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -> None:
+    """ADR-0012 at close: the outcome states the reviewer's dispositions; disposition
+    updates are review state, not conversation, so they vanish from the Q&A log."""
+    cockpit = tmp_path / "review.html"
+    cockpit.write_text(_BASE_COCKPIT, encoding="utf-8")
+    analysis = tmp_path / "analysis.json"
+    analysis.write_text(json.dumps(_ANALYSIS), encoding="utf-8")
+    (tmp_path / "dispositions.json").write_text(
+        json.dumps(
+            {
+                "schema": "review-dispositions/0.1",
+                "dispositions": {"t1.c1": "concern", "t2.c1": "verified"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    qa = tmp_path / "qa.jsonl"
+    records = [
+        # A disposition-only exchange: its prompt AND its ack answer are filtered out.
+        {"seq": 1, "ts": "t", "feedback_raw": _TOON_DISPOSITION, "answer": "Recorded."},
+        {"seq": 2, "ts": "t", "feedback_raw": _TOON_MESSAGE, "answer": "a real answer"},
+    ]
+    qa.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    md = tmp_path / "review.md"
+
+    result = bake_review(cockpit, qa_path=qa, analysis_path=analysis, markdown_path=md)
+
+    baked = cockpit.read_text(encoding="utf-8")
+    assert 'id="review-outcome"' in baked
+    # The aggregate is the reviewer's; every claim is accounted for, unreviewed listed.
+    assert "verified 1 · concern 1 · question-open 0 · unreviewed 1" in baked
+    assert '<span class="disposition concern">concern</span> <code>t1.c1</code>' in baked
+    assert '<span class="disposition unreviewed">unreviewed</span> <code>t1.c2</code>' in baked
+    # The disposition exchange is state, not conversation — gone from the Q&A log.
+    assert "Disposition set:" not in baked
+    assert "Recorded." not in baked
+    assert "what it the main goal of the branch" in baked  # the real question stays
+    assert lint_cockpit(baked, csp_mode="strict") == []
+    assert result.exchanges == 1  # only the real exchange was folded
+
+    md_text = md.read_text(encoding="utf-8")
+    assert "## Review outcome" in md_text
+    assert "Reviewer dispositions — verified 1 · concern 1 · question-open 0 · unreviewed 1." in (
+        md_text
+    )
+    assert "- **concern** — t1.c1: R" in md_text
+    assert "- **unreviewed** — t1.c2: run it" in md_text
+    assert "Disposition set:" not in md_text
+    assert "no overall verdict" in md_text  # the attribution note (verdict line, ADR-0012)
+
+
+def test_outcome_absent_without_analysis(tmp_path: Path) -> None:
+    # No analysis → no claims to account for: the bake degrades to Q&A only.
+    cockpit = tmp_path / "review.html"
+    cockpit.write_text(_BASE_COCKPIT, encoding="utf-8")
+    bake_review(cockpit, qa_path=tmp_path / "absent.jsonl")
+    assert 'id="review-outcome"' not in cockpit.read_text(encoding="utf-8")
+
+
 def test_bake_review_empty_transcript_is_still_self_contained(tmp_path: Path) -> None:
     cockpit = tmp_path / "review.html"
     cockpit.write_text(_BASE_COCKPIT, encoding="utf-8")
