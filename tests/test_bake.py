@@ -250,6 +250,7 @@ _ANALYSIS = {
     "title": "My Review",
     "intent_summary": "Does a thing.",
     "widened_into": [],
+    "alignment": {"serves_goal": ["t1"], "drive_by": ["t2"]},
     "threads": [
         {
             "id": "t1",
@@ -276,7 +277,23 @@ _ANALYSIS = {
                     "evidence": [{"note": "n"}],
                 },
             ],
-        }
+        },
+        {
+            "id": "t2",
+            "title": "A rename that rode along",
+            "summary": "Unrelated to the goal.",
+            "paths": ["src/b.py"],
+            "claims": [
+                {
+                    "id": "t2.c1",
+                    "kind": "behavior",
+                    "summary": "B",
+                    "confidence": "high",
+                    "challenge_questions": ["Q2?"],
+                    "evidence": [{"path": "src/b.py"}],
+                },
+            ],
+        },
     ],
     "test_runner": {"runner": "pytest", "command": "pytest"},
     "diagrams": [],
@@ -294,10 +311,25 @@ def test_markdown_contains_review_and_qa() -> None:
     assert "\n- [ ] [verify] run it (confidence: high)" in md
     assert "### - [ ]" not in md
     assert "\n  - Does it pass?" in md  # its challenge question stays inside the item
+    # Goal alignment (ADR-0010): one orientation line, and drive-bys flagged in headings.
+    assert (
+        "Goal alignment — serving the stated goal: t1; drive-by (unrelated to the goal): t2." in md
+    )
+    assert "## t2 — A rename that rode along (drive-by)" in md
+    assert "## t1 — The thing\n" in md  # a goal-serving thread carries no flag
     assert "`pytest`" in md
     assert "## Q&A Log" in md
     assert "what it the main goal of the branch" in md
     assert "the answer" in md
+
+
+def test_markdown_null_alignment_has_no_goal_line() -> None:
+    # No stated goal (alignment null, ADR-0010): the export carries no alignment
+    # line and flags nothing — silence, not an invented judgement.
+    analysis = dict(_ANALYSIS, alignment=None)
+    md = build_markdown(analysis, [])
+    assert "Goal alignment" not in md
+    assert "(drive-by)" not in md
 
 
 def test_markdown_without_analysis_still_has_qa() -> None:

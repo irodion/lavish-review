@@ -166,6 +166,35 @@ def test_repo_lens_fields() -> None:
     assert resolved.language_hints == ("cpp", "python")
 
 
+# goal_remote_fetch (ADR-0010): the one key both scopes accept; repo wins; default on.
+_GOAL_FETCH_CASES: list[tuple[str, dict[str, object], dict[str, object], bool]] = [
+    ("default on", {}, {}, True),
+    ("machine disables", {}, {"goal_remote_fetch": False}, False),
+    ("repo disables", {"goal_remote_fetch": False}, {}, False),
+    (
+        "repo on wins over machine off",
+        {"goal_remote_fetch": True},
+        {"goal_remote_fetch": False},
+        True,
+    ),
+    (
+        "repo off wins over machine on",
+        {"goal_remote_fetch": False},
+        {"goal_remote_fetch": True},
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label, repo, machine, expected", _GOAL_FETCH_CASES, ids=[c[0] for c in _GOAL_FETCH_CASES]
+)
+def test_goal_remote_fetch_precedence(
+    label: str, repo: dict[str, object], machine: dict[str, object], expected: bool
+) -> None:
+    assert resolve(repo=repo, machine=machine).goal_remote_fetch is expected
+
+
 # --- classifier wiring: excludes extend by default; exclude_reset replaces --
 
 
@@ -213,6 +242,8 @@ _INVALID_CONFIGS: list[tuple[str, dict[str, object], dict[str, object]]] = [
     ("exclude_reset not bool", {"exclude_reset": "yes"}, {}),
     ("sessionstart_hook not bool", {}, {"sessionstart_hook": "on"}),
     ("focus wrong type", {"focus": ["a"]}, {}),
+    ("goal_remote_fetch not bool (repo)", {"goal_remote_fetch": "no"}, {}),
+    ("goal_remote_fetch not bool (machine)", {}, {"goal_remote_fetch": 1}),
 ]
 
 
@@ -288,4 +319,5 @@ def test_resolved_config_dict_shape() -> None:
         "pause": None,
         "lavish_version": None,
         "sessionstart_hook": False,
+        "goal_remote_fetch": True,
     }

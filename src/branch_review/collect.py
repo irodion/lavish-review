@@ -18,6 +18,7 @@ import argparse
 import json
 import subprocess  # nosec B404 — only fixed git argv, shell=False (see _run_git)
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +42,12 @@ from branch_review.escape import (
     notice_fragment,
 )
 from branch_review.feedback import RUN_SCOPED_ARTIFACTS
+from branch_review.goal import (
+    IssueRef,
+    fetch_issue_via_gh,
+    read_goal_file,
+    resolve_goal,
+)
 
 # Base auto-detect fallbacks, tried in order when origin/HEAD is absent.
 _BASE_CANDIDATES = ("main", "develop", "master")
@@ -213,6 +220,10 @@ class ReviewContext:
     generated_at: str
     changed_file_count: int
     is_empty: bool
+    # Goal Evidence (ADR-0010): the stated purpose the branch serves —
+    # ``{text, source, provenance}`` — or ``None`` when no goal was found (the
+    # cockpit's L0 then says so rather than dressing an inferred intent up as one).
+    goal: dict[str, str] | None = None
 
 
 def _build_context(
@@ -238,6 +249,24 @@ def _build_context(
         is_empty=not files,
     )
     return context, files
+
+
+def _branch_commits(log_range: str, cwd: Path) -> list[tuple[str, str]]:
+    """The range's commits as ``(short_sha, full_message)`` pairs, oldest first.
+
+    Goal Evidence's local substrate (ADR-0010): issue references are discovered in
+    these messages, and the first commit's message is the offline fallback text.
+    ``-z`` NUL-separates the records and ``%x1f`` splits the sha from the message,
+    so a hostile commit message (which may contain anything but NUL) round-trips
+    verbatim as data — it is never re-parsed from a display format.
+    """
+    out = _run_git(["log", "--reverse", "-z", "--format=%h%x1f%B", log_range], cwd, strip=False)
+    commits: list[tuple[str, str]] = []
+    for record in out.split("\0"):
+        sha, sep, message = record.partition("\x1f")
+        if sep:
+            commits.append((sha.strip(), message))
+    return commits
 
 
 def _per_file_diff(diff_range: str, record: dict[str, str], cwd: Path) -> str:
@@ -426,6 +455,8 @@ def collect(
     config: ClassifierConfig | None = None,
     home: Path | None = None,
     now: datetime | None = None,
+    goal: str | None = None,
+    fetch_issue: Callable[[IssueRef], str | None] | None = None,
 ) -> ReviewContext:
     """Collect the Review context for the current branch into ``out_dir``.
 
@@ -440,6 +471,13 @@ def collect(
     An explicit ``config`` overrides the resolved Change Classifier policy (used in tests);
     ``home`` overrides the machine-config location (also for tests). The base still comes
     from the resolver so an explicit ``config`` doesn't disable repo ``base_branch``.
+
+    ``goal`` is the explicit ``--goal`` argument (issue ref, file, or literal text —
+    ADR-0010); when ``None`` the Goal Evidence is discovered from the branch name and
+    commit messages, fetched through ``gh`` only when the resolved
+    ``goal_remote_fetch`` allows and local evidence names an issue. ``fetch_issue``
+    overrides the ``gh`` fetcher (for tests — pass one that raises to prove a run
+    stayed network-free).
     """
     root = repo_root(cwd)
     resolved = resolve_config(root, arg_base=base, home=home)
@@ -453,8 +491,26 @@ def collect(
     commits = _run_git(["log", "--oneline", f"{resolved_base}..HEAD"], root)
     commit_lines = commits.splitlines()
 
+    # Goal Evidence (ADR-0010): the stated purpose the branch serves. Explicit
+    # ``--goal`` wins and is never guessed over; otherwise issue refs discovered in
+    # the branch name / commit messages are resolved through ``gh`` (only when the
+    # resolved policy allows — the default run stays network-free unless local
+    # evidence names an issue), degrading to the first commit's message, then to
+    # ``None``. A failed fetch is a degraded goal, never a failed review.
+    goal_evidence, goal_warnings = resolve_goal(
+        argument=goal,
+        branch=context.branch,
+        commits=_branch_commits(f"{resolved_base}..HEAD", root),
+        remote_enabled=resolved.goal_remote_fetch,
+        fetch_issue=fetch_issue or (lambda ref: fetch_issue_via_gh(ref, root)),
+        read_file=read_goal_file,
+    )
+    for warning in goal_warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    context = replace(context, goal=asdict(goal_evidence) if goal_evidence else None)
+
     # Untrusted data crosses the Escape Boundary here: the diff and the
-    # path/commit/branch fragments are pre-escaped and marker-delimited so the
+    # path/commit/branch/goal fragments are pre-escaped and marker-delimited so the
     # agent injects them verbatim and the Cockpit Linter can prove they are safe.
     fragments = build_fragments(
         branch=context.branch,
@@ -463,6 +519,7 @@ def collect(
         changed_file_count=context.changed_file_count,
         files=files,
         commit_lines=commit_lines,
+        goal=context.goal,
     )
 
     # Classify per-file and resolve the total-diff verdict (issue #7) *before*
@@ -554,10 +611,22 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Vendored assets dir to copy into <out>/assets.",
     )
+    parser.add_argument(
+        "--goal",
+        default=None,
+        help="Stated goal: an issue ref (#40, owner/repo#40, a GitHub URL), a file, "
+        "or literal text (default: discover from branch name / commit messages).",
+    )
     args = parser.parse_args(argv)
 
     try:
-        context = collect(args.repo, base=args.base, out_dir=args.out, assets_dir=args.assets_dir)
+        context = collect(
+            args.repo,
+            base=args.base,
+            out_dir=args.out,
+            assets_dir=args.assets_dir,
+            goal=args.goal,
+        )
     except (GitError, BaseResolutionError, FileNotFoundError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -565,6 +634,10 @@ def main(argv: list[str] | None = None) -> int:
     out = args.out or (repo_root(args.repo) / ".review-agent")
     print(f"Review context written to {out}")
     print(f"  base={context.base} branch={context.branch} files={context.changed_file_count}")
+    if context.goal is not None:
+        print(f"  goal: {context.goal['source']} — {context.goal['provenance']}")
+    else:
+        print("  goal: none found (L0 says so; intent is inferred from the diff)")
     if context.is_empty:
         print("  (no changes in range — nothing to review)")
     return 0

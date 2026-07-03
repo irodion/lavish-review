@@ -3,6 +3,10 @@
   "title": "Retry backoff becomes exponential; config key renamed",
   "intent_summary": "Replaces the fixed 1s retry delay with capped exponential backoff so a struggling upstream is not hammered at a constant rate, and renames the RETRY_DELAY config key to RETRY_BASE_DELAY to match the new meaning.",
   "widened_into": ["src/client/pool.py"],
+  "alignment": {
+    "serves_goal": ["t1"],
+    "drive_by": ["t2"]
+  },
   "threads": [
     {
       "id": "t1",
@@ -42,6 +46,20 @@
         },
         {
           "id": "t1.c3",
+          "kind": "omission",
+          "omission_kind": "goal",
+          "summary": "The stated goal asked for jitter on the backoff; nothing in the branch adds it.",
+          "detail": "The issue names 'exponential backoff with jitter'; the new schedule is deterministic. Either the omission is deliberate (worth saying where) or the goal is not fully served.",
+          "confidence": "high",
+          "challenge_questions": [
+            "Was jitter deliberately deferred, or missed?"
+          ],
+          "evidence": [
+            { "path": "src/retry.py", "note": "the schedule has no random component" }
+          ]
+        },
+        {
+          "id": "t1.c4",
           "kind": "verify",
           "summary": "Run the retry timing tests and check one pins the 60s cap.",
           "confidence": "high",

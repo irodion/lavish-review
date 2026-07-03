@@ -312,14 +312,63 @@ def test_failed_collect_preserves_prior_session_transcript(repo: Path) -> None:
         )
 
 
+def _forbid_fetch(ref: object) -> str | None:
+    raise AssertionError(f"the tracker must not be contacted (asked for {ref!r})")
+
+
+def test_collect_goal_defaults_to_first_commit_message(repo: Path) -> None:
+    # No --goal and no issue refs anywhere ("feature", "feat: bump x"): local
+    # evidence degrades to the first branch commit's message, and no fetch is ever
+    # attempted — the default review stays network-free (ADR-0010).
+    context = collect(repo, fetch_issue=_forbid_fetch)
+    assert context.goal is not None
+    assert context.goal["source"] == "commits"
+    assert context.goal["text"] == "feat: bump x"
+    saved = json.loads((repo / ".review-agent" / "context.json").read_text(encoding="utf-8"))
+    assert saved["goal"] == context.goal
+    fragments = (repo / ".review-agent" / "fragments.html").read_text(encoding="utf-8")
+    assert "<!-- fragment: goal -->" in fragments and "feat: bump x" in fragments
+
+
+def test_explicit_goal_text_wins_and_crosses_the_boundary(repo: Path) -> None:
+    context = collect(repo, goal='Ship <it> & "win"', fetch_issue=_forbid_fetch)
+    assert context.goal is not None and context.goal["source"] == "argument"
+    fragments = (repo / ".review-agent" / "fragments.html").read_text(encoding="utf-8")
+    assert "Ship &lt;it&gt; &amp; &quot;win&quot;" in fragments
+    assert "Ship <it>" not in fragments
+
+
+def test_goal_issue_ref_resolves_through_the_fetcher(repo: Path) -> None:
+    # home=repo keeps the machine scope hermetic (no ~/.review-agent interference).
+    context = collect(repo, goal="#7", home=repo, fetch_issue=lambda ref: "Issue body 7")
+    assert context.goal is not None
+    assert context.goal["source"] == "issue"
+    assert context.goal["text"] == "Issue body 7"
+    assert "#7" in context.goal["provenance"]
+
+
+def test_repo_config_disables_remote_goal_fetch(repo: Path) -> None:
+    # goal_remote_fetch: false is wholesale: even an explicit --goal issue ref is
+    # not fetched — and being explicit, it is never guessed over: the run completes
+    # degraded (goal null), not substituted with local evidence.
+    (repo / ".review-agent.yaml").write_text("goal_remote_fetch: false\n", encoding="utf-8")
+    context = collect(repo, goal="#7", fetch_issue=_forbid_fetch)
+    assert context.goal is None
+    saved = json.loads((repo / ".review-agent" / "context.json").read_text(encoding="utf-8"))
+    assert saved["goal"] is None
+    fragments = (repo / ".review-agent" / "fragments.html").read_text(encoding="utf-8")
+    assert "No stated goal found; intent inferred from the diff." in fragments
+
+
 def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None:
     """End-to-end: a layered cockpit assembled the way the SKILL instructs is lint-clean.
 
-    Proves the Escape Boundary holds through the ADR-0009 layers — a hostile path
-    and an HTML-in-hunk are injected only via ``path_html`` and the per-file
-    fragment, wrapped in the L1/L2/L3 structure (thread section, claim <details>
-    with an evidence link, file <details> anchor, qa seam) — and the Cockpit
-    Linter (issue #4) finds nothing to complain about.
+    Proves the Escape Boundary holds through the ADR-0009 layers — a hostile path,
+    an HTML-in-hunk, and a hostile stated goal (ADR-0010) are injected only via
+    ``path_html``, the per-file fragment, and the pre-escaped goal block in
+    ``fragments.html``, wrapped in the L0/L1/L2/L3 structure (goal + orientation,
+    thread section, claim <details> with an evidence link, file <details> anchor,
+    qa seam) — and the Cockpit Linter (issue #4) finds nothing to complain about.
     """
     from branch_review.escape import STRICT_CSP
     from branch_review.lint import lint_cockpit
@@ -330,7 +379,7 @@ def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None
     (repo / odd).write_text('html = "<img src=x onerror=alert(1)>"\n')
     _git(repo, "add", "--", odd)
     _git(repo, "commit", "-m", "feat: hostile path and hunk")
-    collect(repo)
+    collect(repo, goal="Ship the hostile file <img src=x onerror=alert(2)> safely")
     out = repo / ".review-agent"
 
     header = (out / "fragments.html").read_text(encoding="utf-8")
@@ -378,10 +427,14 @@ def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None
     errors = lint_cockpit(cockpit, styling="vendored")
     assert errors == [], errors
     # And the payloads really are neutralised, not merely tolerated: every hostile
-    # angle bracket became an entity, so neither the path nor the hunk can form a tag.
+    # angle bracket became an entity, so neither the path, the hunk, nor the goal
+    # can form a tag.
     assert "inj<x>" not in cockpit  # the angle brackets in the path are escaped
-    assert "<img" not in cockpit  # the hunk's tag is escaped to &lt;img (inert text)
+    assert "<img" not in cockpit  # the hunk's and goal's tags are escaped (inert)
     assert "&lt;img" in cockpit
+    # The goal block rode in with the pasted fragments.html header, inert.
+    assert 'class="goal-text"' in cockpit
+    assert "onerror=alert(2)&gt;" in cockpit  # visible text, not an attribute
 
 
 def test_explicit_base_overrides_autodetect(repo: Path) -> None:

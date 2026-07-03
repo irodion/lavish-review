@@ -438,11 +438,45 @@ def _md_section(title: str, body: str) -> list[str]:
     return [f"## {title}", "", body, ""]
 
 
+def _drive_by_threads(analysis: Mapping[str, object]) -> set[str]:
+    """The thread ids ``alignment`` flags as drive-bys (empty when no stated goal)."""
+    alignment = analysis.get("alignment")
+    if not isinstance(alignment, Mapping):
+        return set()
+    raw = alignment.get("drive_by")
+    if not isinstance(raw, list):
+        return set()
+    return {t for t in raw if isinstance(t, str)}
+
+
+def _alignment_line(analysis: Mapping[str, object]) -> str:
+    """One goal-alignment sentence for the Orientation (ADR-0010), or ``""``.
+
+    Rendered only when ``alignment`` is an object — a stated goal existed and the
+    threads were measured against it. Goal-unserved work needs no line here: it is
+    ``omission`` claims (kind ``goal``) that render with their threads.
+    """
+    alignment = analysis.get("alignment")
+    if not isinstance(alignment, Mapping):
+        return ""
+    serves = alignment.get("serves_goal")
+    drive_by = alignment.get("drive_by")
+    bits: list[str] = []
+    if isinstance(serves, list) and serves:
+        bits.append(f"serving the stated goal: {', '.join(str(t) for t in serves)}")
+    if isinstance(drive_by, list) and drive_by:
+        bits.append(f"drive-by (unrelated to the goal): {', '.join(str(t) for t in drive_by)}")
+    if not bits:
+        return ""
+    return f"Goal alignment — {'; '.join(bits)}."
+
+
 def build_markdown(analysis: Mapping[str, object] | None, exchanges: Sequence[Exchange]) -> str:
     """Build ``review.md`` from the Analysis and the Q&A — for pasting into a PR.
 
-    Renders the reviewer-facing Analysis (the L0 orientation, then each thread with
-    its claims — verify claims as checkboxes) followed by the Q&A Log. ``analysis``
+    Renders the reviewer-facing Analysis (the L0 orientation with its goal-alignment
+    line, then each thread with its claims — verify claims as checkboxes, drive-by
+    threads flagged in their headings) followed by the Q&A Log. ``analysis``
     may be ``None`` (no ``analysis.json``) — the export then carries the Q&A alone rather
     than failing. The Analysis is the agent's own trusted prose; reviewer-originated text
     in the Q&A goes through :func:`_fenced` so it cannot break the Markdown.
@@ -451,14 +485,18 @@ def build_markdown(analysis: Mapping[str, object] | None, exchanges: Sequence[Ex
     title = str(analysis.get("title") or "Branch Review")
     out: list[str] = [f"# {title}", ""]
 
-    out += _md_section("Orientation", str(analysis.get("intent_summary") or ""))
+    orientation_parts = [str(analysis.get("intent_summary") or ""), _alignment_line(analysis)]
+    out += _md_section("Orientation", "\n\n".join(p for p in orientation_parts if p.strip()))
 
+    drive_by = _drive_by_threads(analysis)
     threads = analysis.get("threads")
     if isinstance(threads, list):
         for thread in threads:
             if not isinstance(thread, Mapping):
                 continue
             heading = f"{thread.get('id', '')} — {thread.get('title', '')}".strip(" —")
+            if thread.get("id") in drive_by:
+                heading += " (drive-by)"
             out += _md_section(heading, _format_thread(thread))
 
     runner_block = analysis.get("test_runner")
