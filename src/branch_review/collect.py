@@ -447,9 +447,6 @@ def collect(
     resolved_base = resolved.base_branch or detect_base(root)
     out = out_dir or (root / ".review-agent")
     out.mkdir(parents=True, exist_ok=True)
-    # A new generation begins a new session: clear the prior transcript so a stale or
-    # different-branch regeneration never bakes an earlier branch's Q&A into the cockpit.
-    _reset_run_scoped_artifacts(out)
 
     context, files = _build_context(resolved_base, root, now=now or datetime.now(UTC))
     diff_stat = _run_git(["diff", "--stat", context.diff_range], root)
@@ -487,6 +484,15 @@ def collect(
     else:
         diff_text = _run_git(["diff", context.diff_range], root, strip=False)
         diff_html = diff_fragment(diff_text)
+
+    # A new generation begins a new session: clear the prior transcript so a stale or
+    # different-branch regeneration never bakes an earlier branch's Q&A into the cockpit.
+    # Deliberately after EVERY git read of the run (base/diff/log above, the per-file
+    # fragment diffs, and the whole-diff body): if any of them fails — a mistyped base,
+    # a vanished ref — the existing review's transcript survives so /review-close can
+    # still bake the discussion. Only the fragment writes precede this point, and they
+    # touch neither the transcript nor the already-authored cockpit.
+    _reset_run_scoped_artifacts(out)
 
     # Always UTF-8 so non-ASCII diffs/paths/messages round-trip deterministically
     # regardless of the platform default encoding, and so the HTML fragment is the

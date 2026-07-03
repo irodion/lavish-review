@@ -36,10 +36,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-# The pinned Lavish-AXI release the whole skill drives (matches SKILL.md step 5).
-# Centralised here so the loop and the open step never drift; per-machine override
-# is issue #10 (configuration).
+# The pinned Lavish-AXI release the whole skill drives by default (matches SKILL.md).
+# Centralised here so the loop and the open step never drift. A per-machine
+# ``lavish_version`` (issue #10) overrides it per run: :func:`resolve_lavish_pkg` reads
+# the collector's ``resolved-config.json`` beside the cockpit and pins that instead.
 LAVISH_PKG = "lavish-axi@0.1.31"
+
+# The resolved policy the collector writes beside the cockpit (collect.py); the loop
+# reads only its ``lavish_version`` key.
+RESOLVED_CONFIG_NAME = "resolved-config.json"
 
 # The canonical cockpit path. Lavish keys a session by this file path, so resume is
 # just re-polling the same path — no regeneration (ADR-0003).
@@ -108,9 +113,36 @@ def _default_runner(argv: list[str]) -> LavishResult:
     )
 
 
-def _lavish_argv(*args: str) -> list[str]:
+def resolve_lavish_pkg(cockpit: Path) -> str:
+    """The ``lavish-axi`` package spec for this run's cockpit.
+
+    Honors the per-machine ``lavish_version`` (issue #10): the Config Resolver
+    validated it and the collector wrote it to ``resolved-config.json`` beside the
+    cockpit; a set version pins ``lavish-axi@<version>`` for open/poll/reply/end.
+    Absent file, absent/null key, or an unreadable JSON fall back to the bundled
+    default — a degraded config must never block the answer loop (an unreadable
+    file is warned about on stderr, since the collector just wrote it).
+    """
+    config_path = cockpit.parent / RESOLVED_CONFIG_NAME
+    if not config_path.is_file():
+        return LAVISH_PKG
+    try:
+        resolved = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(
+            f"warning: cannot read {config_path} ({exc}); using {LAVISH_PKG}",
+            file=sys.stderr,
+        )
+        return LAVISH_PKG
+    version = resolved.get("lavish_version") if isinstance(resolved, dict) else None
+    if isinstance(version, str) and version.strip():
+        return f"lavish-axi@{version.strip()}"
+    return LAVISH_PKG
+
+
+def _lavish_argv(pkg: str, *args: str) -> list[str]:
     """The argv for one pinned ``lavish-axi`` subcommand, via ``npx -y``."""
-    return ["npx", "-y", LAVISH_PKG, *args]
+    return ["npx", "-y", pkg, *args]
 
 
 def _was_delivered(result: LavishResult) -> bool:
@@ -171,6 +203,7 @@ def poll(
     *,
     runner: Runner = _default_runner,
     echo: bool = True,
+    pkg: str | None = None,
 ) -> int:
     """Block on ``lavish-axi poll`` once and surface the result to the agent.
 
@@ -180,7 +213,7 @@ def poll(
     question it answers. Nothing is logged here — there is no answer yet.
     """
     out_dir = cockpit.parent
-    result = runner(_lavish_argv("poll", str(cockpit)))
+    result = runner(_lavish_argv(pkg or resolve_lavish_pkg(cockpit), "poll", str(cockpit)))
     if result.returncode == 0:
         (out_dir / LAST_POLL_NAME).write_text(result.stdout, encoding="utf-8")
         _emit(result.stdout, echo=echo)
@@ -194,6 +227,7 @@ def reply(
     runner: Runner = _default_runner,
     echo: bool = True,
     now: datetime | None = None,
+    pkg: str | None = None,
 ) -> int:
     """Show the agent's answer in the browser, log the exchange, and re-block.
 
@@ -220,7 +254,11 @@ def reply(
     # overwrite it with the next one below.
     feedback_raw = last_poll_path.read_text(encoding="utf-8") if last_poll_path.is_file() else ""
 
-    result = runner(_lavish_argv("poll", str(cockpit), "--agent-reply", answer))
+    result = runner(
+        _lavish_argv(
+            pkg or resolve_lavish_pkg(cockpit), "poll", str(cockpit), "--agent-reply", answer
+        )
+    )
 
     if _was_delivered(result):
         append_exchange(
@@ -235,9 +273,9 @@ def reply(
     return result.returncode
 
 
-def end(cockpit: Path, *, runner: Runner = _default_runner) -> int:
+def end(cockpit: Path, *, runner: Runner = _default_runner, pkg: str | None = None) -> int:
     """End the Lavish session cleanly — the ``/review-close`` control."""
-    return runner(_lavish_argv("end", str(cockpit))).returncode
+    return runner(_lavish_argv(pkg or resolve_lavish_pkg(cockpit), "end", str(cockpit))).returncode
 
 
 def main(argv: list[str] | None = None) -> int:

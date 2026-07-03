@@ -292,6 +292,26 @@ def test_regeneration_clears_prior_session_transcript(repo: Path) -> None:
         assert not (out / name).exists(), f"{name} should be cleared on regeneration"
 
 
+def test_failed_collect_preserves_prior_session_transcript(repo: Path) -> None:
+    # A mistyped /review-branch base (or a repo config naming a missing branch) must
+    # not destroy the active review's transcript: the reset runs only after the new
+    # run's base/diff reads succeed, so /review-close can still bake the discussion.
+    from branch_review.feedback import RUN_SCOPED_ARTIFACTS
+
+    out = repo / ".review-agent"
+    out.mkdir()
+    for name in RUN_SCOPED_ARTIFACTS:
+        (out / name).write_text("live transcript\n", encoding="utf-8")
+
+    with pytest.raises(BaseResolutionError):
+        collect(repo, base="release/no-such-branch")
+
+    for name in RUN_SCOPED_ARTIFACTS:
+        assert (out / name).read_text(encoding="utf-8") == "live transcript\n", (
+            f"{name} must survive a failed collect"
+        )
+
+
 def test_authored_cockpit_from_fragments_passes_lint(repo: Path) -> None:
     """End-to-end: a cockpit assembled the way the SKILL instructs is lint-clean.
 
