@@ -41,7 +41,7 @@
           ],
           "evidence": [
             { "path": "src/retry.py", "note": "the schedule is deterministic per attempt" },
-            { "path": "src/client/pool.py", "note": "widened: the pool shares one policy instance" }
+            { "note": "widened: src/client/pool.py — the pool shares one policy instance" }
           ]
         },
         {

@@ -170,9 +170,13 @@ def _as_objects(
 def _validate_evidence(value: object, loc: str) -> list[AnalysisError]:
     """``evidence``: ≥1 ``{path?, note?}`` refs — a claim must be substantiated.
 
-    ``path`` links the claim to a changed (or widened-into) file's L3 fragment;
-    ``note`` anchors evidence that has no single file ("no test touches this").
-    Each entry needs at least one of the two.
+    ``path`` links the claim to a **changed** file's L3 fragment (a
+    ``fragments.json`` entry); ``note`` anchors evidence that has no L3 anchor —
+    prose ("no test touches this") and **widened-into** files, which have no diff
+    fragment and therefore must never be a ``path``. Each entry needs at least one
+    of the two. Whether a path names a real changed file is not checked here: the
+    validator is pure (it never sees ``fragments.json``); the authoring contract
+    owns that rule.
     """
     objects, errors = _as_objects(value, loc)
     if not errors and not objects:
