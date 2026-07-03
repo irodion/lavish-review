@@ -520,14 +520,16 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
     assert lint_cockpit(baked, csp_mode="strict") == []
     assert result.exchanges == 1  # only the real exchange was folded
 
-    # Re-baking is still idempotent with the stamps in place.
-    bake_review(cockpit, qa_path=qa, analysis_path=analysis)
+    # Re-baking is still idempotent with the stamps in place — for the Markdown
+    # export too (regenerated wholesale, so the md_text asserts below read the
+    # SECOND bake's output and the heading count proves nothing duplicated).
+    bake_review(cockpit, qa_path=qa, analysis_path=analysis, markdown_path=md)
     rebaked = cockpit.read_text(encoding="utf-8")
     assert rebaked.count("data-disposition") == baked.count("data-disposition")
     assert rebaked.count('id="review-outcome"') == 1
 
     md_text = md.read_text(encoding="utf-8")
-    assert "## Review outcome" in md_text
+    assert md_text.count("## Review outcome") == 1
     assert "Reviewer dispositions — verified 1 · concern 1 · question-open 0 · unreviewed 1." in (
         md_text
     )
