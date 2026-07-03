@@ -72,6 +72,10 @@ _ANALYSIS_NAME = "analysis.json"
 # collect), which is what carries dispositions across Esc / /review-resume.
 _DISPOSITIONS_NAME = "dispositions.json"
 
+# The live-injected evidence record (issue #43) — keyed by the same run-scoped
+# claim ids, so it resets and survives exactly like the disposition store.
+_EVIDENCE_NAME = "live-evidence.json"
+
 
 class GitError(RuntimeError):
     """A ``git`` invocation failed."""
@@ -447,7 +451,7 @@ def _reset_run_scoped_artifacts(out_dir: Path) -> None:
     does not call ``collect``. ``missing_ok`` so the ordinary "no prior run" case is a
     no-op.
     """
-    for name in (*RUN_SCOPED_ARTIFACTS, _ANALYSIS_NAME, _DISPOSITIONS_NAME):
+    for name in (*RUN_SCOPED_ARTIFACTS, _ANALYSIS_NAME, _DISPOSITIONS_NAME, _EVIDENCE_NAME):
         (out_dir / name).unlink(missing_ok=True)
 
 

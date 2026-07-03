@@ -276,12 +276,13 @@ def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
 
 
 def _run_scoped_names() -> tuple[str, ...]:
-    # The transcript files plus the analyst's analysis (ADR-0011) and the reviewer's
-    # dispositions (ADR-0012 — keyed by that analysis's claim ids): all run-scoped,
-    # all cleared on regeneration, all preserved when a collect fails.
+    # The transcript files plus the analyst's analysis (ADR-0011), the reviewer's
+    # dispositions (ADR-0012), and the live-injected evidence (issue #43) — the
+    # latter two keyed by that analysis's claim ids: all run-scoped, all cleared on
+    # regeneration, all preserved when a collect fails.
     from branch_review.feedback import RUN_SCOPED_ARTIFACTS
 
-    return (*RUN_SCOPED_ARTIFACTS, "analysis.json", "dispositions.json")
+    return (*RUN_SCOPED_ARTIFACTS, "analysis.json", "dispositions.json", "live-evidence.json")
 
 
 def test_regeneration_clears_prior_run_artifacts(repo: Path) -> None:
@@ -420,6 +421,7 @@ def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None
         "<ul class='challenge-questions'><li>Does the hunk render inert?</li></ul>"
         "<h4>Evidence</h4><ul class='evidence-list'>"
         f"<li><a href='#{file_anchor}'>{entry['path_html']}</a></li></ul>"
+        "<!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1-->"
         "</div></details></section>"
         "<section><h2>Evidence</h2>"
         f"<details class='file' id='{file_anchor}'>"
