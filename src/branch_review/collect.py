@@ -58,6 +58,14 @@ _ASSET_NAMES = ("cockpit.css", "app.js")
 _SCHEMA = "review-context/0.1-skeleton"
 _FRAGMENTS_SCHEMA = "review-fragments/0.1"
 
+# The isolated analyst's output from a prior run (ADR-0011). Cleared with the
+# transcript on regeneration: claim formation is run-scoped, and a stale analysis
+# surviving into a new run would be validated and rendered as-is if the fresh
+# analyst pass ever failed to write — the reviewer would see claims formed against
+# a different diff. (Named here, not in feedback.RUN_SCOPED_ARTIFACTS: that tuple
+# owns "what a session's transcript comprises"; this is the analysis stage's file.)
+_ANALYSIS_NAME = "analysis.json"
+
 
 class GitError(RuntimeError):
     """A ``git`` invocation failed."""
@@ -420,16 +428,18 @@ def _write_file_fragments(
 
 
 def _reset_run_scoped_artifacts(out_dir: Path) -> None:
-    """Delete the prior session's feedback-loop transcript so a regenerated Review is clean.
+    """Delete the prior run's transcript and analysis so a regenerated Review is clean.
 
     ``collect`` runs only when a cockpit is (re)generated — never on a no-regeneration
     resume — so clearing ``qa.jsonl``/``last-poll.toon``/``agent-reply.txt`` here is what
     keeps a stale or different-branch regeneration from folding a previous session's Q&A
     into the new ``review.html``/``review.md`` at close (the bake reads the default
-    ``qa.jsonl`` beside the cockpit). A ``fresh`` resume keeps them because it does not
-    call ``collect``. ``missing_ok`` so the ordinary "no prior transcript" case is a no-op.
+    ``qa.jsonl`` beside the cockpit). ``analysis.json`` is cleared for the same reason
+    in the analysis stage: a stale analysis must not survive into a run whose analyst
+    never wrote one (ADR-0011). A ``fresh`` resume keeps them all because it does not
+    call ``collect``. ``missing_ok`` so the ordinary "no prior run" case is a no-op.
     """
-    for name in RUN_SCOPED_ARTIFACTS:
+    for name in (*RUN_SCOPED_ARTIFACTS, _ANALYSIS_NAME):
         (out_dir / name).unlink(missing_ok=True)
 
 

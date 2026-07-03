@@ -275,39 +275,45 @@ def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
     assert not stale.exists()  # fragments/ rebuilt from scratch
 
 
-def test_regeneration_clears_prior_session_transcript(repo: Path) -> None:
-    # A prior review left a Q&A transcript in .review-agent; regenerating (the collect
-    # step) must clear it so a stale/different-branch review never bakes old questions
-    # into the new cockpit at close. A no-regeneration resume doesn't call collect.
+def _run_scoped_names() -> tuple[str, ...]:
+    # The transcript files plus the analyst's analysis (ADR-0011): all run-scoped,
+    # all cleared on regeneration, all preserved when a collect fails.
     from branch_review.feedback import RUN_SCOPED_ARTIFACTS
 
+    return (*RUN_SCOPED_ARTIFACTS, "analysis.json")
+
+
+def test_regeneration_clears_prior_run_artifacts(repo: Path) -> None:
+    # A prior review left a Q&A transcript and an analysis in .review-agent;
+    # regenerating (the collect step) must clear both — stale questions must not bake
+    # into the new cockpit at close, and a stale analysis must not survive into a run
+    # whose analyst never wrote one. A no-regeneration resume doesn't call collect.
     out = repo / ".review-agent"
     out.mkdir()
-    for name in RUN_SCOPED_ARTIFACTS:
+    for name in _run_scoped_names():
         (out / name).write_text("stale from a previous session\n", encoding="utf-8")
 
     collect(repo)
 
-    for name in RUN_SCOPED_ARTIFACTS:
+    for name in _run_scoped_names():
         assert not (out / name).exists(), f"{name} should be cleared on regeneration"
 
 
-def test_failed_collect_preserves_prior_session_transcript(repo: Path) -> None:
+def test_failed_collect_preserves_prior_run_artifacts(repo: Path) -> None:
     # A mistyped /review-branch base (or a repo config naming a missing branch) must
-    # not destroy the active review's transcript: the reset runs only after the new
-    # run's base/diff reads succeed, so /review-close can still bake the discussion.
-    from branch_review.feedback import RUN_SCOPED_ARTIFACTS
-
+    # not destroy the active review's transcript or analysis: the reset runs only
+    # after the new run's base/diff reads succeed, so /review-close can still bake
+    # the discussion and the still-open review keeps the claims it is showing.
     out = repo / ".review-agent"
     out.mkdir()
-    for name in RUN_SCOPED_ARTIFACTS:
-        (out / name).write_text("live transcript\n", encoding="utf-8")
+    for name in _run_scoped_names():
+        (out / name).write_text("live artifact\n", encoding="utf-8")
 
     with pytest.raises(BaseResolutionError):
         collect(repo, base="release/no-such-branch")
 
-    for name in RUN_SCOPED_ARTIFACTS:
-        assert (out / name).read_text(encoding="utf-8") == "live transcript\n", (
+    for name in _run_scoped_names():
+        assert (out / name).read_text(encoding="utf-8") == "live artifact\n", (
             f"{name} must survive a failed collect"
         )
 
