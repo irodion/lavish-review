@@ -240,10 +240,12 @@ python3 .claude/skills/branch-review-cockpit/scripts/validate_analysis.py .revie
 
 If it exits non-zero, **send the located errors back to the analyst verbatim**
 (continue the same analyst agent; its context is still isolated) and have it fix
-`analysis.json`; re-validate until clean. Never patch `analysis.json` yourself —
-not even for a "mechanical" fix; the file is the analyst's testimony. Never
-author the cockpit from a malformed analysis. Errors are located (e.g.
-`threads[0].claims[2].level`).
+`analysis.json`, then re-validate — **at most 3 repair rounds**. If the third
+re-validation still fails, **abort the review**: report the remaining located
+errors to the user and stop — do not author the cockpit, and still do not patch
+`analysis.json` yourself. Never patch it at any point — not even for a
+"mechanical" fix; the file is the analyst's testimony, and a malformed analysis
+is never rendered. Errors are located (e.g. `threads[0].claims[2].level`).
 
 ### 5. Author `.review-agent/review.html` from the Analysis
 
