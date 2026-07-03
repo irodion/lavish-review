@@ -135,10 +135,11 @@ pre.diff .ln-add { color: var(--add); }
 pre.diff .ln-del { color: var(--del); }
 pre.diff .ln-hunk { color: var(--accent); }
 
-/* --- Analytical sections (issue #6) ---------------------------------------
-   Styling for the agent-authored sections driven by analysis.json: Review Route,
-   Behavior Changes, Risk Map, File Walkthrough, Suspicious Omissions, Test
-   Checklist. Self-contained — no remote assets (strict CSP / linter). */
+/* --- Layered claim→evidence cockpit (ADR-0009, issue #39) -------------------
+   Styling for the agent-authored layers driven by review-analysis/0.2:
+   L0 orientation, L1 threads, L2 claims (native <details> progressive
+   disclosure), L3 per-file evidence. Self-contained — no remote assets
+   (strict CSP / linter). */
 
 :root {
   --warn: #d29922;
@@ -147,109 +148,175 @@ pre.diff .ln-hunk { color: var(--accent); }
   --level-high: #f85149;
 }
 
-/* Review Route — an ordered, reasoned path through the diff. */
-ol.review-route { margin: 0; padding-left: 1.4rem; }
-ol.review-route li { margin: 0.5rem 0; }
-ol.review-route .route-path {
-  font-family: var(--mono);
-  color: var(--accent);
-}
-ol.review-route .route-reason { color: var(--muted); }
-
-/* Behavior Changes / Suspicious Omissions — labelled prose blocks. */
-.change, .omission {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  margin: 0.75rem 0;
-}
-.omission { border-left-color: var(--warn); }
-.change .summary, .omission .summary { font-weight: 600; }
-.change .detail, .omission .detail { margin: 0.35rem 0 0; color: var(--muted); }
-.omission .kind {
-  display: inline-block;
-  margin-left: 0.5rem;
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--warn);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-/* Risk Map — one card per category, each with a level badge, reason, and the
-   challenge questions that make the risk auditable rather than a verdict. */
-.risk {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  margin: 0.75rem 0;
-}
-.risk-head {
+/* L0 — orientation: the intent read and the shape of the change at a glance. */
+section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
+.orientation {
   display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
-.risk-category {
-  font-weight: 600;
-  text-transform: capitalize;
+.orientation li {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
 }
-.risk-level {
+.orientation a { color: var(--accent); text-decoration: none; }
+.orientation a:hover { text-decoration: underline; }
+
+/* Shared chips: claim kind, agent confidence, risk level. */
+.chip {
+  display: inline-block;
   font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 0.1rem 0.45rem;
   border-radius: 999px;
-  border: 1px solid currentColor;
+  border: 1px solid currentcolor;
+  white-space: nowrap;
 }
+.kind-behavior { color: var(--accent); }
+.kind-risk { color: var(--level-high); }
+.kind-omission { color: var(--warn); }
+.kind-verify { color: var(--level-low); }
+.confidence-high { color: var(--level-low); }
+.confidence-medium { color: var(--level-medium); }
+.confidence-low { color: var(--level-high); }
 .risk-level.low { color: var(--level-low); }
 .risk-level.medium { color: var(--level-medium); }
 .risk-level.high { color: var(--level-high); }
-.risk .reason { margin: 0 0 0.4rem; }
-.risk .challenge-questions {
+.risk-category { font-weight: 600; text-transform: capitalize; }
+
+/* L1 — one card per narrative thread, in descent (route) order. */
+section.thread {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 1.25rem 0;
+}
+section.thread > h2 {
+  font-size: 1.1rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+  margin: 0 0 0.5rem;
+}
+section.thread > h2 .thread-id {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-right: 0.5rem;
+}
+.thread-summary { margin: 0 0 0.5rem; }
+.thread-paths {
+  margin: 0 0 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.thread-paths code { color: var(--accent); background: none; border: none; padding: 0; }
+
+/* L2 — claims: native <details>, closed by default (progressive disclosure). */
+details.claim {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0.6rem 0;
+}
+details.claim > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.55rem 0.9rem;
+  font-weight: 600;
+  list-style-position: outside;
+}
+details.claim > summary:hover { background: var(--panel); }
+details.claim[open] > summary { border-bottom: 1px solid var(--border); }
+details.claim > .claim-body { padding: 0.75rem 1rem; }
+.claim-body .detail { margin: 0 0 0.6rem; }
+.claim-body h4 {
+  margin: 0.6rem 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.challenge-questions {
   margin: 0;
   padding-left: 1.1rem;
   color: var(--muted);
   font-size: 0.92rem;
 }
-.risk .challenge-questions li { margin: 0.2rem 0; }
-
-/* File Walkthrough — per-file heading + explanation interleaved with that file's
-   pre-escaped diff fragment, walked in Review Route order. */
-.walkthrough-file { margin: 1.25rem 0; }
-.walkthrough-file > h3 {
-  font-family: var(--mono);
-  font-size: 0.95rem;
+.challenge-questions li { margin: 0.2rem 0; }
+.evidence-list { margin: 0; padding-left: 1.1rem; font-size: 0.92rem; }
+.evidence-list li { margin: 0.2rem 0; }
+.evidence-list a {
   color: var(--accent);
-  margin: 0 0 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  text-decoration: none;
 }
-.walkthrough-file .explanation { margin: 0 0 0.6rem; }
-.walkthrough-file .omitted {
+.evidence-list a:hover { text-decoration: underline; }
+.evidence-list .note { color: var(--muted); }
+
+/* L3 — per-file evidence: every changed file, body behind <details>. */
+details.file {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0.6rem 0;
+}
+details.file > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.5rem 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  color: var(--accent);
+}
+details.file > summary:hover { background: var(--panel); }
+details.file > .file-body { padding: 0.5rem 0.9rem 0.9rem; }
+.file-stats { color: var(--muted); font-size: 0.8rem; }
+.file-stats .added { color: var(--add); }
+.file-stats .deleted { color: var(--del); }
+.omitted {
   color: var(--warn);
   font-style: italic;
   font-size: 0.9rem;
 }
 
-/* Test Checklist — the suggested (never executed) runner plus check items. */
-.checklist .runner {
+/* Deep-link feedback: the element navigated to from a claim's evidence link. */
+:target { scroll-margin-top: 1rem; }
+details.file:target > summary,
+details.claim:target > summary { outline: 2px solid var(--accent); border-radius: 6px; }
+
+/* Test runner note — the suggested (never executed) runner. */
+.runner-note {
   font-family: var(--mono);
   font-size: 0.85rem;
   color: var(--muted);
-  margin: 0 0 0.5rem;
 }
-.checklist .runner code {
+.runner-note code {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.1rem 0.4rem;
   color: var(--fg);
 }
-.checklist ul { margin: 0; padding-left: 1.2rem; }
-.checklist li { margin: 0.3rem 0; }
 
 footer {
   margin-top: 3rem;

@@ -186,12 +186,12 @@ def detect_runner(root: Path) -> Runner | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: print the detected runner as JSON (or ``null``) for the Test Checklist.
+    """CLI: print the detected runner as JSON (or ``null``) for the analysis.
 
     Read-only by construction — it only inspects marker files. The agent reads this
-    JSON and drops ``command`` into ``test_checklist`` *as a suggestion*; the skill
-    never executes it. Always exits 0: "no runner found" is a valid result, not an
-    error.
+    JSON and drops ``command`` into the analysis's ``test_runner`` block *as a
+    suggestion*; the skill never executes it. Always exits 0: "no runner found" is a
+    valid result, not an error.
     """
     parser = argparse.ArgumentParser(
         prog="detect_test_runner",

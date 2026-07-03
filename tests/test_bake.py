@@ -249,20 +249,52 @@ def test_swap_csp_reports_when_no_policy() -> None:
 _ANALYSIS = {
     "title": "My Review",
     "intent_summary": "Does a thing.",
-    "behavior_changes": [{"summary": "S", "detail": "D", "paths": []}],
-    "risk_map": [
-        {"category": "security", "level": "high", "reason": "R", "challenge_questions": ["Q1?"]}
+    "widened_into": [],
+    "threads": [
+        {
+            "id": "t1",
+            "title": "The thing",
+            "summary": "One thread of change.",
+            "paths": ["src/a.py"],
+            "claims": [
+                {
+                    "id": "t1.c1",
+                    "kind": "risk",
+                    "category": "security",
+                    "level": "high",
+                    "summary": "R",
+                    "confidence": "medium",
+                    "challenge_questions": ["Q1?"],
+                    "evidence": [{"path": "src/a.py"}],
+                },
+                {
+                    "id": "t1.c2",
+                    "kind": "verify",
+                    "summary": "run it",
+                    "confidence": "high",
+                    "challenge_questions": ["Does it pass?"],
+                    "evidence": [{"note": "n"}],
+                },
+            ],
+        }
     ],
-    "suspicious_omissions": [{"summary": "missing test", "kind": "test", "detail": "no test"}],
-    "test_checklist": {"runner": "pytest", "command": "pytest", "items": ["run it"]},
+    "test_runner": {"runner": "pytest", "command": "pytest"},
+    "diagrams": [],
 }
 
 
 def test_markdown_contains_review_and_qa() -> None:
     md = build_markdown(_ANALYSIS, [_exchange(1, _TOON_MESSAGE, "the answer")])
     assert "# My Review" in md
-    assert "## Executive Summary" in md and "Does a thing." in md
-    assert "security (high)" in md and "Q1?" in md
+    assert "## Orientation" in md and "Does a thing." in md
+    assert "## t1 — The thing" in md and "One thread of change." in md
+    assert "[risk] R (confidence: medium; security; level: high)" in md and "Q1?" in md
+    # Verify claims export as REAL task-list checkboxes: the marker sits at line
+    # start — inside a ### heading GitHub renders "- [ ]" as literal text.
+    assert "\n- [ ] [verify] run it (confidence: high)" in md
+    assert "### - [ ]" not in md
+    assert "\n  - Does it pass?" in md  # its challenge question stays inside the item
+    assert "`pytest`" in md
     assert "## Q&A Log" in md
     assert "what it the main goal of the branch" in md
     assert "the answer" in md
