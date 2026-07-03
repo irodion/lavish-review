@@ -453,13 +453,6 @@ def collect(
     commits = _run_git(["log", "--oneline", f"{resolved_base}..HEAD"], root)
     commit_lines = commits.splitlines()
 
-    # A new generation begins a new session: clear the prior transcript so a stale or
-    # different-branch regeneration never bakes an earlier branch's Q&A into the cockpit.
-    # Deliberately AFTER every failure-prone git read above: if the requested/configured
-    # base doesn't resolve, the existing review's transcript must survive so
-    # /review-close can still bake the discussion. Clear only once the new run is viable.
-    _reset_run_scoped_artifacts(out)
-
     # Untrusted data crosses the Escape Boundary here: the diff and the
     # path/commit/branch fragments are pre-escaped and marker-delimited so the
     # agent injects them verbatim and the Cockpit Linter can prove they are safe.
@@ -491,6 +484,15 @@ def collect(
     else:
         diff_text = _run_git(["diff", context.diff_range], root, strip=False)
         diff_html = diff_fragment(diff_text)
+
+    # A new generation begins a new session: clear the prior transcript so a stale or
+    # different-branch regeneration never bakes an earlier branch's Q&A into the cockpit.
+    # Deliberately after EVERY git read of the run (base/diff/log above, the per-file
+    # fragment diffs, and the whole-diff body): if any of them fails — a mistyped base,
+    # a vanished ref — the existing review's transcript survives so /review-close can
+    # still bake the discussion. Only the fragment writes precede this point, and they
+    # touch neither the transcript nor the already-authored cockpit.
+    _reset_run_scoped_artifacts(out)
 
     # Always UTF-8 so non-ASCII diffs/paths/messages round-trip deterministically
     # regardless of the platform default encoding, and so the HTML fragment is the
