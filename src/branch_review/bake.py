@@ -372,19 +372,33 @@ def _inline(text: str) -> str:
 
 
 def _format_claim_block(claim: Mapping[str, object]) -> str:
-    """One claim as a ``### [kind] summary`` heading with its badges and questions."""
+    """One claim as a ``### [kind] summary`` heading with its badges and questions.
+
+    ``verify`` claims are the export's checklist (they replaced the old
+    ``test_checklist.items``), so they render as **real task-list items** — the
+    ``- [ ]`` marker must sit at list level; inside a ``###`` heading GitHub
+    renders it as literal heading text, not a checkbox.
+    """
     kind = str(claim.get("kind", ""))
     badges = [f"confidence: {claim.get('confidence', '')}"]
     if claim.get("category"):
         badges.append(str(claim["category"]))
     if claim.get("level"):
         badges.append(f"level: {claim['level']}")
-    checkbox = "- [ ] " if kind == "verify" else ""
-    head = f"### {checkbox}[{kind}] {claim.get('summary', '')} ({'; '.join(badges)})"
+    label = f"[{kind}] {claim.get('summary', '')} ({'; '.join(badges)})"
     detail = str(claim.get("detail", ""))
     questions = claim.get("challenge_questions")
+
+    if kind == "verify":
+        lines = [f"- [ ] {label}"]
+        if detail:
+            lines.append(f"  {detail}")  # indented: stays inside the task item
+        if isinstance(questions, list):
+            lines.extend(f"  - {q}" for q in questions)
+        return "\n".join(lines)
+
     bullets = "\n".join(f"- {q}" for q in questions) if isinstance(questions, list) else ""
-    return "\n".join((head, "", detail, "", bullets)).rstrip()
+    return "\n".join((f"### {label}", "", detail, "", bullets)).rstrip()
 
 
 def _format_thread(thread: Mapping[str, object]) -> str:

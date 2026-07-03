@@ -289,7 +289,11 @@ def test_markdown_contains_review_and_qa() -> None:
     assert "## Orientation" in md and "Does a thing." in md
     assert "## t1 — The thing" in md and "One thread of change." in md
     assert "[risk] R (confidence: medium; security; level: high)" in md and "Q1?" in md
-    assert "- [ ] [verify] run it" in md  # verify claims export as checkboxes
+    # Verify claims export as REAL task-list checkboxes: the marker sits at line
+    # start — inside a ### heading GitHub renders "- [ ]" as literal text.
+    assert "\n- [ ] [verify] run it (confidence: high)" in md
+    assert "### - [ ]" not in md
+    assert "\n  - Does it pass?" in md  # its challenge question stays inside the item
     assert "`pytest`" in md
     assert "## Q&A Log" in md
     assert "what it the main goal of the branch" in md
