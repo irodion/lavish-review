@@ -210,10 +210,12 @@ first and mirror its shape. Structure:
     verdict about the change.
   - `challenge_questions` — ≥1: the question that makes the claim auditable
     instead of a pronouncement.
-  - `evidence` — ≥1 refs substantiating the claim: `{path}` (a changed or
-    widened-into file — the cockpit links it to that file's L3 fragment) and/or
-    `{note}` ("no test touches this"). **A claim with no evidence is not a
-    claim.**
+  - `evidence` — ≥1 refs substantiating the claim: `{path}` (**a changed file —
+    a `fragments.json` entry**; the cockpit links it to that file's L3 fragment)
+    and/or `{note}` ("no test touches this"). A **widened-into** file has no
+    diff fragment, so it has no L3 anchor — reference it in a `{note}`
+    ("widened: src/client/pool.py shares one policy instance"), never as a
+    `path`. **A claim with no evidence is not a claim.**
 - `test_runner` — `{runner, runner_evidence?, command?}` from step 2, all nullable.
   Concrete checks are `verify` claims on their threads; this only records the
   detected runner — suggested, never run.

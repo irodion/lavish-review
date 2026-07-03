@@ -178,7 +178,7 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
   letter-spacing: 0.05em;
   padding: 0.1rem 0.45rem;
   border-radius: 999px;
-  border: 1px solid currentColor;
+  border: 1px solid currentcolor;
   white-space: nowrap;
 }
 .kind-behavior { color: var(--accent); }
