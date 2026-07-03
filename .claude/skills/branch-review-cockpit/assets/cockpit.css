@@ -148,7 +148,17 @@ pre.diff .ln-hunk { color: var(--accent); }
   --level-high: #f85149;
 }
 
-/* L0 — orientation: the intent read and the shape of the change at a glance. */
+/* L0 — orientation: the goal, the intent read, and the change's shape at a glance. */
+.goal-text {
+  margin: 0 0 0.35rem;
+  padding: 0.5rem 1rem;
+  background: var(--panel);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  white-space: pre-wrap; /* the stated goal is multi-line prose, shown verbatim */
+}
+.goal-provenance { margin: 0 0 0.75rem; font-size: 0.82rem; color: var(--muted); }
+.goal-missing { margin: 0 0 0.75rem; color: var(--muted); font-style: italic; }
 section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
 .orientation {
   display: flex;
@@ -192,6 +202,8 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
 .risk-level.medium { color: var(--level-medium); }
 .risk-level.high { color: var(--level-high); }
 .risk-category { font-weight: 600; text-transform: capitalize; }
+/* Goal alignment (ADR-0010): a thread the analysis flags as unrelated to the goal. */
+.flag-drive-by { color: var(--warn); }
 
 /* L1 — one card per narrative thread, in descent (route) order. */
 section.thread {

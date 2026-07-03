@@ -17,6 +17,7 @@ import pytest
 from branch_review.analysis import (
     CLAIM_KINDS,
     CONFIDENCE_LEVELS,
+    OMISSION_KINDS,
     RISK_CATEGORIES,
     SCHEMA,
     validate_analysis,
@@ -32,6 +33,10 @@ def _valid() -> dict[str, Any]:
         "title": "Retry backoff becomes exponential",
         "intent_summary": "Replaces the fixed retry delay with capped exponential backoff.",
         "widened_into": ["src/retry.py"],
+        "alignment": {
+            "serves_goal": ["t1"],
+            "drive_by": ["t2"],
+        },
         "threads": [
             {
                 "id": "t1",
@@ -119,6 +124,21 @@ def test_non_object_is_rejected() -> None:
     assert errors and errors[0].location == "$"
 
 
+def test_null_alignment_is_valid() -> None:
+    # ADR-0010's degraded mode: no stated goal was found, so there is nothing to
+    # measure the threads against — alignment is an explicit null, never absent.
+    doc = _valid()
+    doc["alignment"] = None
+    assert validate_analysis(doc) == []
+
+
+def test_goal_omission_with_alignment_passes() -> None:
+    # A goal-unserved item is a first-class Suspicious Omission (ADR-0010).
+    doc = _valid()
+    doc["threads"][1]["claims"][0]["omission_kind"] = "goal"
+    assert validate_analysis(doc) == []
+
+
 # (label, mutate(doc), expected location substring) — each trips exactly one rule.
 def _drop(key: str) -> Mutator:
     def mutate(doc: dict[str, Any]) -> None:
@@ -148,6 +168,13 @@ def _del(path: list[Any]) -> Mutator:
 
 
 _C = ["threads", 0, "claims"]
+
+
+def _null_alignment_with_goal_omission(doc: dict[str, Any]) -> None:
+    """No stated goal, yet a claim says the goal is unserved — a contradiction."""
+    doc["alignment"] = None
+    doc["threads"][1]["claims"][0]["omission_kind"] = "goal"
+
 
 _BAD_CASES = [
     ("missing-title", _drop("title"), "title"),
@@ -225,6 +252,34 @@ _BAD_CASES = [
         _set([*_C, 0, "omission_kind"], "docs"),
         "threads[0].claims[0].omission_kind",
     ),
+    # Alignment: the goal↔implementation partition (ADR-0010).
+    ("missing-alignment", _drop("alignment"), "alignment"),
+    ("alignment-not-object", _set(["alignment"], "aligned"), "alignment"),
+    ("alignment-missing-serves", _del(["alignment", "serves_goal"]), "alignment.serves_goal"),
+    ("alignment-missing-drive-by", _del(["alignment", "drive_by"]), "alignment.drive_by"),
+    ("alignment-not-str-list", _set(["alignment", "serves_goal"], [1]), "alignment.serves_goal[0]"),
+    (
+        "alignment-unknown-thread",
+        _set(["alignment", "serves_goal"], ["t1", "t9"]),
+        "alignment.serves_goal[1]",
+    ),
+    (
+        # t1 already sits in serves_goal — a thread is in exactly one list.
+        "alignment-thread-listed-twice",
+        _set(["alignment", "drive_by"], ["t2", "t1"]),
+        "alignment.drive_by[1]",
+    ),
+    (
+        # t2 ends up in neither list — the partition must cover every thread.
+        "alignment-uncovered-thread",
+        _set(["alignment", "drive_by"], []),
+        "alignment",
+    ),
+    (
+        "goal-omission-under-null-alignment",
+        _null_alignment_with_goal_omission,
+        "threads[1].claims[0].omission_kind",
+    ),
     # Runner block + diagrams.
     ("missing-test-runner", _drop("test_runner"), "test_runner"),
     ("test-runner-not-object", _set(["test_runner"], []), "test_runner"),
@@ -274,3 +329,12 @@ def test_vocabularies_are_canonical() -> None:
     }
     assert set(CLAIM_KINDS) == {"behavior", "risk", "omission", "verify"}
     assert set(CONFIDENCE_LEVELS) == {"high", "medium", "low"}
+    assert set(OMISSION_KINDS) == {
+        "tests",
+        "callers",
+        "docs",
+        "config",
+        "error_handling",
+        "goal",
+        "other",
+    }

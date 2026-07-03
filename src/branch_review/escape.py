@@ -143,6 +143,24 @@ def _file_line(record: Mapping[str, str]) -> str:
     return f'  <li><span class="status">{status}</span> {path}</li>'
 
 
+def goal_fragment(goal: Mapping[str, str] | None) -> str:
+    """The L0 goal block: the stated goal, escaped and attributed — or the degraded line.
+
+    Goal Evidence (ADR-0010) is untrusted: issue bodies, commit messages, and any
+    provenance string embedding a branch name are attacker-writable, so both cross
+    the boundary. With no goal there is nothing untrusted to show — the degraded
+    notice is a fixed trusted literal, and an *inferred* intent is never dressed up
+    as a stated goal.
+    """
+    if goal is None:
+        return '<p class="goal-missing">No stated goal found; intent inferred from the diff.</p>'
+    text = f'<blockquote class="goal-text">{fragment(goal.get("text", ""))}</blockquote>'
+    provenance = (
+        f'<p class="goal-provenance">Stated goal — {fragment(goal.get("provenance", ""))}</p>'
+    )
+    return f"{text}\n{provenance}"
+
+
 def build_fragments(
     *,
     branch: str,
@@ -151,15 +169,18 @@ def build_fragments(
     changed_file_count: int,
     files: Iterable[Mapping[str, str]],
     commit_lines: Iterable[str],
+    goal: Mapping[str, str] | None = None,
 ) -> str:
     """Build ``fragments.html`` — the pre-escaped building blocks for the cockpit.
 
     Each section is delimited by a ``<!-- fragment: NAME -->`` guide comment so the
     agent can find and paste the blocks it needs into the frame it authors. Every
-    untrusted value (branch, base, paths, commit subjects) is already escaped and
-    marker-wrapped, so the agent injects these verbatim and never touches a raw
-    untrusted string. ``head_sha`` and the count are git-plumbing values (hex/int),
-    rendered through :func:`escape_text` anyway for uniformity.
+    untrusted value (branch, base, paths, commit subjects, the goal text) is already
+    escaped and marker-wrapped, so the agent injects these verbatim and never touches
+    a raw untrusted string. ``head_sha`` and the count are git-plumbing values
+    (hex/int), rendered through :func:`escape_text` anyway for uniformity. ``goal``
+    is the resolved Goal Evidence block (or ``None`` — the fragment then carries the
+    degraded no-goal notice, ADR-0010).
     """
     files = list(files)
     commit_lines = list(commit_lines)
@@ -177,6 +198,9 @@ def build_fragments(
     parts.append(f"  <dt>Head</dt><dd><code>{escape_text(head_sha[:12])}</code></dd>")
     parts.append(f"  <dt>Files changed</dt><dd>{int(changed_file_count)}</dd>")
     parts.append("</dl>")
+
+    parts.append("<!-- fragment: goal -->")
+    parts.append(goal_fragment(goal))
 
     parts.append("<!-- fragment: files -->")
     if files:

@@ -1,13 +1,16 @@
 ---
 description: Open an interactive Review Cockpit for the current branch's diff (via Lavish).
-argument-hint: "[base]"
+argument-hint: "[base] [--goal <issue-ref|file|text>]"
 ---
 
 Review the current Git branch using the **branch-review-cockpit** skill.
 
-Base: $ARGUMENTS (empty means fall to the repo `.review-agent.yaml` `base_branch`, then
-auto-detect — do not guess; pass the arg through only if the user named one. Precedence:
-arg > repo `base_branch` > auto-detect).
+Arguments: $ARGUMENTS (an optional base, and an optional `--goal`). Empty base means
+fall to the repo `.review-agent.yaml` `base_branch`, then auto-detect — do not guess;
+pass the arg through only if the user named one. Precedence: arg > repo `base_branch` >
+auto-detect. Pass `--goal` through to the collector only if the user provided one (an
+issue ref, a file, or the goal text itself); otherwise the collector discovers Goal
+Evidence from the branch itself.
 
 Follow the skill's steps exactly. **First check for an unfinished review** (step 0:
 `session.py evaluate [base]`, passing the same base) — if one for this branch is still

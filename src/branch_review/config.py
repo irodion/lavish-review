@@ -17,6 +17,10 @@ Two non-overlapping scopes (DESIGN "Configuration"):
 - **Machine policy** (``~/.review-agent/config.yaml``): the ``pause`` sentinel, a
   default ``styling``, the pinned Lavish version, and whether the SessionStart hook is on.
 
+``goal_remote_fetch`` (Goal Evidence's tracker access, ADR-0010) is the one key both
+scopes accept — a repo can pin its policy, a machine can go network-free wholesale;
+repo wins when both set it.
+
 Like the Change Classifier (:mod:`branch_review.classify`) and the Session Evaluator
 (:mod:`branch_review.session`), the merge itself — :func:`resolve` — is **pure policy**:
 it takes already-parsed mappings and returns a :class:`ResolvedConfig`, making the
@@ -57,10 +61,21 @@ DEFAULT_STYLING = "vendored"
 # rejected loudly (never silently ignored) so a misspelled ``base_brnach`` can't quietly
 # fall back to auto-detect.
 _REPO_KEYS = frozenset(
-    {"base_branch", "exclude", "exclude_reset", "focus", "language_hints", "styling", "limits"}
+    {
+        "base_branch",
+        "exclude",
+        "exclude_reset",
+        "focus",
+        "language_hints",
+        "styling",
+        "limits",
+        "goal_remote_fetch",
+    }
 )
 _LIMITS_KEYS = frozenset({"max_file_diff_lines", "max_total_diff_lines"})
-_MACHINE_KEYS = frozenset({"pause", "styling", "lavish_version", "sessionstart_hook"})
+_MACHINE_KEYS = frozenset(
+    {"pause", "styling", "lavish_version", "sessionstart_hook", "goal_remote_fetch"}
+)
 
 _RESOLVED_CONFIG_SCHEMA = "review-resolved-config/0.1"
 
@@ -288,6 +303,11 @@ class ResolvedConfig:
     pause: str | None
     lavish_version: str | None
     sessionstart_hook: bool = False
+    # Whether Goal Evidence may reach the tracker via ``gh`` (ADR-0010). Defaults on;
+    # either scope can switch it off wholesale — repo (committed policy) wins over
+    # machine when both set it. Even when on, the collector only fetches when local
+    # evidence (or --goal) names an issue, so the default review stays network-free.
+    goal_remote_fetch: bool = True
 
 
 def _reject_unknown(mapping: dict[str, object], allowed: frozenset[str], where: str) -> None:
@@ -321,6 +341,16 @@ def _as_str_list(value: object, key: str) -> tuple[str, ...]:
 def _as_bool(value: object, key: str, *, default: bool) -> bool:
     if value is None:
         return default
+    if not isinstance(value, bool):
+        raise ConfigError(f"{key}: expected a boolean, got {type(value).__name__}")
+    return value
+
+
+def _as_opt_bool(value: object, key: str) -> bool | None:
+    """A boolean or ``None`` when absent — for keys merged across scopes, where
+    "not set here" must stay distinguishable from an explicit ``false``."""
+    if value is None:
+        return None
     if not isinstance(value, bool):
         raise ConfigError(f"{key}: expected a boolean, got {type(value).__name__}")
     return value
@@ -397,6 +427,15 @@ def resolve(
         or _styling(machine.get("styling"), "machine config")
         or DEFAULT_STYLING
     )
+    repo_goal_fetch = _as_opt_bool(repo.get("goal_remote_fetch"), "goal_remote_fetch")
+    machine_goal_fetch = _as_opt_bool(machine.get("goal_remote_fetch"), "goal_remote_fetch")
+    goal_remote_fetch = (
+        repo_goal_fetch
+        if repo_goal_fetch is not None
+        else machine_goal_fetch
+        if machine_goal_fetch is not None
+        else True
+    )
     return ResolvedConfig(
         base_branch=base_branch,
         styling=styling,
@@ -408,6 +447,7 @@ def resolve(
         sessionstart_hook=_as_bool(
             machine.get("sessionstart_hook"), "sessionstart_hook", default=False
         ),
+        goal_remote_fetch=goal_remote_fetch,
     )
 
 
@@ -470,4 +510,5 @@ def resolved_config_dict(resolved: ResolvedConfig, *, base: str) -> dict[str, ob
         "pause": resolved.pause,
         "lavish_version": resolved.lavish_version,
         "sessionstart_hook": resolved.sessionstart_hook,
+        "goal_remote_fetch": resolved.goal_remote_fetch,
     }

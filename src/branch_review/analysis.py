@@ -24,7 +24,12 @@ it is *shaped right* is this module's.
 The canonical vocabularies (:data:`RISK_CATEGORIES`, :data:`RISK_LEVELS`,
 :data:`OMISSION_KINDS`, :data:`CLAIM_KINDS`, :data:`CONFIDENCE_LEVELS`) live here
 as the single source of truth the SKILL guidance and the cockpit share. See
-``CONTEXT.md``, ``DESIGN.md``, and ADR-0009/0011/0012.
+``CONTEXT.md``, ``DESIGN.md``, and ADR-0009/0010/0011/0012.
+
+Since ADR-0010 the analysis also carries ``alignment`` — the goal↔implementation
+partition: which threads serve the stated goal and which are drive-bys, with
+goal-unserved work expressed as ``omission`` claims of kind ``goal``. ``null``
+when no goal was found.
 """
 
 from __future__ import annotations
@@ -60,9 +65,11 @@ RISK_CATEGORIES = (
 RISK_LEVELS = ("low", "medium", "high")
 
 # What a Suspicious Omission is adjacent to (CONTEXT: *Suspicious Omission*) — the
-# untouched thing the diff arguably should have changed. ``other`` is the escape
-# hatch so the vocabulary never forces a miscategorisation.
-OMISSION_KINDS = ("tests", "callers", "docs", "config", "error_handling", "other")
+# untouched thing the diff arguably should have changed. ``goal`` is the
+# goal-alignment omission (ADR-0010): the stated goal asked for something no
+# thread delivers — it therefore requires a non-null ``alignment``. ``other`` is
+# the escape hatch so the vocabulary never forces a miscategorisation.
+OMISSION_KINDS = ("tests", "callers", "docs", "config", "error_handling", "goal", "other")
 
 # What kind of assertion a claim makes (ADR-0009's L2 vocabulary):
 #   behavior — something observably changes ("retries are now exponential")
@@ -250,18 +257,24 @@ def _validate_claim(
     return errors
 
 
-def _validate_threads(value: object) -> list[AnalysisError]:
+def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str], list[str]]:
     """``threads``: ≥1 narrative threads in descent order (ADR-0009's L1).
 
     Thread order *is* the Review Route — the recommended reading order. Each thread
     carries a stable id (``t<N>``), a title, a summary, the changed files it covers
     (``paths``, may be empty for a purely-adjacent thread), and ≥1 claims.
+
+    Returns ``(errors, thread_ids, goal_omission_locs)``: the well-formed thread ids
+    in analysis order (what ``alignment`` must partition) and the locations of claims
+    carrying ``omission_kind: "goal"`` (which only a non-null ``alignment`` permits).
     """
     objects, errors = _as_objects(value, "threads")
     if not errors and not objects:
         errors.append(AnalysisError("threads", "expected at least 1 item(s), got 0"))
 
     seen_ids: dict[str, str] = {}
+    thread_ids: list[str] = []
+    goal_omission_locs: list[str] = []
     for i, thread in objects:
         loc = f"threads[{i}]"
         thread_id = thread.get("id")
@@ -274,6 +287,7 @@ def _validate_threads(value: object) -> list[AnalysisError]:
                 errors.append(AnalysisError(f"{loc}.id", f"duplicate id {tid!r}"))
             else:
                 seen_ids[tid] = loc
+                thread_ids.append(tid)
 
         errors.extend(_require_str(thread.get("title"), f"{loc}.title"))
         errors.extend(_require_str(thread.get("summary"), f"{loc}.summary"))
@@ -284,8 +298,80 @@ def _validate_threads(value: object) -> list[AnalysisError]:
         if not claim_errors and not claims:
             errors.append(AnalysisError(f"{loc}.claims", "expected at least 1 item(s), got 0"))
         for j, claim in claims:
-            errors.extend(_validate_claim(claim, f"{loc}.claims[{j}]", tid, seen_ids))
+            claim_loc = f"{loc}.claims[{j}]"
+            errors.extend(_validate_claim(claim, claim_loc, tid, seen_ids))
+            if claim.get("omission_kind") == "goal":
+                goal_omission_locs.append(claim_loc)
 
+    return errors, thread_ids, goal_omission_locs
+
+
+def _validate_alignment(
+    value: object, thread_ids: Sequence[str], goal_omission_locs: Sequence[str]
+) -> list[AnalysisError]:
+    """``alignment``: the goal↔implementation partition (ADR-0010), or ``null``.
+
+    With a stated goal, every thread is accounted for: it either **serves the
+    goal** (``serves_goal``) or is a **drive-by** (``drive_by``) — the two lists
+    partition the thread ids (each exactly once, none missing, none unknown).
+    What the goal asked for that no thread delivers is not listed here: it lives
+    as an ``omission`` claim with ``omission_kind: "goal"`` on its thread, so a
+    disposition can attach to it like any other claim (ADR-0012).
+
+    ``null`` means no stated goal was found (``context.json``'s ``goal`` is
+    null); nothing can then be unserved, so goal-kind omission claims are
+    rejected — an inferred intent is never measured like a stated goal.
+    """
+    if value is None:
+        return [
+            AnalysisError(
+                f"{loc}.omission_kind",
+                "'goal' requires a non-null alignment — with no stated goal, "
+                "nothing can be goal-unserved",
+            )
+            for loc in goal_omission_locs
+        ]
+    if not isinstance(value, Mapping):
+        return [AnalysisError("alignment", f"expected an object or null, got {_typename(value)}")]
+
+    errors: list[AnalysisError] = []
+    lists: dict[str, list[str]] = {}
+    for key in ("serves_goal", "drive_by"):
+        raw = value.get(key)
+        if key not in value:
+            errors.append(AnalysisError(f"alignment.{key}", "required key is missing"))
+            lists[key] = []
+            continue
+        errors.extend(_require_str_list(raw, f"alignment.{key}"))
+        if isinstance(raw, Sequence) and not isinstance(raw, str | bytes):
+            lists[key] = [item for item in raw if isinstance(item, str)]
+        else:
+            lists[key] = []
+
+    known = set(thread_ids)
+    placed: dict[str, str] = {}
+    for key, ids in lists.items():
+        for i, tid in enumerate(ids):
+            loc = f"alignment.{key}[{i}]"
+            if tid not in known:
+                errors.append(AnalysisError(loc, f"unknown thread id {tid!r}"))
+            elif tid in placed:
+                errors.append(AnalysisError(loc, f"thread {tid!r} already listed in {placed[tid]}"))
+            else:
+                placed[tid] = key
+
+    # Coverage is meaningful only once both lists exist and are well-formed;
+    # otherwise the structural errors above already say what to fix.
+    if not errors:
+        missing = [tid for tid in thread_ids if tid not in placed]
+        if missing:
+            errors.append(
+                AnalysisError(
+                    "alignment",
+                    f"thread(s) {missing} are in neither serves_goal nor drive_by — "
+                    "every thread either serves the goal or is a drive-by",
+                )
+            )
     return errors
 
 
@@ -317,9 +403,10 @@ def _validate_diagrams(value: object) -> list[AnalysisError]:
     return errors
 
 
-# Each required section → its validator.
+# Each required *independent* section → its validator. ``threads`` and
+# ``alignment`` are validated explicitly in :func:`validate_analysis` — alignment
+# is checked against the thread ids threads validation collects.
 _SECTION_VALIDATORS = {
-    "threads": _validate_threads,
     "test_runner": _validate_test_runner,
     "diagrams": _validate_diagrams,
 }
@@ -329,13 +416,15 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
     """Validate a parsed ``analysis.json``; return every problem (empty == valid).
 
     Checks the top-level object carries the schema tag, a non-empty ``title`` and
-    ``intent_summary`` (L0's source until Goal Evidence lands, ADR-0010), ≥1
-    threads each with ≥1 substantiated claims (ids well-formed and unique — the
-    disposition keys of ADR-0012), the ``widened_into`` accountability list
-    (ADR-0011: files read beyond the diff, possibly empty), the ``test_runner``
-    block, and ``diagrams``. Returns a flat list of :class:`AnalysisError` with
-    ``location`` paths (e.g. ``threads[0].claims[2].level``) so a malformed file
-    points the agent straight at what to fix.
+    ``intent_summary`` (L0's fallback read when there is no stated goal,
+    ADR-0010), ≥1 threads each with ≥1 substantiated claims (ids well-formed and
+    unique — the disposition keys of ADR-0012), the ``alignment`` partition
+    measuring the threads against the stated goal (nullable — ``null`` when no
+    goal was found), the ``widened_into`` accountability list (ADR-0011: files
+    read beyond the diff, possibly empty), the ``test_runner`` block, and
+    ``diagrams``. Returns a flat list of :class:`AnalysisError` with ``location``
+    paths (e.g. ``threads[0].claims[2].level``) so a malformed file points the
+    agent straight at what to fix.
     """
     if not isinstance(obj, Mapping):
         return [AnalysisError("$", f"analysis must be a JSON object, got {_typename(obj)}")]
@@ -358,6 +447,22 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
         errors.append(AnalysisError("widened_into", "required section is missing"))
     else:
         errors.extend(_require_str_list(obj["widened_into"], "widened_into"))
+
+    # Threads first: alignment is validated against the thread ids they declare.
+    thread_ids: list[str] = []
+    goal_omission_locs: list[str] = []
+    if "threads" not in obj:
+        errors.append(AnalysisError("threads", "required section is missing"))
+    else:
+        thread_errors, thread_ids, goal_omission_locs = _validate_threads(obj["threads"])
+        errors.extend(thread_errors)
+
+    # ADR-0010: required (possibly null) so writer and validator cannot diverge —
+    # an analysis must *say* whether it measured the threads against a goal.
+    if "alignment" not in obj:
+        errors.append(AnalysisError("alignment", "required section is missing"))
+    else:
+        errors.extend(_validate_alignment(obj["alignment"], thread_ids, goal_omission_locs))
 
     for name, validator in _SECTION_VALIDATORS.items():
         if name not in obj:

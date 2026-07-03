@@ -21,6 +21,7 @@ from branch_review.escape import (
     file_fragment_id,
     fragment,
     fragment_index_entry,
+    goal_fragment,
 )
 
 # (label, raw input, substrings that MUST appear, substrings that MUST NOT appear)
@@ -167,6 +168,51 @@ def test_build_fragments_handles_empty_ranges() -> None:
     assert "No files changed in this range." in out
     assert "No commits in this range." in out
     assert UNTRUSTED_OPEN in out  # branch/base still cross the boundary
+    # No goal passed → the fragment carries the degraded notice (ADR-0010).
+    assert "<!-- fragment: goal -->" in out
+    assert "No stated goal found; intent inferred from the diff." in out
+
+
+# --- Goal Evidence fragment (ADR-0010) ---------------------------------------
+
+
+def test_goal_fragment_escapes_hostile_goal_and_provenance() -> None:
+    # Issue bodies and branch names are attacker-writable; both text and the
+    # provenance (which may embed a branch name) must cross the boundary.
+    out = goal_fragment(
+        {
+            "text": '<script>alert(1)</script> & "quotes"',
+            "source": "issue",
+            "provenance": "issue #40, referenced by branch evil<b>",
+        }
+    )
+    assert "<script>" not in out and "<b>" not in out
+    assert "&lt;script&gt;" in out and "evil&lt;b&gt;" in out
+    assert 'class="goal-text"' in out and 'class="goal-provenance"' in out
+    assert out.count(UNTRUSTED_OPEN) == 2  # text + provenance regions
+    assert out.count(UNTRUSTED_OPEN) == out.count(UNTRUSTED_CLOSE)
+
+
+def test_goal_fragment_none_is_trusted_degraded_notice() -> None:
+    out = goal_fragment(None)
+    assert "No stated goal found; intent inferred from the diff." in out
+    assert UNTRUSTED_OPEN not in out  # a fixed trusted literal carries no markers
+
+
+def test_build_fragments_carries_the_goal_block() -> None:
+    out = build_fragments(
+        branch="feature",
+        base="main",
+        head_sha="0" * 40,
+        changed_file_count=0,
+        files=[],
+        commit_lines=[],
+        goal={"text": "Add <jitter> to backoff", "source": "issue", "provenance": "issue #40"},
+    )
+    assert "<!-- fragment: goal -->" in out
+    assert "Add &lt;jitter&gt; to backoff" in out
+    assert "<jitter>" not in out
+    assert out.count(UNTRUSTED_OPEN) == out.count(UNTRUSTED_CLOSE)
 
 
 # --- Per-file fragment substrate (issue #21) ---------------------------------
