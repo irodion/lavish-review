@@ -276,11 +276,12 @@ def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
 
 
 def _run_scoped_names() -> tuple[str, ...]:
-    # The transcript files plus the analyst's analysis (ADR-0011): all run-scoped,
+    # The transcript files plus the analyst's analysis (ADR-0011) and the reviewer's
+    # dispositions (ADR-0012 — keyed by that analysis's claim ids): all run-scoped,
     # all cleared on regeneration, all preserved when a collect fails.
     from branch_review.feedback import RUN_SCOPED_ARTIFACTS
 
-    return (*RUN_SCOPED_ARTIFACTS, "analysis.json")
+    return (*RUN_SCOPED_ARTIFACTS, "analysis.json", "dispositions.json")
 
 
 def test_regeneration_clears_prior_run_artifacts(repo: Path) -> None:

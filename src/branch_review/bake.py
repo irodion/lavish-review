@@ -42,17 +42,35 @@ See ``DESIGN.md`` ("Feedback loop" / "Persistence"), ``CONTEXT.md`` (Q&A Log), a
 from __future__ import annotations
 
 import argparse
-import csv
-import io
 import json
 import re
 import sys
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from branch_review.dispositions import (
+    DISPOSITIONS_NAME,
+    load_dispositions,
+    parse_disposition_prompt,
+)
 from branch_review.escape import STRICT_CSP, escape_text, fragment
-from branch_review.feedback import DEFAULT_COCKPIT, QA_NAME
+
+# ``Prompt`` / ``extract_prompts`` are re-exported here (the ``as`` form marks the
+# re-export explicit) for compatibility: the extractor moved to
+# :mod:`branch_review.feedback` (which owns the poll format) so the dispositions
+# bridge can share it cycle-free.
+from branch_review.feedback import (
+    DEFAULT_COCKPIT,
+    QA_NAME,
+)
+from branch_review.feedback import (
+    Prompt as Prompt,
+)
+from branch_review.feedback import (
+    extract_prompts as extract_prompts,
+)
 
 # Files the bake reads and writes, all under the cockpit's own (gitignored) dir.
 # ``DEFAULT_COCKPIT`` (the cockpit path) and ``QA_NAME`` (the transcript) are the loop's
@@ -67,102 +85,6 @@ DEFAULT_MD_NAME = "review.md"  # the optional Markdown export
 # Boundary's ``brc:untrusted`` markers, so they never perturb the linter's balance count.
 QA_SEAM_OPEN = "<!--brc:qa-log-->"
 QA_SEAM_CLOSE = "<!--/brc:qa-log-->"
-
-
-# --- The bounded prompt extractor (ADR-0007) --------------------------------
-
-
-# Lavish emits queued feedback as one TOON tabular array: a header line declaring the
-# field order, then one indented data row per prompt. Anchored at column 0 so it can
-# never match the ``prompts[N]`` literals that appear *inside* the quoted
-# ``dom_snapshot`` scalar (which are indented/quoted), and bounded by the declared
-# count so the row scan stops before the next top-level key (e.g. ``next_step:``).
-_PROMPTS_HEADER = re.compile(r"^prompts\[(\d+)\]\{([^}]*)\}:[ \t]*$", re.MULTILINE)
-
-
-@dataclass(frozen=True)
-class Prompt:
-    """One queued reviewer prompt, lifted from the poll TOON's ``prompts[]`` block.
-
-    ``prompt`` is the reviewer's question. For a free-form chat message ``tag`` is
-    ``message`` and there is no anchored element; for an annotation ``tag`` is the
-    element's tag (``span``/``li``/…) and ``selector``/``text`` locate and quote the
-    annotated element or diff line. Every field is reviewer-originated untrusted data —
-    it crosses the Escape Boundary before rendering.
-    """
-
-    uid: str
-    prompt: str
-    selector: str
-    tag: str
-    text: str
-
-    @property
-    def is_annotation(self) -> bool:
-        """True when the prompt is anchored to a page element rather than free-form.
-
-        A free-form message (``tag == "message"``) has no meaningful ``selector``/``text``
-        to show; an annotation does, so the renderer shows its anchored line for context.
-        """
-        return self.tag not in ("", "message")
-
-
-def _split_toon_row(row: str) -> list[str]:
-    """Split one TOON data row into its fields, honouring TOON's quoting.
-
-    TOON quotes a field with double quotes and escapes an inner quote with a backslash
-    (``\\"``), not by doubling it — so the CSV reader runs with ``doublequote=False`` and
-    ``escapechar='\\'``. Unquoted fields (a question with no comma) pass through verbatim.
-    """
-    reader = csv.reader(
-        io.StringIO(row),
-        quotechar='"',
-        doublequote=False,
-        escapechar="\\",
-    )
-    try:
-        return next(reader)
-    except StopIteration:
-        return []
-
-
-def extract_prompts(toon: str) -> list[Prompt]:
-    """Lift the reviewer prompts from one poll's raw TOON — the bounded extractor (ADR-0007).
-
-    Finds the single column-0 ``prompts[N]{fields}:`` header, reads the field order from
-    its ``{…}``, and parses exactly ``N`` following indented rows into :class:`Prompt`
-    records. Returns ``[]`` when there is no prompts block (a ``waiting``/``ended`` poll)
-    or the header is malformed — a missing question degrades to an empty log, never a
-    crash. This is the *only* place anything is read out of the stored TOON, and it reads
-    nothing but this one block.
-    """
-    header = _PROMPTS_HEADER.search(toon)
-    if header is None:
-        return []
-    count = int(header.group(1))
-    fields = [name.strip() for name in header.group(2).split(",")]
-
-    prompts: list[Prompt] = []
-    for line in toon[header.end() :].splitlines():
-        if len(prompts) >= count:
-            break
-        if line.startswith((" ", "\t")):
-            if not line.strip():
-                continue
-            values = _split_toon_row(line.strip())
-            record = dict(zip(fields, values, strict=False))
-            prompts.append(
-                Prompt(
-                    uid=record.get("uid", ""),
-                    prompt=record.get("prompt", ""),
-                    selector=record.get("selector", ""),
-                    tag=record.get("tag", ""),
-                    text=record.get("text", ""),
-                )
-            )
-        elif line.strip():
-            break  # a non-indented, non-blank line is the next top-level key — block ended
-    return prompts
 
 
 # --- Loading the transcript -------------------------------------------------
@@ -221,6 +143,111 @@ def load_exchanges(qa_path: Path) -> list[Exchange]:
             )
         )
     return exchanges
+
+
+# --- Reviewer dispositions at close (ADR-0012) --------------------------------
+
+# List order for the outcome: what needs attention first, what was cleared, what
+# was never examined. The unreviewed tail is deliberate — nothing hidden.
+_OUTCOME_ORDER = ("concern", "question-open", "verified", "unreviewed")
+
+
+def _without_disposition_prompts(exchanges: Sequence[Exchange]) -> list[Exchange]:
+    """Drop disposition updates from the Q&A before rendering (ADR-0012).
+
+    A disposition click travels the same feedback channel as a question, so it lands
+    in ``qa.jsonl`` whenever the loop replies to a poll that carried one (the ack
+    that reopens the presence-gated channel, or a mixed poll). It is review *state*,
+    not conversation — the Review outcome section accounts for it; rendering it as
+    Q&A would duplicate it as noise. An exchange whose prompts were **all**
+    dispositions disappears entirely (its answer was just the ack).
+    """
+    filtered: list[Exchange] = []
+    for exchange in exchanges:
+        kept = [p for p in exchange.prompts if parse_disposition_prompt(p) is None]
+        if exchange.prompts and not kept:
+            continue
+        if len(kept) != len(exchange.prompts):
+            exchange = replace(exchange, prompts=kept)
+        filtered.append(exchange)
+    return filtered
+
+
+def _claims_by_disposition(
+    analysis: Mapping[str, object], dispositions: Mapping[str, str]
+) -> list[tuple[str, str, str]]:
+    """Every claim as ``(disposition, claim_id, summary)``, grouped concern-first.
+
+    Groups follow :data:`_OUTCOME_ORDER`; within a group, analysis order (the Review
+    Route). A claim absent from the store is ``unreviewed`` — listed, never dropped.
+    """
+    groups: dict[str, list[tuple[str, str]]] = {d: [] for d in _OUTCOME_ORDER}
+    threads = analysis.get("threads")
+    if not isinstance(threads, list):
+        return []
+    for thread in threads:
+        if not isinstance(thread, Mapping):
+            continue
+        claims = thread.get("claims")
+        if not isinstance(claims, list):
+            continue
+        for claim in claims:
+            if not isinstance(claim, Mapping) or not isinstance(claim.get("id"), str):
+                continue
+            disposition = dispositions.get(claim["id"], "unreviewed")
+            if disposition not in _OUTCOME_ORDER:
+                disposition = "unreviewed"
+            groups[disposition].append((claim["id"], str(claim.get("summary", ""))))
+    return [(d, cid, summary) for d in _OUTCOME_ORDER for cid, summary in groups[d]]
+
+
+def _outcome_counts_line(rows: Sequence[tuple[str, str, str]]) -> str:
+    """The one-line aggregate, in the ADR's reading order (verified first)."""
+    counts = Counter(disposition for disposition, _cid, _summary in rows)
+    ordered = ("verified", "concern", "question-open", "unreviewed")
+    return " · ".join(f"{d} {counts.get(d, 0)}" for d in ordered)
+
+
+# The attribution the ADR draws the verdict line with: the aggregate is the
+# reviewer's, and the tool never prints a bottom line it authored.
+_OUTCOME_NOTE = (
+    "Dispositions were set by the reviewer in the cockpit; unreviewed claims are "
+    "listed, never hidden. The review tool states per-claim confidence only and "
+    "issues no overall verdict."
+)
+
+
+def render_outcome_html(
+    analysis: Mapping[str, object] | None, dispositions: Mapping[str, str]
+) -> str:
+    """The close-time Review outcome section — the reviewer's dispositions (ADR-0012).
+
+    States what the reviewer verified, what raised concerns, what has a question
+    still open, and what was never examined. The claim ids and summaries are the
+    analysis's trusted prose and the disposition values a validated closed
+    vocabulary, but everything renders through ``escape_text`` anyway — the boundary
+    is unconditional. Returns ``""`` when the analysis has no claims (missing or
+    old-schema analysis): the bake degrades, never crashes (ADR-0007).
+    """
+    rows = _claims_by_disposition(analysis or {}, dispositions)
+    if not rows:
+        return ""
+    parts = [
+        '<section id="review-outcome">',
+        "  <h2>Review outcome</h2>",
+        f'  <p class="outcome-counts">{escape_text(_outcome_counts_line(rows))}</p>',
+        '  <ul class="outcome-list">',
+    ]
+    for disposition, cid, summary in rows:
+        parts.append(
+            f'    <li><span class="disposition {escape_text(disposition)}">'
+            f"{escape_text(disposition)}</span> <code>{escape_text(cid)}</code>"
+            f" — {escape_text(summary)}</li>"
+        )
+    parts.append("  </ul>")
+    parts.append(f'  <p class="outcome-note">{escape_text(_OUTCOME_NOTE)}</p>')
+    parts.append("</section>")
+    return "\n".join(parts) + "\n"
 
 
 # --- HTML rendering + injection ---------------------------------------------
@@ -326,14 +353,20 @@ class BakeResult:
 
 
 def bake_html(
-    html: str, exchanges: Sequence[Exchange], *, swap_to_strict: bool = True
+    html: str,
+    exchanges: Sequence[Exchange],
+    *,
+    outcome_html: str = "",
+    swap_to_strict: bool = True,
 ) -> tuple[str, bool]:
-    """Fold the exchanges into ``html`` and (by default) swap to the strict CSP.
+    """Fold the close-time record into ``html`` and (by default) swap to the strict CSP.
 
-    Pure string→string: the I/O lives in :func:`bake_review`. Returns the baked HTML and
+    The record is the Review outcome (``outcome_html``, may be empty) followed by the
+    Q&A log, injected together at the seam so re-baking stays idempotent. Pure
+    string→string: the I/O lives in :func:`bake_review`. Returns the baked HTML and
     whether the CSP was swapped.
     """
-    html = inject_qa(html, render_qa_html(exchanges))
+    html = inject_qa(html, outcome_html + render_qa_html(exchanges))
     csp_swapped = False
     if swap_to_strict:
         html, csp_swapped = swap_csp(html)
@@ -471,15 +504,36 @@ def _alignment_line(analysis: Mapping[str, object]) -> str:
     return f"Goal alignment — {'; '.join(bits)}."
 
 
-def build_markdown(analysis: Mapping[str, object] | None, exchanges: Sequence[Exchange]) -> str:
-    """Build ``review.md`` from the Analysis and the Q&A — for pasting into a PR.
+def _outcome_markdown(
+    analysis: Mapping[str, object] | None, dispositions: Mapping[str, str]
+) -> str:
+    """The Review outcome as Markdown — the reviewer's account, for a PR paste."""
+    rows = _claims_by_disposition(analysis or {}, dispositions)
+    if not rows:
+        return ""
+    lines = [f"Reviewer dispositions — {_outcome_counts_line(rows)}.", ""]
+    lines += [
+        f"- **{disposition}** — {cid}: {_inline(summary)}" for disposition, cid, summary in rows
+    ]
+    lines += ["", f"_{_OUTCOME_NOTE}_"]
+    return "\n".join(lines)
+
+
+def build_markdown(
+    analysis: Mapping[str, object] | None,
+    exchanges: Sequence[Exchange],
+    dispositions: Mapping[str, str] | None = None,
+) -> str:
+    """Build ``review.md`` from the Analysis, the dispositions, and the Q&A.
 
     Renders the reviewer-facing Analysis (the L0 orientation with its goal-alignment
     line, then each thread with its claims — verify claims as checkboxes, drive-by
-    threads flagged in their headings) followed by the Q&A Log. ``analysis``
-    may be ``None`` (no ``analysis.json``) — the export then carries the Q&A alone rather
-    than failing. The Analysis is the agent's own trusted prose; reviewer-originated text
-    in the Q&A goes through :func:`_fenced` so it cannot break the Markdown.
+    threads flagged in their headings), the Review outcome (the **reviewer's**
+    dispositions, ADR-0012 — omitted when ``dispositions`` is ``None``), and the Q&A
+    Log. ``analysis`` may be ``None`` (no ``analysis.json``) — the export then
+    carries the Q&A alone rather than failing. The Analysis is the agent's own
+    trusted prose; reviewer-originated text in the Q&A goes through :func:`_fenced`
+    so it cannot break the Markdown.
     """
     analysis = analysis or {}
     title = str(analysis.get("title") or "Branch Review")
@@ -487,6 +541,9 @@ def build_markdown(analysis: Mapping[str, object] | None, exchanges: Sequence[Ex
 
     orientation_parts = [str(analysis.get("intent_summary") or ""), _alignment_line(analysis)]
     out += _md_section("Orientation", "\n\n".join(p for p in orientation_parts if p.strip()))
+
+    if dispositions is not None:
+        out += _md_section("Review outcome", _outcome_markdown(analysis, dispositions))
 
     drive_by = _drive_by_threads(analysis)
     threads = analysis.get("threads")
@@ -542,21 +599,31 @@ def bake_review(
     """Fold ``qa.jsonl`` into the cockpit on disk and optionally write ``review.md``.
 
     The cockpit is read, baked, and written back in place; the Q&A seam makes that
-    idempotent. When ``markdown_path`` is given, the Markdown export is built from
-    ``analysis.json`` (default beside the cockpit) plus the same exchanges and written
-    there. All paths default under the cockpit's own directory.
+    idempotent. The baked record is the Review outcome (the reviewer's dispositions,
+    read from ``dispositions.json`` beside the cockpit — ADR-0012) followed by the
+    Q&A log with disposition updates filtered out (they are state, not
+    conversation). When ``markdown_path`` is given, the Markdown export is built
+    from ``analysis.json`` (default beside the cockpit) plus the same record and
+    written there. All paths default under the cockpit's own directory.
     """
     out_dir = cockpit.parent
     qa_path = qa_path or out_dir / QA_NAME
     analysis_path = analysis_path or out_dir / ANALYSIS_NAME
 
-    exchanges = load_exchanges(qa_path)
+    analysis = _load_analysis(analysis_path)
+    dispositions = load_dispositions(out_dir / DISPOSITIONS_NAME)
+    exchanges = _without_disposition_prompts(load_exchanges(qa_path))
     html = cockpit.read_text(encoding="utf-8")
-    baked, csp_swapped = bake_html(html, exchanges, swap_to_strict=swap_to_strict)
+    baked, csp_swapped = bake_html(
+        html,
+        exchanges,
+        outcome_html=render_outcome_html(analysis, dispositions),
+        swap_to_strict=swap_to_strict,
+    )
     cockpit.write_text(baked, encoding="utf-8")
 
     if markdown_path is not None:
-        markdown = build_markdown(_load_analysis(analysis_path), exchanges)
+        markdown = build_markdown(analysis, exchanges, dispositions)
         markdown_path.write_text(markdown, encoding="utf-8")
 
     return BakeResult(
