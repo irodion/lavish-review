@@ -54,6 +54,7 @@ from branch_review.dispositions import (
     DISPOSITIONS_NAME,
     load_dispositions,
     parse_disposition_prompt,
+    progress,
 )
 from branch_review.escape import STRICT_CSP, escape_text, fragment
 
@@ -208,6 +209,58 @@ def _outcome_counts_line(rows: Sequence[tuple[str, str, str]]) -> str:
     return " · ".join(f"{d} {counts.get(d, 0)}" for d in ordered)
 
 
+def _progress_text(reviewed: int, total: int, concerns: int) -> str:
+    """One thread's totals, in the exact wording the live page's progress span uses."""
+    text = f"{reviewed}/{total} reviewed"
+    if concerns:
+        text += f" · {concerns} concern{'s' if concerns != 1 else ''}"
+    return text
+
+
+def _thread_titles(analysis: Mapping[str, object]) -> dict[str, str]:
+    threads = analysis.get("threads")
+    if not isinstance(threads, list):
+        return {}
+    return {
+        thread["id"]: str(thread.get("title", ""))
+        for thread in threads
+        if isinstance(thread, Mapping) and isinstance(thread.get("id"), str)
+    }
+
+
+# The open tag of any ``<details>`` element, and within it a claim-shaped id and any
+# previously baked disposition attribute (stripped first, so re-baking replaces).
+_DETAILS_TAG = re.compile(r"<details\b[^>]*>", re.IGNORECASE)
+_CLAIM_DETAILS_ID = re.compile(r'\bid\s*=\s*"(t\d+\.c\d+)"')
+_DISPOSITION_ATTR = re.compile(r'\s+data-disposition\s*=\s*"[^"]*"')
+
+
+def bake_dispositions_html(html: str, dispositions: Mapping[str, str]) -> str:
+    """Stamp each claim's reviewer disposition onto its ``<details>`` open tag.
+
+    On the live page the tint comes from ``app.js`` setting ``data-disposition``;
+    the baked ``file://`` artifact runs no disposition code (a record, not a review
+    surface), so the bake writes the same attribute statically and the stylesheet's
+    existing ``details.claim[data-disposition=…]`` rules light up under the strict
+    CSP with no script at all. Only values in the closed vocabulary are ever
+    stamped — anything else (including ``unreviewed``, which is absence) strips the
+    attribute, which also makes re-baking idempotent.
+    """
+
+    def stamp(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        id_match = _CLAIM_DETAILS_ID.search(tag)
+        if not id_match:
+            return tag
+        tag = _DISPOSITION_ATTR.sub("", tag)
+        disposition = dispositions.get(id_match.group(1))
+        if disposition in _OUTCOME_ORDER and disposition != "unreviewed":
+            tag = f'{tag[:-1]} data-disposition="{disposition}">'
+        return tag
+
+    return _DETAILS_TAG.sub(stamp, html)
+
+
 # The attribution the ADR draws the verdict line with: the aggregate is the
 # reviewer's, and the tool never prints a bottom line it authored.
 _OUTCOME_NOTE = (
@@ -223,21 +276,35 @@ def render_outcome_html(
     """The close-time Review outcome section — the reviewer's dispositions (ADR-0012).
 
     States what the reviewer verified, what raised concerns, what has a question
-    still open, and what was never examined. The claim ids and summaries are the
+    still open, and what was never examined — with per-thread totals so attention
+    coverage is visible at a glance. The claim ids and summaries are the
     analysis's trusted prose and the disposition values a validated closed
     vocabulary, but everything renders through ``escape_text`` anyway — the boundary
     is unconditional. Returns ``""`` when the analysis has no claims (missing or
     old-schema analysis): the bake degrades, never crashes (ADR-0007).
     """
-    rows = _claims_by_disposition(analysis or {}, dispositions)
+    analysis = analysis or {}
+    rows = _claims_by_disposition(analysis, dispositions)
     if not rows:
         return ""
     parts = [
         '<section id="review-outcome">',
         "  <h2>Review outcome</h2>",
         f'  <p class="outcome-counts">{escape_text(_outcome_counts_line(rows))}</p>',
-        '  <ul class="outcome-list">',
     ]
+    totals = progress(analysis, dispositions)
+    if totals:
+        titles = _thread_titles(analysis)
+        parts.append('  <ul class="outcome-threads">')
+        for tid, reviewed, total, concerns in totals:
+            head = f"<code>{escape_text(tid)}</code>"
+            if titles.get(tid):
+                head += f" {escape_text(titles[tid])}"
+            parts.append(
+                f"    <li>{head} — {escape_text(_progress_text(reviewed, total, concerns))}</li>"
+            )
+        parts.append("  </ul>")
+    parts.append('  <ul class="outcome-list">')
     for disposition, cid, summary in rows:
         parts.append(
             f'    <li><span class="disposition {escape_text(disposition)}">'
@@ -357,15 +424,20 @@ def bake_html(
     exchanges: Sequence[Exchange],
     *,
     outcome_html: str = "",
+    dispositions: Mapping[str, str] | None = None,
     swap_to_strict: bool = True,
 ) -> tuple[str, bool]:
     """Fold the close-time record into ``html`` and (by default) swap to the strict CSP.
 
     The record is the Review outcome (``outcome_html``, may be empty) followed by the
-    Q&A log, injected together at the seam so re-baking stays idempotent. Pure
-    string→string: the I/O lives in :func:`bake_review`. Returns the baked HTML and
-    whether the CSP was swapped.
+    Q&A log, injected together at the seam so re-baking stays idempotent. When
+    ``dispositions`` is given, each claim's state is also stamped onto its own
+    ``<details>`` tag (:func:`bake_dispositions_html`) so the saved page shows the
+    tints without script. Pure string→string: the I/O lives in :func:`bake_review`.
+    Returns the baked HTML and whether the CSP was swapped.
     """
+    if dispositions is not None:
+        html = bake_dispositions_html(html, dispositions)
     html = inject_qa(html, outcome_html + render_qa_html(exchanges))
     csp_swapped = False
     if swap_to_strict:
@@ -404,13 +476,17 @@ def _inline(text: str) -> str:
     return " ".join(text.split())
 
 
-def _format_claim_block(claim: Mapping[str, object]) -> str:
+def _format_claim_block(claim: Mapping[str, object], disposition: str | None = None) -> str:
     """One claim as a ``### [kind] summary`` heading with its badges and questions.
 
+    A reviewer disposition, when set, joins the badges as ``reviewer: …`` — the
+    per-claim state stays attributed to the human, beside the agent's confidence.
     ``verify`` claims are the export's checklist (they replaced the old
     ``test_checklist.items``), so they render as **real task-list items** — the
     ``- [ ]`` marker must sit at list level; inside a ``###`` heading GitHub
-    renders it as literal heading text, not a checkbox.
+    renders it as literal heading text, not a checkbox — and the box is checked
+    exactly when the reviewer set ``verified``, so the pasted checklist reflects
+    real verification state, never the claim's mere existence.
     """
     kind = str(claim.get("kind", ""))
     badges = [f"confidence: {claim.get('confidence', '')}"]
@@ -418,12 +494,15 @@ def _format_claim_block(claim: Mapping[str, object]) -> str:
         badges.append(str(claim["category"]))
     if claim.get("level"):
         badges.append(f"level: {claim['level']}")
+    if disposition:
+        badges.append(f"reviewer: {disposition}")
     label = f"[{kind}] {claim.get('summary', '')} ({'; '.join(badges)})"
     detail = str(claim.get("detail", ""))
     questions = claim.get("challenge_questions")
 
     if kind == "verify":
-        lines = [f"- [ ] {label}"]
+        box = "x" if disposition == "verified" else " "
+        lines = [f"- [{box}] {label}"]
         if detail:
             lines.append(f"  {detail}")  # indented: stays inside the task item
         if isinstance(questions, list):
@@ -434,12 +513,16 @@ def _format_claim_block(claim: Mapping[str, object]) -> str:
     return "\n".join((f"### {label}", "", detail, "", bullets)).rstrip()
 
 
-def _format_thread(thread: Mapping[str, object]) -> str:
+def _format_thread(thread: Mapping[str, object], dispositions: Mapping[str, str]) -> str:
     """One thread: its summary then every claim block (ADR-0009's L1/L2 in Markdown)."""
     parts = [str(thread.get("summary", ""))]
     claims = thread.get("claims")
     if isinstance(claims, list):
-        parts += [_format_claim_block(c) for c in claims if isinstance(c, Mapping)]
+        parts += [
+            _format_claim_block(c, dispositions.get(str(c.get("id", ""))))
+            for c in claims
+            if isinstance(c, Mapping)
+        ]
     return "\n\n".join(part for part in parts if part.strip())
 
 
@@ -508,10 +591,19 @@ def _outcome_markdown(
     analysis: Mapping[str, object] | None, dispositions: Mapping[str, str]
 ) -> str:
     """The Review outcome as Markdown — the reviewer's account, for a PR paste."""
-    rows = _claims_by_disposition(analysis or {}, dispositions)
+    analysis = analysis or {}
+    rows = _claims_by_disposition(analysis, dispositions)
     if not rows:
         return ""
     lines = [f"Reviewer dispositions — {_outcome_counts_line(rows)}.", ""]
+    totals = progress(analysis, dispositions)
+    if totals:
+        titles = _thread_titles(analysis)
+        bits = []
+        for tid, reviewed, total, concerns in totals:
+            name = f"{tid} ({_inline(titles[tid])})" if titles.get(tid) else tid
+            bits.append(f"{name} {_progress_text(reviewed, total, concerns)}")
+        lines += [f"Per thread: {'; '.join(bits)}.", ""]
     lines += [
         f"- **{disposition}** — {cid}: {_inline(summary)}" for disposition, cid, summary in rows
     ]
@@ -527,15 +619,17 @@ def build_markdown(
     """Build ``review.md`` from the Analysis, the dispositions, and the Q&A.
 
     Renders the reviewer-facing Analysis (the L0 orientation with its goal-alignment
-    line, then each thread with its claims — verify claims as checkboxes, drive-by
-    threads flagged in their headings), the Review outcome (the **reviewer's**
-    dispositions, ADR-0012 — omitted when ``dispositions`` is ``None``), and the Q&A
-    Log. ``analysis`` may be ``None`` (no ``analysis.json``) — the export then
-    carries the Q&A alone rather than failing. The Analysis is the agent's own
-    trusted prose; reviewer-originated text in the Q&A goes through :func:`_fenced`
-    so it cannot break the Markdown.
+    line, then each thread with its claims — verify claims as checkboxes checked by
+    the reviewer's ``verified``, per-claim dispositions as ``reviewer:`` badges,
+    drive-by threads flagged in their headings), the Review outcome (the
+    **reviewer's** dispositions with per-thread totals, ADR-0012 — omitted when
+    ``dispositions`` is ``None``), and the Q&A Log. ``analysis`` may be ``None``
+    (no ``analysis.json``) — the export then carries the Q&A alone rather than
+    failing. The Analysis is the agent's own trusted prose; reviewer-originated
+    text in the Q&A goes through :func:`_fenced` so it cannot break the Markdown.
     """
     analysis = analysis or {}
+    claim_dispositions = dispositions or {}
     title = str(analysis.get("title") or "Branch Review")
     out: list[str] = [f"# {title}", ""]
 
@@ -554,7 +648,7 @@ def build_markdown(
             heading = f"{thread.get('id', '')} — {thread.get('title', '')}".strip(" —")
             if thread.get("id") in drive_by:
                 heading += " (drive-by)"
-            out += _md_section(heading, _format_thread(thread))
+            out += _md_section(heading, _format_thread(thread, claim_dispositions))
 
     runner_block = analysis.get("test_runner")
     if isinstance(runner_block, Mapping):
@@ -618,6 +712,7 @@ def bake_review(
         html,
         exchanges,
         outcome_html=render_outcome_html(analysis, dispositions),
+        dispositions=dispositions,
         swap_to_strict=swap_to_strict,
     )
     cockpit.write_text(baked, encoding="utf-8")
