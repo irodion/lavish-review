@@ -141,10 +141,17 @@ def load_fragments(path: Path) -> list[EvidenceFragment]:
         claim = entry.get("claim")
         if not isinstance(claim, str) or not _CLAIM_ID.match(claim):
             continue
+        # A hand-edited or truncated record could carry a non-numeric seq; fall
+        # back to the positional index rather than crash the injection (the same
+        # posture as the bake's load_exchanges).
+        try:
+            seq = int(entry.get("seq", len(fragments) + 1))
+        except (TypeError, ValueError):
+            seq = len(fragments) + 1
         fragments.append(
             EvidenceFragment(
                 claim=claim,
-                seq=int(entry.get("seq", len(fragments) + 1)),
+                seq=seq,
                 ts=str(entry.get("ts", "")),
                 title=str(entry.get("title", "")),
                 body=str(entry.get("body", "")),
