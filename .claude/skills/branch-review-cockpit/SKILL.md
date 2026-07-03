@@ -23,7 +23,7 @@ feedback loop.
 The cockpit is **layered** (ADR-0009): it rolls the change out before the reviewer
 gradually — L0 answers *what is this branch for*, L1 decomposes it into a few
 narrative **Threads**, L2 states the **Claims** the reviewer must judge (each with
-your confidence and challenge questions), and L3 holds the **evidence**: the diffs
+the analyst's confidence and challenge questions), and L3 holds the **evidence**: the diffs
 themselves, demoted to leaf level. The reviewer descends at their own pace; every
 layer must justify the one above it. It is authored from a structured **Analysis**
 (`analysis.json`) written first (ADR-0001) — the substrate both the HTML *and*
