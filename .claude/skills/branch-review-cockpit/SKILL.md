@@ -312,7 +312,11 @@ the ancestors of any `#anchor` they follow:
      `<h4>Evidence</h4><ul class="evidence-list">` — each `{path}` ref rendered as
      `<a href="#file-ID">` (the `fragments.json` entry's `id`, with the entry's
      `path_html` as the link body) and each `{note}` as `<span class="note">`.
-     Every `path` evidence ref **must** link to a real L3 anchor.
+     Every `path` evidence ref **must** link to a real L3 anchor. Then plant the
+     claim's **live-evidence seam**, empty and exact (the id is the claim's own):
+     `<!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1-->` — a mid-review answer
+     that *is* new evidence is injected here (step 8 e); a claim authored without
+     its seam can only ever be answered in chat.
 4. **L3 — Evidence** — `<section>` with an `<h2>`; then **every** file from
    `fragments.json`, **in its order**, as `<details class="file" id="file-ID">`
    (the entry's `id`): `<summary>` holds the **`path_html`** (verbatim) and a
@@ -454,6 +458,31 @@ This shows your answer in the browser chat, appends the exchange to
 is the *next* poll, so read it and loop back to **b**. Repeat until `status: ended`
 or the reviewer interrupts.
 
+**e. When the answer IS new evidence — inject it (chat stays the default).**
+If a question is best answered by content the page should *keep* — the callers
+of a changed symbol, the config a hunk reads, a widened-file excerpt — you may
+attach it under the claim it substantiates (issue #43; ADR-0003 as amended:
+**seam-bounded injection only, never regenerate or hand-edit the page**). Write
+the raw content to a scratch file with the Write tool (never inline in a
+command — it is untrusted repo/diff content), then:
+
+```sh
+python3 .claude/skills/branch-review-cockpit/scripts/inject_evidence.py t1.c2 \
+  --title "Callers of retry()" --input .review-agent/evidence-input.txt
+```
+
+(Add `--styling cdn` only when `resolved-config.json` resolved it.) The script
+escapes the body, rewrites **only** that claim's seam (idempotent — the seam is
+re-rendered wholesale from `live-evidence.json`, so nothing duplicates), lints
+the whole post-injection page, and writes **only if the lint passes**. On any
+failure — bad claim id, missing seam, lint error — nothing is written and it
+exits non-zero: answer in chat instead (the floor). On success the served page
+re-renders itself (the #38 spike's watch verdict — no refresh needed; if the
+reviewer says they don't see it, tell them to refresh); say in your `reply` that
+the evidence now sits under the claim. Injected fragments are run-scoped
+(`live-evidence.json`, reset on regeneration) and survive `/review-close` — the
+bake rewrites only its own Q&A seam.
+
 **Controls.** `Esc` hard-interrupts the loop (the poll exits 130; Lavish preserves
 queued feedback). `/review-resume` re-attaches by running `poll` again on the same
 file (no regeneration — the session is keyed by the cockpit path). `/review-close`
@@ -503,6 +532,7 @@ transcript.
   agent-reply.txt         (your answer, read by review_loop.py reply)
   qa.jsonl                (live Q&A transcript, one exchange per line)
   dispositions.json       (reviewer dispositions keyed by claim id — written only by dispositions.py apply)
+  live-evidence.json      (mid-review injected evidence fragments, keyed by claim id — written only by inject_evidence.py)
   last-poll.toon          (raw stdout of the most recent poll — the question)
   assets/  cockpit.css  app.js
 ```
