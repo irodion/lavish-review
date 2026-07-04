@@ -159,6 +159,8 @@ pre.diff .ln-hunk { color: var(--accent); }
 }
 .goal-provenance { margin: 0 0 0.75rem; font-size: 0.82rem; color: var(--muted); }
 .goal-missing { margin: 0 0 0.75rem; color: var(--muted); font-style: italic; }
+/* ADR-0013: the L0 disclosure when a platform has no isolated-analyst mechanism. */
+.isolation-note { margin: 0 0 0.75rem; color: var(--warn); font-size: 0.85rem; font-style: italic; }
 section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
 .orientation {
   display: flex;
