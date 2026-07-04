@@ -172,12 +172,23 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
   font-size: 0.85rem;
   color: var(--muted);
 }
-.orientation li {
+/* Direct children only, and a modest radius: orientation items routinely wrap
+   (thread route, goal alignment), and a full-pill radius on a multi-line box
+   curves into its own text. */
+.orientation > li {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.15rem 0.7rem;
+  border-radius: 8px;
+  padding: 0.3rem 0.8rem;
 }
+/* Nested detail (the thread route, goal-alignment links) renders as plain rows
+   inside its parent item — never a pill-in-pill. */
+.orientation li ul {
+  list-style: none;
+  margin: 0.3rem 0 0.1rem;
+  padding-left: 0.75rem;
+}
+.orientation li li { margin: 0.15rem 0; }
 .orientation a { color: var(--accent); text-decoration: none; }
 .orientation a:hover { text-decoration: underline; }
 
