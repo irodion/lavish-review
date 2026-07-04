@@ -167,6 +167,56 @@ def test_install_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert not (tmp_path / "home" / ".review-agent").exists()
 
 
+def _broken_skill(tmp_path: Path) -> Path:
+    """A skill copy that lost templates in transit — SKILL.md there, commands not."""
+    skill = tmp_path / "broken-skill"
+    (skill / "assets" / "commands").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+    (skill / "assets" / "commands" / "review-branch.md").write_text("t\n", encoding="utf-8")
+    return skill
+
+
+def test_missing_template_is_an_error_not_a_conflict(tmp_path: Path) -> None:
+    # --force can't conjure a missing template; the plan must not suggest it.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    actions = install(repo, _broken_skill(tmp_path), home=tmp_path / "home", platforms=("cursor",))
+    kinds = {a.path.name: a.kind for a in actions if a.path.suffix == ".md"}
+    assert kinds["review-branch.md"] == "create"
+    assert kinds["review-resume.md"] == "error"
+    assert kinds["review-close.md"] == "error"
+
+
+def test_cli_fails_loudly_on_an_incomplete_skill_copy(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    code = main(
+        [
+            "--repo",
+            str(repo),
+            "--home",
+            str(tmp_path / "home"),
+            "--skill-dir",
+            str(_broken_skill(tmp_path)),
+            "--platforms",
+            "cursor",
+        ]
+    )
+    assert code == 1
+    assert "re-install" in capsys.readouterr().err
+
+
+def test_default_skill_dir_resolves_the_dev_repo() -> None:
+    # In this repo the module sits at src/branch_review/install.py, so resolution
+    # must land on the repo's own skill directory. (An installed copy normally
+    # bypasses this fallback: the shim passes --skill-dir explicitly.)
+    from branch_review.install import default_skill_dir
+
+    assert default_skill_dir() == _SKILL
+
+
 def test_cli_rejects_unknown_platform_and_missing_skill(tmp_path: Path) -> None:
     assert main(["--platforms", "vscode", "--repo", str(tmp_path)]) == 2
     assert main(["--skill-dir", str(tmp_path / "nope"), "--repo", str(tmp_path)]) == 2

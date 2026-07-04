@@ -32,6 +32,15 @@ def test_no_markers_yields_none(tmp_path: Path) -> None:
     assert detect_runner(tmp_path) is None
 
 
+def test_invalid_utf8_marker_files_never_raise(tmp_path: Path) -> None:
+    # Best-effort loaders (never-raises contract): tomllib decodes raw bytes
+    # itself, so invalid UTF-8 would surface as a bare UnicodeDecodeError; same
+    # for json.loads over read_text. Both must degrade to "no marker".
+    (tmp_path / "pyproject.toml").write_bytes(b"\xff\xfe[tool")
+    (tmp_path / "package.json").write_bytes(b'\xff{"scripts"')
+    assert detect_runner(tmp_path) is None
+
+
 def test_pytest_from_pyproject(tmp_path: Path) -> None:
     _write(tmp_path, "pyproject.toml", "[tool.pytest.ini_options]\ntestpaths = ['tests']\n")
     runner = _detected(tmp_path)

@@ -57,7 +57,7 @@ _AGENT_DEF = "review-analyst.md"
 class Action:
     """One planned/performed installer step, for the summary and for tests."""
 
-    kind: str  # "create" | "append" | "skip" | "conflict"
+    kind: str  # "create" | "append" | "skip" | "conflict" | "error"
     path: Path
     content: str = ""
     reason: str = ""
@@ -192,7 +192,8 @@ def install(
         template = skill_dir / "assets" / kind / name
         content = _read(template)
         if content is None:
-            actions.append(Action("conflict", dst, reason=f"template missing: {template}"))
+            # Not a conflict: --force can't fix an incomplete skill copy.
+            actions.append(Action("error", dst, reason=f"template missing: {template}"))
             continue
         actions.append(plan_file(dst, content, _read(dst), force=force))
 
@@ -276,6 +277,14 @@ def main(argv: list[str] | None = None) -> int:
     if conflicts:
         print(f"{len(conflicts)} file(s) kept with local changes; use --force to replace.")
     print(f"Lavish pinned at {PINNED_LAVISH_VERSION} (machine config overrides).")
+    errors = [a for a in actions if a.kind == "error"]
+    if errors:
+        print(
+            f"{len(errors)} template(s) missing — the skill copy is incomplete; "
+            "re-install it (npx skills add).",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

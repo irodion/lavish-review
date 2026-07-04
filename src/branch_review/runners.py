@@ -54,7 +54,9 @@ def _load_toml(path: Path) -> dict[str, object]:
     try:
         with path.open("rb") as handle:
             return tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError):
+    # tomllib decodes the raw bytes itself, so invalid UTF-8 surfaces as a bare
+    # UnicodeDecodeError rather than a TOMLDecodeError — catch it too.
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return {}
 
 
@@ -62,7 +64,7 @@ def _load_json(path: Path) -> dict[str, object]:
     """Parsed JSON object, or ``{}`` if missing/malformed (best-effort)."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
 
