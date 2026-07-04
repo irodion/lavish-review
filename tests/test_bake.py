@@ -133,6 +133,18 @@ def test_extract_decodes_tab_cr_backslash_and_unknown_escape() -> None:
     assert prompt.text == "a\tb\rc \\ d x"
 
 
+def test_extract_leaves_unquoted_backslashes_verbatim() -> None:
+    # Escapes only exist inside quoted fields — an unquoted field keeps its
+    # backslashes as-is (C:\temp must not gain a tab).
+    toon = (
+        "prompts[1]{uid,prompt,selector,tag,text}:\n"
+        '  "4",q,"sel",span,C:\\temp\\notes\n'
+        'next_step: "..."\n'
+    )
+    (prompt,) = extract_prompts(toon)
+    assert prompt.text == "C:\\temp\\notes"
+
+
 def test_extract_free_form_message_is_not_an_annotation() -> None:
     (prompt,) = extract_prompts(_TOON_MESSAGE)
     assert prompt.prompt == "what it the main goal of the branch"

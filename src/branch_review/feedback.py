@@ -115,9 +115,10 @@ def _split_toon_row(row: str) -> list[str]:
 
     TOON quotes a field with double quotes and uses C-style backslash escapes inside
     a quoted field: ``\\"`` for a literal quote, and ``\\n`` / ``\\t`` / ``\\r`` for the
-    whitespace controls (Lavish encodes a multi-line prompt this way). A backslash
+    whitespace controls (Lavish encodes a multi-line prompt this way); a backslash
     before any other character keeps that character verbatim. Unquoted fields (a
-    question with no comma) pass through as-is.
+    question with no comma) pass through as-is, backslashes included — escapes only
+    exist inside quotes.
 
     A hand scanner, not ``csv`` with ``escapechar``: the stdlib reader *drops* the
     backslash before every escaped character, so ``\\n`` decodes to a bare ``n``
@@ -130,7 +131,7 @@ def _split_toon_row(row: str) -> list[str]:
     i = 0
     while i < len(row):
         ch = row[i]
-        if ch == "\\" and i + 1 < len(row):
+        if in_quotes and ch == "\\" and i + 1 < len(row):
             nxt = row[i + 1]
             buf.append(_TOON_ESCAPES.get(nxt, nxt))
             i += 2
