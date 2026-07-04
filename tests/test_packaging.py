@@ -51,11 +51,16 @@ def test_vendored_copies_match_their_sources() -> None:
 def test_mirror_covers_the_whole_package() -> None:
     # Every module in src/branch_review must be part of the mirror — a new module
     # that never reaches the vendored tree would break installed skills silently.
+    # Matched on the full planned destination, not the basename, so a same-named
+    # file mirrored elsewhere can never satisfy this check.
     sync = _sync_module()
-    mirrored = {src.name for src, _dst in sync.planned_files()}
+    planned = {dst for _src, dst in sync.planned_files()}
+    lib = _SKILL / "lib" / "branch_review"
     for source in (_REPO / "src" / "branch_review").iterdir():
         if source.is_file() and (source.suffix == ".py" or source.name == "py.typed"):
-            assert source.name in mirrored, f"{source.name} missing from tools/sync_vendored.py"
+            assert lib / source.name in planned, (
+                f"{source.name} missing from tools/sync_vendored.py"
+            )
 
 
 def test_mirror_ships_every_template_the_installer_writes() -> None:

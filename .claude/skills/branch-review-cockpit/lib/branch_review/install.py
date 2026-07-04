@@ -33,6 +33,7 @@ import argparse
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from branch_review.config import MACHINE_CONFIG_REL
 from branch_review.feedback import LAVISH_PKG
@@ -57,7 +58,7 @@ _AGENT_DEF = "review-analyst.md"
 class Action:
     """One planned/performed installer step, for the summary and for tests."""
 
-    kind: str  # "create" | "append" | "skip" | "conflict" | "error"
+    kind: Literal["create", "append", "skip", "conflict", "error"]
     path: Path
     content: str = ""
     reason: str = ""
