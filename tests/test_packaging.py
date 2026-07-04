@@ -14,7 +14,6 @@ Three mechanically checked contracts keep the skill installable:
 
 from __future__ import annotations
 
-import filecmp
 import importlib.util
 import shutil
 import subprocess
@@ -55,24 +54,24 @@ def test_mirror_covers_the_whole_package() -> None:
     sync = _sync_module()
     mirrored = {src.name for src, _dst in sync.planned_files()}
     for source in (_REPO / "src" / "branch_review").iterdir():
-        if source.is_file() and source.suffix in {".py", ".typed"} or source.name == "py.typed":
+        if source.is_file() and (source.suffix == ".py" or source.name == "py.typed"):
             assert source.name in mirrored, f"{source.name} missing from tools/sync_vendored.py"
 
 
-def test_templates_match_the_live_claude_files() -> None:
-    # The installed instances in this repo's .claude/ are the same files the skill
-    # ships as templates — reviewers exercise exactly what users will install.
-    for name in ("review-branch.md", "review-resume.md", "review-close.md"):
-        assert filecmp.cmp(
-            _REPO / ".claude" / "commands" / name,
-            _SKILL / "assets" / "commands" / name,
-            shallow=False,
-        ), f"template drift: {name}"
-    assert filecmp.cmp(
-        _REPO / ".claude" / "agents" / "review-analyst.md",
-        _SKILL / "assets" / "agents" / "review-analyst.md",
-        shallow=False,
-    )
+def test_mirror_ships_every_template_the_installer_writes() -> None:
+    # The installer (_COMMANDS/_AGENT_DEF), the mirror (MIRRORS), and this test each
+    # see the template set from a different vantage point; this cross-check keeps the
+    # three from drifting apart. Byte equality of the copies is drift()'s job above.
+    from branch_review.install import _AGENT_DEF, _COMMANDS
+
+    sync = _sync_module()
+    shipped = {
+        dst.relative_to(_SKILL / "assets")
+        for _src, dst in sync.planned_files()
+        if dst.is_relative_to(_SKILL / "assets")
+    }
+    needed = {Path("commands") / name for name in _COMMANDS} | {Path("agents") / _AGENT_DEF}
+    assert needed <= shipped, f"installer templates missing from the mirror: {needed - shipped}"
 
 
 # --- 2. Self-contained -----------------------------------------------------------

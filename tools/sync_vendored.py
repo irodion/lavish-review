@@ -47,44 +47,56 @@ def planned_files() -> list[tuple[Path, Path]]:
     return pairs
 
 
+def _mirror_state() -> tuple[list[tuple[Path, Path, bool]], list[Path]]:
+    """The mirror's bookkeeping, computed once for both :func:`drift` and :func:`sync`.
+
+    Returns ``(pairs, extraneous)``: every ``(src, dst, up_to_date)`` mirror pair,
+    and every file sitting in a destination directory that no pair accounts for.
+    """
+    pairs: list[tuple[Path, Path, bool]] = []
+    expected: dict[Path, set[str]] = {}
+    for src, dst in planned_files():
+        expected.setdefault(dst.parent, set()).add(dst.name)
+        pairs.append((src, dst, dst.is_file() and filecmp.cmp(src, dst, shallow=False)))
+    extraneous = [
+        extra
+        for dst_dir, names in expected.items()
+        if dst_dir.is_dir()
+        for extra in sorted(dst_dir.iterdir())
+        if extra.is_file() and extra.name not in names
+    ]
+    return pairs, extraneous
+
+
 def drift() -> list[str]:
     """Human-readable differences between sources and vendored copies."""
+    pairs, extraneous = _mirror_state()
     problems: list[str] = []
-    pairs = planned_files()
-    expected: dict[Path, set[str]] = {}
-    for src, dst in pairs:
-        expected.setdefault(dst.parent, set()).add(dst.name)
+    for src, dst, up_to_date in pairs:
         if not dst.is_file():
             problems.append(f"missing: {dst.relative_to(REPO)}")
-        elif not filecmp.cmp(src, dst, shallow=False):
+        elif not up_to_date:
             problems.append(f"stale: {dst.relative_to(REPO)} != {src.relative_to(REPO)}")
-    for dst_dir, names in expected.items():
-        if not dst_dir.is_dir():
-            continue
-        for extra in sorted(dst_dir.iterdir()):
-            if extra.is_file() and extra.name not in names:
-                problems.append(f"extraneous: {extra.relative_to(REPO)}")
+    problems += [f"extraneous: {extra.relative_to(REPO)}" for extra in extraneous]
     return problems
 
 
 def sync() -> int:
     """Make the vendored copies exact; returns the number of files written/removed."""
+    pairs, extraneous = _mirror_state()
     changed = 0
-    pairs = planned_files()
-    expected: dict[Path, set[str]] = {}
-    for src, dst in pairs:
-        expected.setdefault(dst.parent, set()).add(dst.name)
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if not dst.is_file() or not filecmp.cmp(src, dst, shallow=False):
+    for src, dst, up_to_date in pairs:
+        if not up_to_date:
+            dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
             changed += 1
-    for dst_dir, names in expected.items():
-        for extra in sorted(dst_dir.iterdir()):
-            if extra.is_file() and extra.name not in names:
-                extra.unlink()
-                changed += 1
-            elif extra.is_dir() and extra.name == "__pycache__":
-                shutil.rmtree(extra)
+    for extra in extraneous:
+        extra.unlink()
+        changed += 1
+    for _src_dir, dst_dir, _pattern in MIRRORS:
+        pycache = dst_dir / "__pycache__"
+        if pycache.is_dir():
+            shutil.rmtree(pycache)
     return changed
 
 

@@ -16,8 +16,11 @@ development, the skill's vendored ``lib/`` when installed (ADR-0013).
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import _bootstrap
+
+_SKILL = Path(__file__).resolve().parent.parent
 
 
 def _main() -> int:
@@ -25,7 +28,13 @@ def _main() -> int:
 
     from branch_review.install import main
 
-    return main(sys.argv[1:])
+    argv = sys.argv[1:]
+    # This shim knows the skill root exactly — pass it down (the module's own
+    # default_skill_dir() stays as the fallback for direct invocation). Accept
+    # both the `--skill-dir VALUE` and `--skill-dir=VALUE` argparse forms.
+    if not any(arg == "--skill-dir" or arg.startswith("--skill-dir=") for arg in argv):
+        argv = [*argv, "--skill-dir", str(_SKILL)]
+    return main(argv)
 
 
 if __name__ == "__main__":

@@ -35,10 +35,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from branch_review.config import MACHINE_CONFIG_REL
+from branch_review.feedback import LAVISH_PKG
 
-# The one authoritative pin (ADR-0013). SKILL.md quotes it and a test asserts the
-# quote matches; the installer writes it into the machine config below.
-PINNED_LAVISH_VERSION = "0.1.31"
+# Derived from the one authoritative pin, ``feedback.LAVISH_PKG`` (which drives the
+# actual open/loop invocations), so the two can never disagree (ADR-0013). SKILL.md
+# quotes it and a test asserts the quote matches; the installer writes it into the
+# machine config below.
+PINNED_LAVISH_VERSION = LAVISH_PKG.split("@", 1)[1]
 
 # What .gitignore must contain (matching this repo's own entries).
 GITIGNORE_HEADER = "# Branch Review Cockpit — generated review state (never committed)"

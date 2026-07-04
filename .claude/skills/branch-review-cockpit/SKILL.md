@@ -416,7 +416,7 @@ npx -y lavish-axi@0.1.31 .review-agent/review.html
 ```
 
 When `resolved-config.json` (step 2) has a non-null `lavish_version`, substitute it
-for `0.1.31` — the machine config pins the Lavish release, and the answer loop
+for the pinned version above — the machine config pins the Lavish release, and the answer loop
 (`review_loop.py`) reads the same key, so open and loop never drift apart.
 Loopback default. Then **record the session** so a later `/review-branch` can resume
 it (step 0) instead of blindly regenerating — this writes
