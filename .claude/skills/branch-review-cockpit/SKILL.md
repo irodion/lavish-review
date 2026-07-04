@@ -9,6 +9,7 @@ description: >-
   validated analysis.json formed blind by an isolated analyst subagent, behind
   a hardened Escape Boundary + strict CSP + post-write lint, with a blocking
   conversational feedback loop.
+license: MIT (bundled LICENSE file has the complete terms)
 compatibility: >-
   Requires Python 3.11+, git, and Node.js (npx runs the pinned Lavish-AXI).
   Designed for Claude Code, Cursor, and OpenAI Codex (agentskills.io format).

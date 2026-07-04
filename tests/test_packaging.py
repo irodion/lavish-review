@@ -48,6 +48,17 @@ def test_vendored_copies_match_their_sources() -> None:
     assert sync.drift() == [], "vendored copies drifted — run: python3 tools/sync_vendored.py"
 
 
+def test_unowned_destinations_are_never_swept() -> None:
+    # The LICENSE lands at the skill ROOT, which the mirror does not own —
+    # SKILL.md lives there and must never be reported extraneous (sync() would
+    # delete it). Only fully mirror-owned dirs participate in the sweep.
+    sync = _sync_module()
+    assert any(not owned for _s, _d, _p, owned in sync.MIRRORS)
+    _pairs, extraneous = sync._mirror_state()
+    assert _SKILL / "SKILL.md" not in extraneous
+    assert all(extra.name != "SKILL.md" for extra in extraneous)
+
+
 def test_mirror_covers_the_whole_package() -> None:
     # Every module in src/branch_review must be part of the mirror — a new module
     # that never reaches the vendored tree would break installed skills silently.
