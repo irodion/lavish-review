@@ -51,9 +51,14 @@ The skill ships in the agentskills.io format and installs on Claude Code,
 Cursor, and OpenAI Codex:
 
 ```sh
-npx skills add irodion/lavish-review              # copy the skill in (pick agents)
-python3 <skill-dir>/scripts/install.py            # one-time setup, run once per repo
+npx -y skills add irodion/lavish-review -a claude-code   # or -a cursor / -a codex
+python3 <skill-dir>/scripts/install.py                   # one-time setup, run once per repo
 ```
+
+Pass `-y` and an explicit `-a` when running non-interactively (as an agent
+always is): without `-a`, a run with no terminal silently falls back to a
+universal install under `.agents/skills/`, which Cursor and Codex read but
+Claude Code does not.
 
 `<skill-dir>` is where the copy landed: `.claude/skills/branch-review-cockpit`
 (Claude Code — the path used by the commands in this file),

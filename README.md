@@ -32,17 +32,26 @@ The skill ships in the [agentskills.io](https://agentskills.io) format and works
 want to review in:
 
 ```sh
-npx skills add irodion/lavish-review
+npx -y skills add irodion/lavish-review -a claude-code   # and/or: -a cursor -a codex
 ```
 
-Pick your agent(s) when prompted (or pass them: `-a claude-code -a cursor -a codex`).
-The skill is copied into each selected agent's skills directory:
+Run it without `-a` in a terminal to pick agents from a menu instead. The skill is
+copied into each selected agent's skills directory:
 
 | Platform | Skill lands in | You invoke it with |
 |---|---|---|
 | Claude Code | `.claude/skills/branch-review-cockpit/` | `/review-branch [base] [--goal …]` |
 | Cursor | `.cursor/skills/branch-review-cockpit/` | `/review-branch` (command file) or by asking for a branch review |
 | Codex | `.agents/skills/branch-review-cockpit/` | `$branch-review-cockpit` or just ask ("review this branch") |
+
+> **If an AI agent runs the install for you:** it must pass `-y` and an explicit
+> `-a`. Without a terminal the CLI shows no agent picker and silently falls back
+> to a "universal" install under `.agents/skills/` — which Cursor and Codex read
+> but **Claude Code does not** — so the command reports success while the skill
+> stays invisible to Claude Code.
+
+The CLI also writes `skills-lock.json` recording what it installed — commit it if
+you want the install reproducible for teammates.
 
 Then run the one-time, idempotent first-run setup from wherever the skill landed:
 
