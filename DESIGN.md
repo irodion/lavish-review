@@ -6,7 +6,7 @@ See [CONTEXT.md](./CONTEXT.md) for the glossary and [docs/adr/](./docs/adr/) for
 
 ## Pipeline
 
-```
+```text
 /review-branch [base] [--goal <issue-ref|file|text>]
   → session evaluator                (step 0: restore fresh, regenerate stale — see "Resume + staleness")
   → collect_review_context.py        (deterministic: git diff, goal evidence, escaping, context.json)
@@ -89,7 +89,7 @@ All Focus Lens findings fold into the existing claim model (risk-claim categorie
 
 ## On-disk layout
 
-```
+```text
 .review-agent/            (gitignored — generated)
   context.json  diff.patch  diff-stat.txt  changed-files.json  commits.txt
   resolved-config.json                     (context.json carries the goal block — ADR-0010)
