@@ -28,8 +28,6 @@ poll's raw output as-is (:data:`LAST_POLL_NAME`), pairing it with the answer.
 from __future__ import annotations
 
 import argparse
-import csv
-import io
 import json
 import re
 import subprocess  # nosec B404 — fixed npx/lavish-axi argv, shell=False (see _default_runner)
@@ -109,23 +107,45 @@ class Prompt:
         return self.tag not in ("", "message")
 
 
-def _split_toon_row(row: str) -> list[str]:
-    """Split one TOON data row into its fields, honouring TOON's quoting.
+_TOON_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
 
-    TOON quotes a field with double quotes and escapes an inner quote with a backslash
-    (``\\"``), not by doubling it — so the CSV reader runs with ``doublequote=False`` and
-    ``escapechar='\\'``. Unquoted fields (a question with no comma) pass through verbatim.
+
+def _split_toon_row(row: str) -> list[str]:
+    """Split one TOON data row into its fields, honouring TOON's quoting and escapes.
+
+    TOON quotes a field with double quotes and uses C-style backslash escapes inside
+    a quoted field: ``\\"`` for a literal quote, and ``\\n`` / ``\\t`` / ``\\r`` for the
+    whitespace controls (Lavish encodes a multi-line prompt this way); a backslash
+    before any other character keeps that character verbatim. Unquoted fields (a
+    question with no comma) pass through as-is, backslashes included — escapes only
+    exist inside quotes.
+
+    A hand scanner, not ``csv`` with ``escapechar``: the stdlib reader *drops* the
+    backslash before every escaped character, so ``\\n`` decodes to a bare ``n``
+    rather than a newline — which silently corrupted every disposition prompt's
+    ``Context data:`` JSON and killed disposition persistence outright.
     """
-    reader = csv.reader(
-        io.StringIO(row),
-        quotechar='"',
-        doublequote=False,
-        escapechar="\\",
-    )
-    try:
-        return next(reader)
-    except StopIteration:
-        return []
+    fields: list[str] = []
+    buf: list[str] = []
+    in_quotes = False
+    i = 0
+    while i < len(row):
+        ch = row[i]
+        if in_quotes and ch == "\\" and i + 1 < len(row):
+            nxt = row[i + 1]
+            buf.append(_TOON_ESCAPES.get(nxt, nxt))
+            i += 2
+            continue
+        if ch == '"':
+            in_quotes = not in_quotes
+        elif ch == "," and not in_quotes:
+            fields.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    fields.append("".join(buf))
+    return fields
 
 
 def extract_prompts(toon: str) -> list[Prompt]:

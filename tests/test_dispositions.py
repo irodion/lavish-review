@@ -193,6 +193,25 @@ def test_apply_folds_poll_into_store(tmp_path: Path) -> None:
     assert load_dispositions(out / DISPOSITIONS_NAME) == {"t1.c1": "verified"}
 
 
+def test_apply_decodes_escaped_multiline_prompt(tmp_path: Path) -> None:
+    # Lavish 0.1.31 sends the disposition prompt as a multi-line block, TOON-encoded
+    # with ``\n`` escapes. The old csv-based splitter decoded ``\n`` to a bare ``n``,
+    # so neither the Context data JSON nor the prompt-line fallback matched and apply
+    # silently recorded nothing — the entire disposition feature was dead.
+    toon = (
+        "prompts[1]{uid,prompt,selector,tag,text}:\n"
+        '  "9","Disposition set: t2.c1 -> question-open\\n\\nContext data:\\n'
+        '{\\n  \\"kind\\": \\"disposition\\",\\n  \\"claim\\": \\"t2.c1\\",\\n'
+        '  \\"disposition\\": \\"question-open\\"\\n}",'
+        '"summary > button",choice,disposition:question-open\n'
+        'next_step: "..."\n'
+    )
+    out = _seed(tmp_path, toon)
+    applied, rejected = apply(out)
+    assert applied == [("t2.c1", "question-open")] and rejected == []
+    assert load_dispositions(out / DISPOSITIONS_NAME) == {"t2.c1": "question-open"}
+
+
 def test_apply_rejects_unknown_claim(tmp_path: Path) -> None:
     toon = (
         "prompts[1]{uid,prompt,selector,tag,text}:\n"

@@ -69,6 +69,19 @@ _TOON_MULTI = (
     'next_step: "..."\n'
 )
 
+# A Lavish 0.1.31 disposition prompt: the SDK appends the ``Context data:`` JSON as a
+# multi-line block, and TOON encodes the newlines as ``\n`` escapes inside the quoted
+# field. The old csv-based splitter dropped the backslash (``\n`` → a bare ``n``),
+# corrupting the JSON and the ``Disposition set:`` line — the regression pinned here.
+_TOON_ESCAPED_NEWLINES = (
+    "prompts[1]{uid,prompt,selector,tag,text}:\n"
+    '  "9","Disposition set: t2.c4 -> question-open\\n\\nContext data:\\n'
+    '{\\n  \\"kind\\": \\"disposition\\",\\n  \\"claim\\": \\"t2.c4\\",\\n'
+    '  \\"disposition\\": \\"question-open\\"\\n}",'
+    '"summary > button",choice,disposition:question-open\n'
+    'next_step: "..."\n'
+)
+
 # The decoy: a ``waiting`` poll whose dom_snapshot quotes the SKILL text that mentions
 # ``prompts[N]`` — indented and inside a quoted scalar, so the column-0 anchor must skip
 # it and find no real prompts block.
@@ -95,9 +108,41 @@ def test_extract_span_annotation_unescapes_quotes() -> None:
     assert prompt.prompt == "what does this line do?"
     assert prompt.tag == "span"
     assert prompt.is_annotation
-    # TOON's backslash-escaped inner quotes are unescaped by the CSV reader.
+    # TOON's backslash-escaped inner quotes are unescaped by the row splitter.
     assert prompt.text == '+ _git(repo, "checkout", "feature")'
     assert prompt.selector.endswith("span:nth-of-type(727)")
+
+
+def test_extract_decodes_whitespace_escapes_in_multiline_prompt() -> None:
+    (prompt,) = extract_prompts(_TOON_ESCAPED_NEWLINES)
+    assert prompt.prompt.startswith("Disposition set: t2.c4 -> question-open\n\nContext data:\n")
+    # The Context data payload must survive as parseable JSON — dispositions depend on it.
+    payload = json.loads(prompt.prompt.split("Context data:", 1)[1])
+    assert payload == {"kind": "disposition", "claim": "t2.c4", "disposition": "question-open"}
+
+
+def test_extract_decodes_tab_cr_backslash_and_unknown_escape() -> None:
+    toon = (
+        "prompts[1]{uid,prompt,selector,tag,text}:\n"
+        '  "3",q,"sel",span,"a\\tb\\rc \\\\ d \\x"\n'
+        'next_step: "..."\n'
+    )
+    (prompt,) = extract_prompts(toon)
+    # \t and \r decode to the controls, \\ to one backslash, and an unknown escape
+    # (\x) keeps the escaped character verbatim.
+    assert prompt.text == "a\tb\rc \\ d x"
+
+
+def test_extract_leaves_unquoted_backslashes_verbatim() -> None:
+    # Escapes only exist inside quoted fields — an unquoted field keeps its
+    # backslashes as-is (C:\temp must not gain a tab).
+    toon = (
+        "prompts[1]{uid,prompt,selector,tag,text}:\n"
+        '  "4",q,"sel",span,C:\\temp\\notes\n'
+        'next_step: "..."\n'
+    )
+    (prompt,) = extract_prompts(toon)
+    assert prompt.text == "C:\\temp\\notes"
 
 
 def test_extract_free_form_message_is_not_an_annotation() -> None:
