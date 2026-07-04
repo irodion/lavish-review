@@ -713,7 +713,7 @@ function riskMatrix() {
   let html = `<div class="matrix"><span class="microlabel">Risk matrix — ${risks.length} risk claims</span><table><tr><th class="rowh"></th>` +
     LEVELS.map(l => `<th>${l}</th>`).join("") + `</tr>`;
   for (const cat of cats) {
-    html += `<tr><th class="rowh">${cat.replace("_", " ")}</th>`;
+    html += `<tr><th class="rowh">${cat.replaceAll("_", " ")}</th>`;
     for (const lv of LEVELS) {
       const hits = risks.filter(r => r.category === cat && r.level === lv);
       if (!hits.length) { html += `<td><button disabled>·</button></td>`; continue; }
@@ -1004,7 +1004,14 @@ function applyFilter() {
 function setVariant(v) {
   snapshotOpenDetails();
   current = v;
-  history.replaceState(null, "", "#v=" + v);
+  try {
+    history.replaceState(null, "", "#v=" + v);
+  } catch (_err) {
+    // file:// gives the page an opaque origin and Chromium rejects replaceState
+    // there; plain hash assignment still works (the hashchange listener no-ops
+    // because `current` is already updated).
+    location.hash = "v=" + v;
+  }
   render();
   window.scrollTo(0, 0);
 }
