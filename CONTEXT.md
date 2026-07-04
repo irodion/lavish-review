@@ -21,8 +21,24 @@ The deep module that resolves a run's effective review policy by layering four s
 _Avoid_: settings, options, preferences.
 
 **Layer**:
-One of the cockpit's four levels of disclosure ([ADR-0009](./docs/adr/0009-layered-claim-evidence-cockpit.md)), each answering "why should I believe the layer above?": **L0** goal alignment (what the branch is for, on one screen), **L1** Threads, **L2** Claims, **L3** Evidence. All four are pre-authored at generation time; descent is client-side progressive disclosure (native `<details>`) and costs no agent round-trip.
+One of the cockpit's four levels of disclosure ([ADR-0009](./docs/adr/0009-layered-claim-evidence-cockpit.md)), each answering "why should I believe the layer above?": **L0** goal alignment (what the branch is for, on one screen), **L1** Threads, **L2** Claims, **L3** Evidence. All four are pre-authored at generation time; descent is client-side progressive disclosure (native `<details>`) and costs no agent round-trip. A served review may traverse the same layers claim-by-claim instead — **Deck Mode** ([ADR-0014](./docs/adr/0014-deck-presentation-mode.md)).
 _Avoid_: level, tier, section (a layer holds sections; it isn't one).
+
+**Deck Mode**:
+The served-only presentation of the Review Cockpit ([ADR-0014](./docs/adr/0014-deck-presentation-mode.md)): a persistent **Map** beside a **Stage** that shows one Claim at a time, with keyboard-driven dispositions (auto-advance to the next *unreviewed* claim). Built client-side by the vendored script **from the document's own DOM** (relocating already-escaped nodes — never string-built markup); the L0–L3 document stays the single artifact, the linted form, and the baked `file://` record. Document mode is one toggle away and is the only mode on `file://`.
+_Avoid_: app, SPA, queue view, triage mode.
+
+**Map**:
+Deck Mode's persistent navigator — the *whole* while the Stage shows the *piece*: threads in Review Route order with one disposition-tinted dot per claim, the changed files with change-size bars, overall progress, and the branch-scoped ask affordance. Clicking any dot stages that claim.
+_Avoid_: sidebar, tree, index.
+
+**Stage**:
+Deck Mode's focus surface: one Claim rendered whole — kind and judgment chips, summary and detail, challenge questions, its Evidence with the anchored hunk inline, the disposition control, and the claim-scoped ask affordance.
+_Avoid_: card view, detail pane, focus mode.
+
+**Claim-scoped Question**:
+A reviewer question submitted from a specific Claim and queued with that claim's id as structured data (`kind: claim-question`) through the same presence-gated channel as Reviewer Dispositions ([ADR-0015](./docs/adr/0015-claim-scoped-questions.md)). The loop grounds the answer in that claim's analysis entry and evidence — no DOM selector to resolve. Conversation, not state: it flows into the Q&A Log like any chat question. Branch-scoped chat remains for questions about the change as a whole.
+_Avoid_: annotation (that's the element-anchored path), comment, thread (taken).
 
 **Thread**:
 One narrative sub-change of the changeset — the feature, the drive-by refactor, the config churn — the L1 unit the analysis decomposes the diff into. Semantic, not file-based: a thread groups the claims that tell one story, and threads (not files) are the unit of the Review Route. Ids are `t<N>`.
@@ -33,7 +49,7 @@ One assertion the reviewer must judge, belonging to a thread (L2): a behavior ch
 _Avoid_: finding, issue, item, comment.
 
 **Evidence**:
-What substantiates a claim at L3: pre-escaped diff hunks, code excerpts, caller references. The unified diff is demoted to leaf-level evidence — never the spine of the review. Evidence `{path}` references name changed files (fragments); material from widened-into files travels as `{note}` text. A mid-review answer that *is* new evidence may be injected live at the claim's pre-planted seam (recorded run-scoped in `live-evidence.json`, escaped and linted like everything else); chat remains the default answer path.
+What substantiates a claim at L3: pre-escaped diff hunks, code excerpts, caller references. The unified diff is demoted to leaf-level evidence — never the spine of the review. Evidence `{path}` references name changed files (fragments) and may address a specific hunk (`{path, hunk?}`, schema 0.3 — [ADR-0014](./docs/adr/0014-deck-presentation-mode.md)); material from widened-into files travels as `{note}` text. A mid-review answer that *is* new evidence may be injected live at the claim's pre-planted seam (recorded run-scoped in `live-evidence.json`, escaped and linted like everything else); chat remains the default answer path.
 _Avoid_: proof, attachment, snippet.
 
 **Goal Evidence**:
