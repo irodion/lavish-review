@@ -9,6 +9,12 @@ description: >-
   validated analysis.json formed blind by an isolated analyst subagent, behind
   a hardened Escape Boundary + strict CSP + post-write lint, with a blocking
   conversational feedback loop.
+compatibility: >-
+  Requires Python 3.11+, git, and Node.js (npx runs the pinned Lavish-AXI).
+  Designed for Claude Code, Cursor, and OpenAI Codex (agentskills.io format).
+metadata:
+  author: irodion
+  version: "1.0"
 ---
 
 # Branch Review Cockpit
@@ -37,6 +43,26 @@ your feedback-loop answers come from.
 > conversation. You collect, spawn the analyst, validate, author the cockpit
 > *from* the analysis, open it, and drive the loop. You never form or edit
 > claims.
+
+## Install & first-run setup (ADR-0013)
+
+The skill ships in the agentskills.io format and installs on Claude Code,
+Cursor, and OpenAI Codex:
+
+```sh
+npx skills add irodion/lavish-review                                  # copy the skill in
+python3 .claude/skills/branch-review-cockpit/scripts/install.py       # one-time setup
+```
+
+`install.py` is idempotent: it creates `~/.review-agent/config.yaml` with the
+pinned Lavish version (never touching an existing config), gitignores
+`.review-agent/` and `.lavish-axi/`, and writes the per-platform entry points —
+the `/review-*` command files for Claude Code and Cursor, plus the
+`review-analyst` agent definition for Claude Code. Codex needs no files: invoke
+the skill natively (`$`-mention or implicit activation). Scripts resolve the
+`branch_review` package through `scripts/_bootstrap.py` — the lavish-review
+repo's `src/` in development, the skill's vendored `lib/` when installed; if a
+step fails with "cannot find the branch_review package", re-install the skill.
 
 ## Hard rules (always)
 
@@ -215,6 +241,17 @@ authoring contract and *is* the inspectable isolation boundary). Use the Agent
 tool with `subagent_type: "review-analyst"` — **never a fork** (a fork inherits
 this conversation, which is exactly the contamination ADR-0011 exists to
 prevent), and never author the analysis inline "to save a spawn".
+
+**On a platform without Claude Code's agent registry** (Cursor; Codex if its
+subagent mechanism is unavailable), the ladder is (ADR-0013): **(a)** any native
+isolated-context mechanism that can take the shipped analyst definition
+(`assets/agents/review-analyst.md`) as its full instructions with **no
+conversation carry-over** — use it under the same input manifest below; **(b)**
+if none exists, author the analysis in this context following that same
+definition file, and **disclose the compromise** — in step 5, add one trusted
+line to L0: `<p class="isolation-note">Analysis was formed in the authoring
+session's context; independence was not enforced by construction on this
+platform.</p>`. The premise degrades visibly, never silently.
 
 The analyst's **input manifest** is exhaustive and travels with its definition:
 the collected artifacts (`context.json` with the goal block, `changed-files.json`,
