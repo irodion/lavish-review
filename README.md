@@ -103,3 +103,8 @@ single source of truth; the skill ships a vendored copy at
 `tools/sync_vendored.py` — `tests/test_packaging.py` fails on any drift.
 
 `main` is protected; all changes land through a pull request.
+
+## License
+
+[MIT](./LICENSE). Installed skill copies bundle the same LICENSE file, so the
+terms travel with the code that `npx skills add` drops into your repo.

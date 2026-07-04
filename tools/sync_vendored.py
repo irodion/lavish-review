@@ -28,19 +28,26 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SKILL = REPO / ".claude" / "skills" / "branch-review-cockpit"
 
-# (source, destination, glob) — every pair is mirrored exactly.
-MIRRORS: tuple[tuple[Path, Path, str], ...] = (
-    (REPO / "src" / "branch_review", SKILL / "lib" / "branch_review", "*.py"),
-    (REPO / "src" / "branch_review", SKILL / "lib" / "branch_review", "py.typed"),
-    (REPO / ".claude" / "commands", SKILL / "assets" / "commands", "review-*.md"),
-    (REPO / ".claude" / "agents", SKILL / "assets" / "agents", "review-analyst.md"),
+# (source, destination, glob, owned) — every pair is mirrored exactly. ``owned``
+# means the mirror owns the whole destination directory: files there that no
+# pair accounts for are extraneous and get removed. A destination that merely
+# *receives* a file into a directory with its own contents (the skill root
+# holds SKILL.md) must not be swept.
+MIRRORS: tuple[tuple[Path, Path, str, bool], ...] = (
+    (REPO / "src" / "branch_review", SKILL / "lib" / "branch_review", "*.py", True),
+    (REPO / "src" / "branch_review", SKILL / "lib" / "branch_review", "py.typed", True),
+    (REPO / ".claude" / "commands", SKILL / "assets" / "commands", "review-*.md", True),
+    (REPO / ".claude" / "agents", SKILL / "assets" / "agents", "review-analyst.md", True),
+    # The skill is copied into other repos, so the license terms travel with it
+    # (the SKILL.md frontmatter's `license:` points at this bundled file).
+    (REPO, SKILL, "LICENSE", False),
 )
 
 
 def planned_files() -> list[tuple[Path, Path]]:
     """Every (source_file, destination_file) pair the mirror comprises."""
     pairs: list[tuple[Path, Path]] = []
-    for src_dir, dst_dir, pattern in MIRRORS:
+    for src_dir, dst_dir, pattern, _owned in MIRRORS:
         for src in sorted(src_dir.glob(pattern)):
             if src.is_file():
                 pairs.append((src, dst_dir / src.name))
@@ -51,8 +58,11 @@ def _mirror_state() -> tuple[list[tuple[Path, Path, bool]], list[Path]]:
     """The mirror's bookkeeping, computed once for both :func:`drift` and :func:`sync`.
 
     Returns ``(pairs, extraneous)``: every ``(src, dst, up_to_date)`` mirror pair,
-    and every file sitting in a destination directory that no pair accounts for.
+    and every file sitting in an **owned** destination directory that no pair
+    accounts for (un-owned destinations are never swept — they have their own
+    contents beyond the mirror's).
     """
+    owned_dirs = {dst_dir for _src, dst_dir, _pattern, owned in MIRRORS if owned}
     pairs: list[tuple[Path, Path, bool]] = []
     expected: dict[Path, set[str]] = {}
     for src, dst in planned_files():
@@ -61,7 +71,7 @@ def _mirror_state() -> tuple[list[tuple[Path, Path, bool]], list[Path]]:
     extraneous = [
         extra
         for dst_dir, names in expected.items()
-        if dst_dir.is_dir()
+        if dst_dir in owned_dirs and dst_dir.is_dir()
         for extra in sorted(dst_dir.iterdir())
         if extra.is_file() and extra.name not in names
     ]
@@ -93,9 +103,9 @@ def sync() -> int:
     for extra in extraneous:
         extra.unlink()
         changed += 1
-    for _src_dir, dst_dir, _pattern in MIRRORS:
+    for _src_dir, dst_dir, _pattern, owned in MIRRORS:
         pycache = dst_dir / "__pycache__"
-        if pycache.is_dir():
+        if owned and pycache.is_dir():
             shutil.rmtree(pycache)
     return changed
 
