@@ -469,17 +469,13 @@ _STRUCTURAL_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    ("label", "kwargs", "ids", "expected"), _STRUCTURAL_CASES, ids=lambda c: c
-)
+@pytest.mark.parametrize(("label", "kwargs", "ids", "expected"), _STRUCTURAL_CASES, ids=lambda c: c)
 def test_structural_rules(
-    label: str, kwargs: dict[str, object], ids: list[str], expected: str | None
+    label: str, kwargs: dict[str, str], ids: list[str], expected: str | None
 ) -> None:
     errors = lint_cockpit(_structured_cockpit(**kwargs), csp_mode="interactive", claim_ids=ids)
     struct_rules = {
-        r
-        for r in _rules(errors)
-        if r.startswith(("claim-id-", "dangling-anchor", "seam-"))
+        r for r in _rules(errors) if r.startswith(("claim-id-", "dangling-anchor", "seam-"))
     }
     if expected is None:
         assert struct_rules == set(), f"{label}: unexpected {struct_rules}"
@@ -494,9 +490,7 @@ def test_structural_failures_do_not_mask_escape_or_csp_failures() -> None:
     html = _structured_cockpit(
         qa_seam="",
         body_extra=_diff("<script>alert(1)</script>"),
-    ).replace(
-        f'<meta http-equiv="Content-Security-Policy" content="{INTERACTIVE_CSP}">\n', ""
-    )
+    ).replace(f'<meta http-equiv="Content-Security-Policy" content="{INTERACTIVE_CSP}">\n', "")
     rules = _rules(lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS))
     assert "untrusted-markup" in rules  # escape
     assert "csp-missing" in rules  # CSP
@@ -518,9 +512,8 @@ def test_real_escape_boundary_cockpit_passes_structural_pass() -> None:
         commit_lines=["abc123 feat: <script>alert(1)</script>"],
     )
     diff = diff_fragment('+x = "<script>alert(1)</script>"\n')
-    claims = (
-        _claim("t1.c1", extra_body='<a href="#t1.c2">related</a>')
-        + _claim("t1.c2", extra_body=frag + diff)
+    claims = _claim("t1.c1", extra_body='<a href="#t1.c2">related</a>') + _claim(
+        "t1.c2", extra_body=frag + diff
     )
     html = _structured_cockpit(claims=claims)
     assert lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS) == []
@@ -551,9 +544,7 @@ def _analysis_json(ids: list[str]) -> dict[str, object]:
 def test_cli_without_analysis_skips_structural(tmp_path: Path) -> None:
     # A cockpit with a dangling anchor but no --analysis: security-only lint passes.
     page = tmp_path / "review.html"
-    page.write_text(
-        _structured_cockpit(body_extra='<a href="#t9.c9">x</a>'), encoding="utf-8"
-    )
+    page.write_text(_structured_cockpit(body_extra='<a href="#t9.c9">x</a>'), encoding="utf-8")
     assert main([str(page), "--csp-mode", "interactive"]) == 0
 
 
@@ -561,9 +552,7 @@ def test_cli_with_analysis_runs_structural(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     page = tmp_path / "review.html"
-    page.write_text(
-        _structured_cockpit(body_extra='<a href="#t9.c9">x</a>'), encoding="utf-8"
-    )
+    page.write_text(_structured_cockpit(body_extra='<a href="#t9.c9">x</a>'), encoding="utf-8")
     analysis = tmp_path / "analysis.json"
     analysis.write_text(json.dumps(_analysis_json(_ANALYSIS_IDS)), encoding="utf-8")
     assert main([str(page), "--csp-mode", "interactive", "--analysis", str(analysis)]) == 1

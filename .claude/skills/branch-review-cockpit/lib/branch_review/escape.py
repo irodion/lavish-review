@@ -56,6 +56,7 @@ def evidence_seam_markers(claim_id: str) -> tuple[str, str]:
     """
     return f"<!--brc:evidence:{claim_id}-->", f"<!--/brc:evidence:{claim_id}-->"
 
+
 # The strict Content-Security-Policy the vendored cockpit must ship — the
 # defense-in-depth twin of the escaping above (ADR-0002). `script-src 'self'`
 # with no `'unsafe-inline'` forbids inline JS and forces all behaviour into the

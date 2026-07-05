@@ -143,9 +143,7 @@ def test_cli_loads_sibling_analysis_for_the_structural_pass(
     )
     body = tmp_path / "body.txt"
     body.write_text("+ x\n", encoding="utf-8")
-    rc = main(
-        ["t1.c1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)]
-    )
+    rc = main(["t1.c1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
     assert rc == 1  # t1.c2 is in the analysis but not the page → structural failure
     assert "claim-id-missing" in capsys.readouterr().err
     assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched

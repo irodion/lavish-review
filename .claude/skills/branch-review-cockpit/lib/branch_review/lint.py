@@ -409,9 +409,7 @@ def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintErr
     return errors
 
 
-def _check_structure(
-    html: str, auditor: _TagAuditor, claim_ids: Iterable[str]
-) -> list[LintError]:
+def _check_structure(html: str, auditor: _TagAuditor, claim_ids: Iterable[str]) -> list[LintError]:
     """Fail on cockpit↔analysis structural drift (issue #62).
 
     Given the analysis's claim id set, checks that the authored DOM matches it and
@@ -449,7 +447,7 @@ def _check_structure(
             errors.append(
                 LintError(
                     "claim-id-missing",
-                    f"analysis claim {cid!r} has no <details class=\"claim\"> element",
+                    f'analysis claim {cid!r} has no <details class="claim"> element',
                 )
             )
     for cid in dom_unique:
@@ -476,9 +474,7 @@ def _check_structure(
         )
     for cid in expected:
         if evidence_seam_markers(cid)[0] not in html:
-            errors.append(
-                LintError("seam-missing", f"claim {cid!r} has no live-evidence seam")
-            )
+            errors.append(LintError("seam-missing", f"claim {cid!r} has no live-evidence seam"))
 
     return errors
 
@@ -570,9 +566,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         claim_ids = analysis_claim_ids(analysis)
 
-    errors = lint_cockpit(
-        html, styling=args.styling, csp_mode=args.csp_mode, claim_ids=claim_ids
-    )
+    errors = lint_cockpit(html, styling=args.styling, csp_mode=args.csp_mode, claim_ids=claim_ids)
     if errors:
         for error in errors:
             print(f"lint: {error}", file=sys.stderr)
