@@ -44,8 +44,12 @@ from pathlib import Path
 
 # The schema tag a valid analysis must carry; bump the suffix on a breaking change.
 # 0.2 is the Layered Review shape (ADR-0009): threads > claims > evidence, plus the
-# isolated-analysis accountability field ``widened_into`` (ADR-0011).
-SCHEMA = "review-analysis/0.2"
+# isolated-analysis accountability field ``widened_into`` (ADR-0011). 0.3 (ADR-0014,
+# issue #63) adds an optional ``hunk`` (1-based hunk index) to a ``{path}`` evidence
+# ref so a claim can anchor the exact hunk that substantiates it — additive, but the
+# tag is pinned so a 0.2 document is refused with a located error, not silently
+# revalidated under rules it predates (same posture as the 0.1→0.2 bump).
+SCHEMA = "review-analysis/0.3"
 
 # The risk categories a claim may carry (CONTEXT: *Risk Map*). A closed set so the
 # cockpit can badge deterministically and the agent can't coin ad-hoc categories.
@@ -168,15 +172,22 @@ def _as_objects(
 
 
 def _validate_evidence(value: object, loc: str) -> list[AnalysisError]:
-    """``evidence``: ≥1 ``{path?, note?}`` refs — a claim must be substantiated.
+    """``evidence``: ≥1 ``{path?, hunk?, note?}`` refs — a claim must be substantiated.
 
     ``path`` links the claim to a **changed** file's L3 fragment (a
     ``fragments.json`` entry); ``note`` anchors evidence that has no L3 anchor —
     prose ("no test touches this") and **widened-into** files, which have no diff
     fragment and therefore must never be a ``path``. Each entry needs at least one
-    of the two. Whether a path names a real changed file is not checked here: the
-    validator is pure (it never sees ``fragments.json``); the authoring contract
-    owns that rule.
+    of the two.
+
+    ``hunk`` (schema 0.3, ADR-0014) narrows a ``path`` ref to the exact hunk that
+    substantiates the claim: a **1-based** index into that file's hunk sequence, read
+    from the manifest's per-file hunk index. It only makes sense **on a ``path`` ref** —
+    a ``note`` has no diff fragment to anchor into — and must be a positive integer.
+    Whether the index actually names an existing hunk (its upper bound) is **not**
+    checked here: the validator is pure (it never sees ``fragments.json``); that
+    resolution belongs to the Cockpit Linter's anchor rule, exactly as whether a
+    ``path`` names a real changed file does.
     """
     objects, errors = _as_objects(value, loc)
     if not errors and not objects:
@@ -190,6 +201,25 @@ def _validate_evidence(value: object, loc: str) -> list[AnalysisError]:
             errors.extend(_require_str(ref["path"], f"{ref_loc}.path"))
         if "note" in ref:
             errors.extend(_require_str(ref["note"], f"{ref_loc}.note"))
+        if "hunk" in ref:
+            errors.extend(_validate_hunk(ref["hunk"], ref, f"{ref_loc}.hunk"))
+    return errors
+
+
+def _validate_hunk(value: object, ref: Mapping[str, object], loc: str) -> list[AnalysisError]:
+    """A ``{path}`` ref's optional ``hunk``: a 1-based hunk index (schema 0.3)."""
+    errors: list[AnalysisError] = []
+    # A hunk anchors into a diff fragment, which only a ``path`` ref has — a
+    # ``note``-only ref (prose, a widened-in file) has nothing to anchor to.
+    if "path" not in ref:
+        errors.append(
+            AnalysisError(loc, "only a path ref may carry a hunk (a note has no diff fragment)")
+        )
+    # ``bool`` is an ``int`` subclass — exclude it so ``true``/``false`` isn't a "1"/"0".
+    if isinstance(value, bool) or not isinstance(value, int):
+        errors.append(AnalysisError(loc, f"expected a positive integer, got {_typename(value)}"))
+    elif value < 1:
+        errors.append(AnalysisError(loc, f"must be a 1-based hunk index (>= 1), got {value}"))
     return errors
 
 
@@ -435,8 +465,8 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
 
     errors: list[AnalysisError] = []
 
-    # Pin to the exact supported revision: this validator encodes the 0.2 shape, so
-    # an older or unknown tag (e.g. review-analysis/0.1) must fail rather than be
+    # Pin to the exact supported revision: this validator encodes the 0.3 shape, so
+    # an older or unknown tag (e.g. review-analysis/0.2) must fail rather than be
     # validated against rules it does not match. Bump SCHEMA when the shape changes.
     schema = obj.get("schema")
     if schema != SCHEMA:

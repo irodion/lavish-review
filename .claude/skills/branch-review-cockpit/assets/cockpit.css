@@ -136,7 +136,7 @@ pre.diff .ln-del { color: var(--del); }
 pre.diff .ln-hunk { color: var(--accent); }
 
 /* --- Layered claim→evidence cockpit (ADR-0009, issue #39) -------------------
-   Styling for the agent-authored layers driven by review-analysis/0.2:
+   Styling for the agent-authored layers driven by review-analysis/0.3:
    L0 orientation, L1 threads, L2 claims (native <details> progressive
    disclosure), L3 per-file evidence. Self-contained — no remote assets
    (strict CSP / linter). */
@@ -434,10 +434,20 @@ figure.live-evidence .live-evidence-meta {
 }
 figure.live-evidence pre.diff { margin: 0; }
 
+/* Hunk-anchored diffs (Deck Mode, ADR-0014): one file's diff is split into per-hunk
+   <section class="hunk" id="hunk-…"> blocks so a claim's evidence can land on the
+   exact hunk. The preamble (diff --git / --- / +++ / rename headers) leads separately. */
+.file-diff > pre.diff + .hunk,
+.file-diff > .hunk + .hunk { margin-top: 0.5rem; }
+.file-diff > .hunk > pre.diff { margin: 0; }
+
 /* Deep-link feedback: the element navigated to from a claim's evidence link. */
 :target { scroll-margin-top: 1rem; }
 details.file:target > summary,
 details.claim:target > summary { outline: 2px solid var(--accent); border-radius: 6px; }
+/* A hunk navigated to directly gets the same emphasis, around its diff block. */
+.hunk:target { scroll-margin-top: 1rem; }
+.hunk:target > pre.diff { outline: 2px solid var(--accent); border-radius: 8px; }
 
 /* Test runner note — the suggested (never executed) runner. */
 .runner-note {

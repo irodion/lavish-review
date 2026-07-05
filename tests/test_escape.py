@@ -18,10 +18,12 @@ from branch_review.escape import (
     build_fragments,
     diff_fragment,
     escape_text,
+    file_diff_fragment,
     file_fragment_id,
     fragment,
     fragment_index_entry,
     goal_fragment,
+    hunk_anchor_id,
 )
 
 # (label, raw input, substrings that MUST appear, substrings that MUST NOT appear)
@@ -311,3 +313,155 @@ def test_fragment_index_entry_omitted_drops_body_keeps_reason() -> None:
     assert entry["omitted"] is True
     assert entry["fragment"] is None
     assert entry["reason"] == "excluded: lockfile"
+
+
+# --- Hunk Anchorer: per-hunk ids + a manifest hunk index (ADR-0014, issue #63) ---
+
+# Two real single-file unified diffs, each with a known hunk count.
+_TWO_HUNK_DIFF = (
+    "diff --git a/m.py b/m.py\n"
+    "index 111..222 100644\n"
+    "--- a/m.py\n"
+    "+++ b/m.py\n"
+    "@@ -1,3 +1,3 @@ def head():\n"
+    " a\n"
+    "-b\n"
+    "+B\n"
+    " c\n"
+    "@@ -20,2 +20,3 @@ def tail():\n"
+    " y\n"
+    "+z\n"
+    " w\n"
+)
+_ONE_HUNK_DIFF = (
+    "diff --git a/o.py b/o.py\n"
+    "--- a/o.py\n"
+    "+++ b/o.py\n"
+    "@@ -1 +1 @@\n"
+    "-old\n"
+    "+new\n"
+)
+_RENAME_ONLY_DIFF = (
+    "diff --git a/old.py b/new.py\n"
+    "similarity index 100%\n"
+    "rename from old.py\n"
+    "rename to new.py\n"
+)
+
+
+def test_hunk_anchor_id_is_deterministic_and_url_safe() -> None:
+    fid = file_fragment_id("src/m.py")
+    assert hunk_anchor_id(fid, 1) == f"hunk-{fid}-1"
+    # Only [a-z0-9-] (the "hunk-" prefix, a hex fid, digits) — a safe HTML id and a
+    # safe URL #fragment: no separator, dot, space, or byte that needs escaping.
+    anchor = hunk_anchor_id(fid, 7)
+    assert all(c in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in anchor)
+
+
+def test_file_diff_fragment_splits_each_hunk_into_an_anchored_section() -> None:
+    fid = file_fragment_id("m.py")
+    html, hunks = file_diff_fragment(_TWO_HUNK_DIFF, fid)
+
+    assert [h["index"] for h in hunks] == [1, 2]
+    assert [h["anchor"] for h in hunks] == [hunk_anchor_id(fid, 1), hunk_anchor_id(fid, 2)]
+    assert hunks[0]["header"] == "@@ -1,3 +1,3 @@ def head():"
+    assert hunks[1]["header"] == "@@ -20,2 +20,3 @@ def tail():"
+    # Each hunk is an individually anchored <pre>, and the preamble leads separately.
+    assert html.startswith('<div class="file-diff">')
+    assert html.count('<section class="hunk"') == 2
+    assert f'<section class="hunk" id="{hunk_anchor_id(fid, 1)}">' in html
+    assert '<pre class="diff diff-preamble">' in html
+
+
+def test_file_diff_fragment_is_byte_lossless() -> None:
+    # The reviewed change must render byte-for-byte: unescaping every untrusted region
+    # back and concatenating must reproduce the original diff exactly.
+    fid = file_fragment_id("m.py")
+    html, _hunks = file_diff_fragment(_TWO_HUNK_DIFF, fid)
+    from html import unescape
+
+    regions = []
+    rest = html
+    while UNTRUSTED_OPEN in rest:
+        _pre, _open, tail = rest.partition(UNTRUSTED_OPEN)
+        body, _close, rest = tail.partition(UNTRUSTED_CLOSE)
+        regions.append(unescape(body))
+    assert "".join(regions) == _TWO_HUNK_DIFF
+
+
+def test_file_diff_fragment_escapes_hostile_hunk_content() -> None:
+    # Hostile diff content renders as text — a <script> hidden in a hunk body can only
+    # ever appear as visible characters, per-hunk just as per-file (ADR-0002).
+    fid = file_fragment_id("evil.py")
+    hostile = (
+        "diff --git a/evil.py b/evil.py\n"
+        "--- a/evil.py\n"
+        "+++ b/evil.py\n"
+        '@@ -1 +1 @@ <script>owner()</script>\n'
+        '-x\n'
+        '+html = "<script>alert(document.cookie)</script>"\n'
+    )
+    html, hunks = file_diff_fragment(hostile, fid)
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+    # Even the hostile section heading survives only as manifest data, never markup.
+    assert hunks[0]["header"] == "@@ -1 +1 @@ <script>owner()</script>"
+    assert html.count(UNTRUSTED_OPEN) == html.count(UNTRUSTED_CLOSE)
+
+
+def test_file_diff_fragment_single_hunk() -> None:
+    fid = file_fragment_id("o.py")
+    html, hunks = file_diff_fragment(_ONE_HUNK_DIFF, fid)
+    assert [h["index"] for h in hunks] == [1]
+    assert html.count('<section class="hunk"') == 1
+
+
+def test_file_diff_fragment_rename_has_no_hunks() -> None:
+    # A pure rename carries a preamble but no @@ — no hunk anchors to hand out.
+    fid = file_fragment_id("new.py")
+    html, hunks = file_diff_fragment(_RENAME_ONLY_DIFF, fid)
+    assert hunks == []
+    assert '<section class="hunk"' not in html
+    assert '<pre class="diff diff-preamble">' in html
+    assert "rename from old.py" in escape_text(_RENAME_ONLY_DIFF)  # content shown escaped
+
+
+def test_file_diff_fragment_empty_diff_degrades_to_notice() -> None:
+    html, hunks = file_diff_fragment("", file_fragment_id("x.py"))
+    assert hunks == []
+    assert "(no changes in this range)" in html
+    assert UNTRUSTED_OPEN not in html
+
+
+def test_file_diff_fragment_cr_in_body_does_not_forge_a_hunk() -> None:
+    # A carriage return embedded in a hunk body must not be mistaken for a line break
+    # that starts a new @@ hunk — split only on \n (git's line model), not \r.
+    fid = file_fragment_id("cr.py")
+    diff = (
+        "--- a/cr.py\n"
+        "+++ b/cr.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\r@@ -9 +9 @@ not a real header\n"
+        "+new\n"
+    )
+    _html, hunks = file_diff_fragment(diff, fid)
+    assert [h["index"] for h in hunks] == [1]  # one hunk, not two
+
+
+def test_fragment_index_entry_carries_hunk_index_when_given() -> None:
+    hunks = [{"index": 1, "anchor": "hunk-abc-1", "header": "@@ -1 +1 @@"}]
+    entry = fragment_index_entry({"status": "M", "path": "m.py"}, hunks=hunks)
+    assert entry["hunks"] == hunks
+    # No hunks passed → no key (back-compat with pre-0.3 callers/consumers).
+    assert "hunks" not in fragment_index_entry({"status": "M", "path": "m.py"})
+
+
+def test_fragment_index_entry_rejects_hunks_on_an_omitted_body() -> None:
+    # An omitted file has no diff fragment, so hunk ids for it are a contradiction.
+    with pytest.raises(ValueError):
+        fragment_index_entry(
+            {"status": "M", "path": "uv.lock"},
+            omitted=True,
+            reason="dependency lockfile",
+            hunks=[{"index": 1, "anchor": "hunk-x-1", "header": "@@"}],
+        )

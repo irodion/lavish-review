@@ -598,6 +598,48 @@ def test_real_escape_boundary_cockpit_passes_structural_pass() -> None:
     assert lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS) == []
 
 
+# --- hunk-anchored evidence links resolve (Deck Mode, ADR-0014, issue #63) ----
+#
+# The Hunk Anchorer emits per-hunk element ids inside a file fragment; the anchor
+# resolution rule from #62 is what makes a {path, hunk} evidence link land — it needs
+# no new lint code, but these pin that a real hunk anchor resolves and a stale one fails.
+
+
+def _cockpit_with_hunk_evidence(*, anchor: str, fragment_html: str) -> str:
+    """A two-claim cockpit whose t1.c1 links evidence to ``anchor`` and shows the fragment."""
+    claims = _claim("t1.c1", extra_body=f'<a href="#{anchor}">jump to hunk</a>') + _claim("t1.c2")
+    body = (
+        f'<section class="thread" id="t1"><h2>Thread</h2>{claims}</section>'
+        f'<section><h2>Evidence</h2>{fragment_html}</section>'
+    )
+    return _cockpit(csp=INTERACTIVE_CSP, body=f"{body}\n{_QA_SEAM}")
+
+
+def test_hunk_anchored_evidence_link_resolves() -> None:
+    from branch_review.escape import file_diff_fragment, file_fragment_id
+
+    fid = file_fragment_id("m.py")
+    fragment_html, hunks = file_diff_fragment(
+        "--- a/m.py\n+++ b/m.py\n@@ -1 +1 @@\n-old\n+new\n@@ -9 +9 @@\n-p\n+q\n", fid
+    )
+    # Link the second hunk's real anchor from the manifest — it resolves to its <section>.
+    html = _cockpit_with_hunk_evidence(anchor=str(hunks[1]["anchor"]), fragment_html=fragment_html)
+    assert lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS) == []
+
+
+def test_dangling_hunk_anchor_fails() -> None:
+    from branch_review.escape import file_diff_fragment, file_fragment_id
+
+    fid = file_fragment_id("m.py")
+    one_hunk = "--- a/m.py\n+++ b/m.py\n@@ -1 +1 @@\n-old\n+new\n"
+    fragment_html, hunks = file_diff_fragment(one_hunk, fid)
+    # Point at hunk 2, which this one-hunk file never emitted — the link lands nowhere.
+    html = _cockpit_with_hunk_evidence(anchor=f"hunk-{fid}-2", fragment_html=fragment_html)
+    assert len(hunks) == 1  # guard: there is no hunk 2 to resolve to
+    rules = _rules(lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS))
+    assert "dangling-anchor" in rules
+
+
 # --- seam markers have one source of truth (the escape leaf) ------------------
 
 
