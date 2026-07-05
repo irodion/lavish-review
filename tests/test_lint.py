@@ -380,19 +380,29 @@ _QA_SEAM = "<!--brc:qa-log--><!--/brc:qa-log-->"
 
 
 def _claim(
-    claim_id: str, *, evidence_seam: bool = True, seam_close: bool = True, extra_body: str = ""
+    claim_id: str,
+    *,
+    evidence_seam: bool = True,
+    seam_close: bool = True,
+    seam_reversed: bool = False,
+    extra_body: str = "",
 ) -> str:
     """One L2 claim panel: a <details class="claim"> with its live-evidence seam.
 
     ``evidence_seam=False`` omits the seam entirely; ``seam_close=False`` plants only
-    the open marker (an unpaired seam the injector can't fill).
+    the open marker (an unpaired seam); ``seam_reversed=True`` plants the close before
+    the open (both present but unfillable — the injector's regex matches nothing).
     """
-    if evidence_seam:
-        seam = f"<!--brc:evidence:{claim_id}-->"
-        if seam_close:
-            seam += f"<!--/brc:evidence:{claim_id}-->"
-    else:
+    open_m = f"<!--brc:evidence:{claim_id}-->"
+    close_m = f"<!--/brc:evidence:{claim_id}-->"
+    if not evidence_seam:
         seam = ""
+    elif seam_reversed:
+        seam = close_m + open_m
+    elif seam_close:
+        seam = open_m + close_m
+    else:
+        seam = open_m
     return (
         f'<details class="claim" id="{claim_id}"><summary>claim {claim_id}</summary>'
         f'<div class="claim-body">{extra_body}{seam}</div></details>'
@@ -488,6 +498,20 @@ _STRUCTURAL_CASES = [
     (
         "unpaired-evidence-seam",
         {"claims": _claim("t1.c1", seam_close=False) + _claim("t1.c2")},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    # Reversed seams: both markers present but close precedes open, so the injector's
+    # `open .*? close` regex matches nothing — a naive presence check misses it.
+    (
+        "reversed-qa-seam",
+        {"qa_seam": "<!--/brc:qa-log--><!--brc:qa-log-->"},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    (
+        "reversed-evidence-seam",
+        {"claims": _claim("t1.c1", seam_reversed=True) + _claim("t1.c2")},
         _ANALYSIS_IDS,
         "seam-missing",
     ),

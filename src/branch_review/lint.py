@@ -45,12 +45,13 @@ unchanged without it. Given that set, the lint also fails when:
   ``<details class="claim">`` elements) are not *exactly* the analysis's claim id set:
   a claim present in the analysis but missing from the page, one on the page that the
   analysis never minted, or the same id on two elements.
-* **Missing seam.** A required pre-planted seam is absent or unpaired — the Q&A seam
-  the bake fills (:mod:`branch_review.bake`), or any analysis claim's live-evidence
-  seam (:mod:`branch_review.evidence`). Both markers of a seam are required, because
-  the injectors match the open…close pair: an author who plants only the open marker
-  would otherwise pass lint but see the bake append a duplicate block and live-evidence
-  injection refuse — a silent no-op the lint now catches.
+* **Missing seam.** A required pre-planted seam is absent, unpaired, or out of order —
+  the Q&A seam the bake fills (:mod:`branch_review.bake`), or any analysis claim's
+  live-evidence seam (:mod:`branch_review.evidence`). The seam must be *fillable*: an
+  open marker followed by its close, exactly the ``open .*? close`` pattern the injectors
+  match. An open-only seam or a reversed pair otherwise passes a naive presence check but
+  makes the injector silently no-op — the bake appends a duplicate block, live-evidence
+  records the fragment but leaves the page unchanged — a silent break the lint now catches.
 
 See ``DESIGN.md`` and ``docs/adr/0002-deterministic-escape-boundary.md`` (Escape
 Boundary) and ``docs/adr/0014-deck-presentation-mode.md`` (structural rules).
@@ -412,6 +413,23 @@ def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintErr
     return errors
 
 
+def _seam_is_fillable(html: str, open_marker: str, close_marker: str) -> bool:
+    """True iff the injectors could fill this seam — an open marker *followed by* a close.
+
+    Both the Q&A bake (:func:`branch_review.bake.inject_qa`) and live-evidence injector
+    (:func:`branch_review.evidence.inject_evidence_html`) locate the seam with the regex
+    ``open .*? close`` under ``DOTALL`` and replace what it spans. Mere presence of both
+    marker strings is not enough: a reversed pair (``close`` before ``open``) or an
+    open-only seam matches nothing, so the injector silently no-ops — the bake appends a
+    duplicate block, evidence records the fragment but leaves the page unchanged. Mirror
+    the injectors' own pattern here so the lint accepts exactly the seams they can fill.
+    """
+    return (
+        re.search(re.escape(open_marker) + ".*?" + re.escape(close_marker), html, re.DOTALL)
+        is not None
+    )
+
+
 def _check_structure(html: str, auditor: _TagAuditor, claim_ids: Iterable[str]) -> list[LintError]:
     """Fail on cockpit↔analysis structural drift (issue #62).
 
@@ -474,23 +492,24 @@ def _check_structure(html: str, auditor: _TagAuditor, claim_ids: Iterable[str]) 
     # Both the open AND close marker must be present: the bake and live-evidence
     # injectors match the open…close pair, so an author who plants only one gets a
     # silent failure downstream — inject_qa appends a duplicate block, inject_evidence
-    # refuses. Require the pair here so that drift breaks the lint instead.
-    if QA_SEAM_OPEN not in html or QA_SEAM_CLOSE not in html:
+    # records the fragment but leaves the page unchanged. Require a *fillable* pair here
+    # so that drift breaks the lint instead.
+    if not _seam_is_fillable(html, QA_SEAM_OPEN, QA_SEAM_CLOSE):
         errors.append(
             LintError(
                 "seam-missing",
-                "the Q&A seam is absent or unpaired (plant both the open and close "
-                "markers after the Test Checklist)",
+                "the Q&A seam is missing or malformed (plant the open marker before its "
+                "close, after the Test Checklist)",
             )
         )
     for cid in expected:
         seam_open, seam_close = evidence_seam_markers(cid)
-        if seam_open not in html or seam_close not in html:
+        if not _seam_is_fillable(html, seam_open, seam_close):
             errors.append(
                 LintError(
                     "seam-missing",
-                    f"claim {cid!r} has no live-evidence seam (needs both the open and "
-                    "close markers)",
+                    f"claim {cid!r} has no fillable live-evidence seam (needs the open "
+                    "marker before its close)",
                 )
             )
 
