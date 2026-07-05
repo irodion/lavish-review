@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from branch_review.analysis import claim_ids as analysis_claim_ids
 from branch_review.escape import diff_fragment, escape_text
 from branch_review.feedback import DEFAULT_COCKPIT
 from branch_review.lint import lint_cockpit
@@ -53,6 +54,10 @@ from branch_review.lint import lint_cockpit
 # The run-scoped record of injected fragments (reset on regeneration by the
 # collector; carried across resume). Raw text in, escaping at render time.
 EVIDENCE_NAME = "live-evidence.json"
+
+# The isolated analyst's record, beside the cockpit — its claim id set gates the
+# linter's structural pass (issue #62). Same basename the bake/validator use.
+_ANALYSIS_NAME = "analysis.json"
 
 _SCHEMA = "review-live-evidence/0.1"
 
@@ -123,6 +128,21 @@ def inject_evidence_html(html: str, claim_id: str, seam_content: str) -> tuple[s
 
 
 # --- I/O shell ----------------------------------------------------------------
+
+
+def _load_claim_ids(path: Path) -> list[str] | None:
+    """Claim ids from a sibling ``analysis.json``, or ``None`` if it is absent/corrupt.
+
+    Best-effort: the analysis is always present in a real run dir, so the
+    post-injection lint gets the structural pass (issue #62) for free — but a missing
+    or malformed file must degrade to ``None`` (structural pass skipped, escape/CSP
+    rules still run) rather than crash the injection, which has its own chat-only floor.
+    """
+    try:
+        analysis = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return analysis_claim_ids(analysis)
 
 
 def load_fragments(path: Path) -> list[EvidenceFragment]:
@@ -219,7 +239,10 @@ def add_evidence(
             "the cockpit was authored without one; answer in chat instead"
         ]
 
-    lint_errors = lint_cockpit(candidate_html, styling=styling, csp_mode=csp_mode)
+    claim_ids = _load_claim_ids(cockpit.parent / _ANALYSIS_NAME)
+    lint_errors = lint_cockpit(
+        candidate_html, styling=styling, csp_mode=csp_mode, claim_ids=claim_ids
+    )
     if lint_errors:
         return [f"lint: {error}" for error in lint_errors]
 

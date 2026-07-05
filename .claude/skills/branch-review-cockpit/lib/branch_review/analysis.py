@@ -477,6 +477,33 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
     return errors
 
 
+def claim_ids(analysis: object) -> list[str]:
+    """Every claim id declared in an analysis, in document order (duplicates kept).
+
+    The set the Cockpit Linter (:mod:`branch_review.lint`) checks the authored DOM
+    against — the claims that must each have a ``<details class="claim">`` element and
+    a live-evidence seam, and no others. Deliberately **tolerant**: it walks the same
+    ``threads[].claims[].id`` path :func:`validate_analysis` guards but skips anything
+    malformed rather than raising, so a caller that lints an already-validated analysis
+    gets its ids and one that passes a rough draft still gets whatever ids are present.
+    Order and duplicates are preserved so the linter can report a repeated id itself.
+    """
+    ids: list[str] = []
+    threads = analysis.get("threads") if isinstance(analysis, Mapping) else None
+    if not isinstance(threads, list):
+        return ids
+    for thread in threads:
+        if not isinstance(thread, Mapping):
+            continue
+        claims = thread.get("claims")
+        if not isinstance(claims, list):
+            continue
+        for claim in claims:
+            if isinstance(claim, Mapping) and isinstance(claim.get("id"), str):
+                ids.append(claim["id"])
+    return ids
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI: validate an ``analysis.json`` file; exit non-zero on any problem.
 

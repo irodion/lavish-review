@@ -20,6 +20,7 @@ from branch_review.analysis import (
     OMISSION_KINDS,
     RISK_CATEGORIES,
     SCHEMA,
+    claim_ids,
     validate_analysis,
 )
 
@@ -122,6 +123,22 @@ def test_empty_optional_lists_are_allowed() -> None:
 def test_non_object_is_rejected() -> None:
     errors = validate_analysis([1, 2, 3])
     assert errors and errors[0].location == "$"
+
+
+# --- claim_ids (the set the Cockpit Linter's structural pass checks, issue #62) --
+
+
+def test_claim_ids_returns_every_id_in_document_order() -> None:
+    assert claim_ids(_valid()) == ["t1.c1", "t1.c2", "t1.c3", "t2.c1"]
+
+
+def test_claim_ids_tolerates_malformed_shapes() -> None:
+    # Not a raise: a rough or partial analysis still yields whatever ids are present.
+    assert claim_ids("not a mapping") == []
+    assert claim_ids({}) == []
+    assert claim_ids({"threads": "nope"}) == []
+    mixed = {"threads": [{"claims": [{"id": 7}, {"summary": "no id"}, {"id": "t1.c1"}]}]}
+    assert claim_ids(mixed) == ["t1.c1"]
 
 
 def test_null_alignment_is_valid() -> None:

@@ -408,7 +408,7 @@ panel").
 ### 6. Lint the cockpit (post-write tripwire)
 
 ```sh
-python3 .claude/skills/branch-review-cockpit/scripts/lint_cockpit.py .review-agent/review.html --csp-mode interactive [--styling cdn]
+python3 .claude/skills/branch-review-cockpit/scripts/lint_cockpit.py .review-agent/review.html --csp-mode interactive --analysis .review-agent/analysis.json [--styling cdn]
 ```
 
 Pass `--styling cdn` **only** when `resolved-config.json` resolved `styling: cdn`;
@@ -417,9 +417,14 @@ unescaped `<`/`>` in an untrusted region, inline JS, a remote `src`/`href` under
 vendored styling, or a missing/weak CSP. `--csp-mode interactive`
 accepts the interactive CSP from step 5 (still bounded — a wildcard or arbitrary
 remote host fails); omit it (or pass `--csp-mode strict`) only for a portable
-`file://` export. If it exits non-zero,
-**fix the cockpit and re-lint** — never open a cockpit that fails the lint, and
-never silence it by stripping the untrusted markers.
+`file://` export. `--analysis` points at the `analysis.json` you validated in step 4
+and turns on the **structural pass**: the cockpit's claim ids must match the
+analysis's claim id set exactly, every in-page `#anchor` must resolve to a real
+element id, and the Q&A seam and each claim's live-evidence seam must be present — so
+a claim you forgot to render, a dangling evidence link, or a missing seam fails the
+lint here instead of silently breaking the bake or a live-evidence injection. If it
+exits non-zero, **fix the cockpit and re-lint** — never open a cockpit that fails the
+lint, and never silence it by stripping the untrusted markers.
 
 ### 7. Open it in the browser via Lavish
 
@@ -523,7 +528,8 @@ python3 .claude/skills/branch-review-cockpit/scripts/inject_evidence.py t1.c2 \
 (Add `--styling cdn` only when `resolved-config.json` resolved it.) The script
 escapes the body, rewrites **only** that claim's seam (idempotent — the seam is
 re-rendered wholesale from `live-evidence.json`, so nothing duplicates), lints
-the whole post-injection page, and writes **only if the lint passes**. On any
+the whole post-injection page — including the structural pass against the sibling
+`analysis.json` it loads automatically — and writes **only if the lint passes**. On any
 failure — bad claim id, missing seam, lint error — nothing is written and it
 exits non-zero: answer in chat instead (the floor). On success the served page
 re-renders itself (the #38 spike's watch verdict — no refresh needed; if the
@@ -546,7 +552,7 @@ restore a closed one:
 
 ```sh
 python3 .claude/skills/branch-review-cockpit/scripts/bake_review.py --md
-python3 .claude/skills/branch-review-cockpit/scripts/lint_cockpit.py .review-agent/review.html --csp-mode strict
+python3 .claude/skills/branch-review-cockpit/scripts/lint_cockpit.py .review-agent/review.html --csp-mode strict --analysis .review-agent/analysis.json
 python3 .claude/skills/branch-review-cockpit/scripts/session.py end
 ```
 

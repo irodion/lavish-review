@@ -32,7 +32,26 @@ Rules enforced:
   rejected anywhere. A policy like ``script-src 'self'`` with no ``default-src``
   fails: it would leave every other resource type governed by the browser default.
 
-See ``DESIGN.md`` and ``docs/adr/0002-deterministic-escape-boundary.md``.
+**Structural rules (ADR-0014, issue #62).** The rules above keep the cockpit *safe*;
+these keep it *coherent*, so authoring drift breaks the lint instead of the reviewer's
+session. They run only when the caller supplies the run's analysis claim ids (the
+``claim_ids`` argument / the CLI's ``--analysis``) — the pure-security lint above is
+unchanged without it. Given that set, the lint also fails when:
+
+* **Dangling evidence anchor.** An in-page link (``<a href="#…">``) points at a
+  fragment that no element ``id`` in the document carries — a deep link that would
+  land nowhere.
+* **Claim id set mismatch.** The claim ids in the DOM (the ids of
+  ``<details class="claim">`` elements) are not *exactly* the analysis's claim id set:
+  a claim present in the analysis but missing from the page, one on the page that the
+  analysis never minted, or the same id on two elements.
+* **Missing seam.** A required pre-planted seam is absent — the Q&A seam the bake fills
+  (:mod:`branch_review.bake`), or any analysis claim's live-evidence seam
+  (:mod:`branch_review.evidence`). Without them the bake and live-evidence injection
+  silently no-op.
+
+See ``DESIGN.md`` and ``docs/adr/0002-deterministic-escape-boundary.md`` (Escape
+Boundary) and ``docs/adr/0014-deck-presentation-mode.md`` (structural rules).
 """
 
 from __future__ import annotations
@@ -40,6 +59,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -117,6 +137,19 @@ _UNTRUSTED_RE = re.compile(
     re.DOTALL,
 )
 
+# The structural seams the cockpit author pre-plants (issue #62). The marker syntax
+# is a contract owned by :mod:`branch_review.bake` (``QA_SEAM_OPEN``) and
+# :mod:`branch_review.evidence` (``evidence_seam``); it is duplicated here — rather
+# than imported — to keep this linter a leaf module, because ``evidence`` imports
+# ``lint_cockpit`` and importing it back would be a cycle. ``test_lint`` pins these
+# to their owning modules so the copies can never drift.
+_QA_SEAM_OPEN = "<!--brc:qa-log-->"
+
+
+def _evidence_seam_open(claim_id: str) -> str:
+    """The open marker of one claim's live-evidence seam (evidence.evidence_seam)."""
+    return f"<!--brc:evidence:{claim_id}-->"
+
 
 @dataclass(frozen=True)
 class LintError:
@@ -191,6 +224,14 @@ class _TagAuditor(HTMLParser):
         self._in_script = False
         self._script_has_src = False
         self._script_inline_flagged = False
+        # Structural bookkeeping (issue #62), consumed only when the caller asked
+        # for the structural pass. Every element id (anchor-resolution targets); the
+        # ids of <details class="claim"> elements in document order (duplicates kept
+        # so the mismatch check can report a repeat); and the fragment of every
+        # in-page <a href="#…"> (dangling-anchor sources).
+        self.element_ids: set[str] = set()
+        self.claim_ids: list[str] = []
+        self.anchor_fragments: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._audit(tag, attrs)
@@ -247,6 +288,18 @@ class _TagAuditor(HTMLParser):
                             f"<{tag}> {name}={value!r} is remote under styling: vendored",
                         )
                     )
+                # An in-page anchor (<a href="#frag">) — the fragment must resolve to
+                # an element id. Bare "#" (scroll-to-top) carries no fragment to check.
+                if tag == "a" and name == "href" and value.startswith("#") and len(value) > 1:
+                    self.anchor_fragments.append(value[1:])
+
+        # Element id (an anchor target) and, when the element is a claim panel, its
+        # claim id — the DOM side of the analysis↔page set check.
+        element_id = attr_map.get("id")
+        if element_id:
+            self.element_ids.add(element_id)
+            if "claim" in attr_map.get("class", "").split():
+                self.claim_ids.append(element_id)
 
         if tag == "script":
             self._script_has_src = "src" in attr_map
@@ -362,8 +415,86 @@ def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintErr
     return errors
 
 
+def _check_structure(
+    html: str, auditor: _TagAuditor, claim_ids: Iterable[str]
+) -> list[LintError]:
+    """Fail on cockpit↔analysis structural drift (issue #62).
+
+    Given the analysis's claim id set, checks that the authored DOM matches it and
+    carries the seams the bake and live-evidence injection depend on: exact claim id
+    correspondence (no missing, extra, or duplicated ids), every in-page anchor
+    resolving to a real element id, and the Q&A seam plus each claim's live-evidence
+    seam being present. Each message names the offending id, anchor, or seam so a
+    failure points straight at what to fix. These are separate from — and never
+    substitute for — the escape/CSP rules: this returns its own list, appended after.
+    """
+    errors: list[LintError] = []
+
+    expected = list(claim_ids)
+    expected_set = set(expected)
+
+    # DOM claim ids: dedupe while flagging repeats (a duplicate id also breaks anchor
+    # resolution, but here it is specifically a claim invariant the reviewer relies on).
+    dom_unique: list[str] = []
+    seen: set[str] = set()
+    for cid in auditor.claim_ids:
+        if cid in seen:
+            errors.append(
+                LintError(
+                    "claim-id-duplicate",
+                    f"claim id {cid!r} appears on more than one element",
+                )
+            )
+        else:
+            seen.add(cid)
+            dom_unique.append(cid)
+    dom_set = set(dom_unique)
+
+    for cid in expected:
+        if cid not in dom_set:
+            errors.append(
+                LintError(
+                    "claim-id-missing",
+                    f"analysis claim {cid!r} has no <details class=\"claim\"> element",
+                )
+            )
+    for cid in dom_unique:
+        if cid not in expected_set:
+            errors.append(
+                LintError(
+                    "claim-id-unknown",
+                    f"cockpit claim {cid!r} is not in the analysis's claim set",
+                )
+            )
+
+    for fragment_id in auditor.anchor_fragments:
+        if fragment_id not in auditor.element_ids:
+            errors.append(
+                LintError(
+                    "dangling-anchor",
+                    f"in-page link '#{fragment_id}' resolves to no element id",
+                )
+            )
+
+    if _QA_SEAM_OPEN not in html:
+        errors.append(
+            LintError("seam-missing", "the Q&A seam is absent (plant it after the Test Checklist)")
+        )
+    for cid in expected:
+        if _evidence_seam_open(cid) not in html:
+            errors.append(
+                LintError("seam-missing", f"claim {cid!r} has no live-evidence seam")
+            )
+
+    return errors
+
+
 def lint_cockpit(
-    html: str, *, styling: str = "vendored", csp_mode: str = "strict"
+    html: str,
+    *,
+    styling: str = "vendored",
+    csp_mode: str = "strict",
+    claim_ids: Iterable[str] | None = None,
 ) -> list[LintError]:
     """Lint a cockpit's HTML; return every violation (empty list means it passes).
 
@@ -374,6 +505,13 @@ def lint_cockpit(
     :func:`_check_csp`). The untrusted-markup and no-inline-JS rules are unchanged
     by either: the cockpit we author never contains inline JS, even in
     ``interactive`` mode (Lavish injects its own at serve time).
+
+    ``claim_ids`` is the run's analysis claim id set (from
+    :func:`branch_review.analysis.claim_ids`). When given, the structural pass
+    (:func:`_check_structure`) also runs — claim id correspondence, anchor
+    resolution, and seam presence. When ``None`` (a caller with no analysis to hand,
+    e.g. a bare security re-lint) only the escape/CSP rules run. Either way the two
+    families are independent: a structural failure never suppresses an escape/CSP one.
     """
     errors: list[LintError] = []
     errors.extend(_check_untrusted_regions(html))
@@ -383,6 +521,8 @@ def lint_cockpit(
     auditor.close()
     errors.extend(auditor.errors)
     errors.extend(_check_csp(auditor.csp_content, csp_mode=csp_mode))
+    if claim_ids is not None:
+        errors.extend(_check_structure(html, auditor, claim_ids))
     return errors
 
 
@@ -406,6 +546,14 @@ def main(argv: list[str] | None = None) -> int:
         help="CSP baseline: strict (portable file:// artifact) or interactive "
         "(served through Lavish-AXI). Default: strict.",
     )
+    parser.add_argument(
+        "--analysis",
+        type=Path,
+        default=None,
+        help="Path to the run's analysis.json. When given, the structural pass also "
+        "runs: claim ids must match the analysis, in-page anchors must resolve, and "
+        "the Q&A / per-claim evidence seams must be present.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -414,7 +562,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read {args.path}: {exc}", file=sys.stderr)
         return 2
 
-    errors = lint_cockpit(html, styling=args.styling, csp_mode=args.csp_mode)
+    claim_ids: list[str] | None = None
+    if args.analysis is not None:
+        import json
+
+        from branch_review.analysis import claim_ids as analysis_claim_ids
+
+        try:
+            analysis = json.loads(args.analysis.read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"error: cannot read {args.analysis}: {exc}", file=sys.stderr)
+            return 2
+        except json.JSONDecodeError as exc:
+            print(f"error: {args.analysis} is not valid JSON: {exc}", file=sys.stderr)
+            return 2
+        claim_ids = analysis_claim_ids(analysis)
+
+    errors = lint_cockpit(
+        html, styling=args.styling, csp_mode=args.csp_mode, claim_ids=claim_ids
+    )
     if errors:
         for error in errors:
             print(f"lint: {error}", file=sys.stderr)

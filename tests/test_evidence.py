@@ -115,6 +115,28 @@ def test_add_evidence_injects_escaped_and_lint_clean(cockpit: Path) -> None:
     assert len(fragments) == 1 and fragments[0].claim == "t1.c1"
 
 
+def test_injection_runs_structural_lint_against_sibling_analysis(cockpit: Path) -> None:
+    # A matching analysis.json beside the cockpit turns on the structural pass (issue
+    # #62); the fixture's claim set (t1.c1) matches, so injection still succeeds.
+    (cockpit.parent / "analysis.json").write_text(
+        json.dumps({"threads": [{"claims": [{"id": "t1.c1"}]}]}), encoding="utf-8"
+    )
+    assert add_evidence(cockpit, "t1.c1", "Callers", "+ x\n") == []
+
+
+def test_injection_blocked_when_structural_pass_fails(cockpit: Path) -> None:
+    # An analysis declaring a claim (t1.c2) the fixture never authored: the structural
+    # pass fails (missing element + seam), so nothing is written — the chat-only floor.
+    (cockpit.parent / "analysis.json").write_text(
+        json.dumps({"threads": [{"claims": [{"id": "t1.c1"}, {"id": "t1.c2"}]}]}),
+        encoding="utf-8",
+    )
+    errors = add_evidence(cockpit, "t1.c1", "Callers", "+ x\n")
+    assert errors and any("claim-id-missing" in e or "seam-missing" in e for e in errors)
+    assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched
+    assert not (cockpit.parent / EVIDENCE_NAME).exists()
+
+
 def test_add_evidence_accumulates_without_duplicating(cockpit: Path) -> None:
     assert add_evidence(cockpit, "t1.c1", "First", "+ one\n") == []
     assert add_evidence(cockpit, "t1.c1", "Second", "+ two\n") == []
