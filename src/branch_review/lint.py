@@ -185,6 +185,22 @@ def _is_remote(url: str) -> bool:
     return url.lower().startswith(_REMOTE_PREFIXES)
 
 
+def _first_attr(attrs: list[tuple[str, str | None]], name: str) -> str | None:
+    """The FIRST value of ``name`` (case-insensitive) — the one the browser keeps.
+
+    HTML parsers and browsers honour the first occurrence of a duplicated attribute and
+    ignore the rest, but a collapsed ``{name: value}`` dict keeps the LAST. The
+    structural reads (a claim panel's ``id`` and ``class``) must therefore use this, not
+    the dict, or ``class="not-claim" class="claim"`` would read as a claim to the lint
+    while the browser DOM has none — a divergence a hand-authored cockpit could exploit
+    to pass the claim/seam checks without rendering the panel. ``None`` if absent.
+    """
+    for raw_name, raw_value in attrs:
+        if raw_name.lower() == name:
+            return raw_value or ""
+    return None
+
+
 def _check_untrusted_regions(html: str) -> list[LintError]:
     """Fail if any Escape-Boundary region carries a literal ``<`` or ``>``.
 
@@ -255,9 +271,10 @@ class _TagAuditor(HTMLParser):
         if tag == "script":
             self._in_script = True
         elif tag == "details":
-            attr_map = {name.lower(): (value or "") for name, value in attrs}
-            claim_id = attr_map.get("id") if "claim" in attr_map.get("class", "").split() else None
-            self._details_stack.append(claim_id)
+            # First-wins id/class (browser semantics), matching the DOM claim-id read in
+            # _audit — so a duplicate attribute can't misattribute a seam's enclosing panel.
+            is_claim = "claim" in (_first_attr(attrs, "class") or "").split()
+            self._details_stack.append(_first_attr(attrs, "id") if is_claim else None)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._audit(tag, attrs)  # self-closing: no body to track (no seam can nest here)
@@ -335,11 +352,13 @@ class _TagAuditor(HTMLParser):
                     self.anchor_fragments.append(value[1:])
 
         # Element id (an anchor target) and, when the element is a claim panel, its
-        # claim id — the DOM side of the analysis↔page set check.
-        element_id = attr_map.get("id")
+        # claim id — the DOM side of the analysis↔page set check. Read id/class with
+        # browser first-wins semantics (not the last-wins attr_map), so a duplicated
+        # attribute can't make the lint disagree with the rendered DOM.
+        element_id = _first_attr(attrs, "id")
         if element_id:
             self.element_ids.add(element_id)
-            if "claim" in attr_map.get("class", "").split():
+            if "claim" in (_first_attr(attrs, "class") or "").split():
                 self.claim_ids.append(element_id)
 
         if tag == "script":

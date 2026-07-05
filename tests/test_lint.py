@@ -543,6 +543,25 @@ def test_structural_rules(
         assert expected in struct_rules, f"{label}: expected {expected} in {struct_rules}"
 
 
+def test_duplicate_class_uses_browser_first_value_semantics() -> None:
+    # The browser keeps the FIRST of duplicate attributes; a collapsed dict keeps the
+    # last. `class="not-claim" class="claim"` must read as "not-claim" (browser truth),
+    # so the panel is NOT a claim and the analysis's claim goes missing — lint must not
+    # be fooled by the last-wins dict into believing the claim panel exists.
+    panel = (
+        '<details class="not-claim" class="claim" id="t1.c1"><summary>c</summary>'
+        '<div class="claim-body"><!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1--></div>'
+        "</details>"
+    )
+    html = _cockpit(
+        csp=INTERACTIVE_CSP,
+        body=f'<section class="thread" id="t1">{panel}</section>\n{_QA_SEAM}',
+    )
+    assert "claim-id-missing" in _rules(
+        lint_cockpit(html, csp_mode="interactive", claim_ids=["t1.c1"])
+    )
+
+
 def test_structural_failures_do_not_mask_escape_or_csp_failures() -> None:
     # A cockpit that is BOTH structurally broken (missing Q&A seam) and unsafe
     # (unescaped markup in an untrusted region + no CSP) must report every family —
