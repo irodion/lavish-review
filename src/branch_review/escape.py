@@ -305,9 +305,7 @@ def hunk_anchor_id(fragment_id: str, index: int) -> str:
     return f"hunk-{fragment_id}-{index}"
 
 
-def file_diff_fragment(
-    diff_text: str, fragment_id: str
-) -> tuple[str, list[dict[str, object]]]:
+def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict[str, object]]]:
     """Render one changed file's diff as anchored per-hunk blocks + its hunk index.
 
     Splits the file's unified diff at each hunk header so every hunk becomes an

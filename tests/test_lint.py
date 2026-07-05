@@ -610,7 +610,7 @@ def _cockpit_with_hunk_evidence(*, anchor: str, fragment_html: str) -> str:
     claims = _claim("t1.c1", extra_body=f'<a href="#{anchor}">jump to hunk</a>') + _claim("t1.c2")
     return _structured_cockpit(
         claims=claims,
-        body_extra=f'<section><h2>Evidence</h2>{fragment_html}</section>',
+        body_extra=f"<section><h2>Evidence</h2>{fragment_html}</section>",
     )
 
 

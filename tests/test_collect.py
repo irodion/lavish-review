@@ -308,6 +308,7 @@ def test_multi_hunk_file_gets_one_anchored_section_and_index_entry_per_hunk(repo
     rec = _fragments_index(out)["multi.py"]
     fid = str(rec["id"])
     hunks = rec["hunks"]
+    assert isinstance(hunks, list)  # narrow the untyped JSON record before iterating
     assert [h["index"] for h in hunks] == [1, 2]  # 1-based, in file order
     assert [h["anchor"] for h in hunks] == [hunk_anchor_id(fid, 1), hunk_anchor_id(fid, 2)]
     assert all("@@" in h["header_html"] for h in hunks)  # escaped @@ header, marker-wrapped

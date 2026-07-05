@@ -333,19 +333,9 @@ _TWO_HUNK_DIFF = (
     "+z\n"
     " w\n"
 )
-_ONE_HUNK_DIFF = (
-    "diff --git a/o.py b/o.py\n"
-    "--- a/o.py\n"
-    "+++ b/o.py\n"
-    "@@ -1 +1 @@\n"
-    "-old\n"
-    "+new\n"
-)
+_ONE_HUNK_DIFF = "diff --git a/o.py b/o.py\n--- a/o.py\n+++ b/o.py\n@@ -1 +1 @@\n-old\n+new\n"
 _RENAME_ONLY_DIFF = (
-    "diff --git a/old.py b/new.py\n"
-    "similarity index 100%\n"
-    "rename from old.py\n"
-    "rename to new.py\n"
+    "diff --git a/old.py b/new.py\nsimilarity index 100%\nrename from old.py\nrename to new.py\n"
 )
 
 
@@ -398,8 +388,8 @@ def test_file_diff_fragment_escapes_hostile_hunk_content() -> None:
         "diff --git a/evil.py b/evil.py\n"
         "--- a/evil.py\n"
         "+++ b/evil.py\n"
-        '@@ -1 +1 @@ <script>owner()</script>\n'
-        '-x\n'
+        "@@ -1 +1 @@ <script>owner()</script>\n"
+        "-x\n"
         '+html = "<script>alert(document.cookie)</script>"\n'
     )
     html, hunks = file_diff_fragment(hostile, fid)
@@ -441,13 +431,7 @@ def test_file_diff_fragment_cr_in_body_does_not_forge_a_hunk() -> None:
     # A carriage return embedded in a hunk body must not be mistaken for a line break
     # that starts a new @@ hunk — split only on \n (git's line model), not \r.
     fid = file_fragment_id("cr.py")
-    diff = (
-        "--- a/cr.py\n"
-        "+++ b/cr.py\n"
-        "@@ -1 +1 @@\n"
-        "-old\r@@ -9 +9 @@ not a real header\n"
-        "+new\n"
-    )
+    diff = "--- a/cr.py\n+++ b/cr.py\n@@ -1 +1 @@\n-old\r@@ -9 +9 @@ not a real header\n+new\n"
     _html, hunks = file_diff_fragment(diff, fid)
     assert [h["index"] for h in hunks] == [1]  # one hunk, not two
 
