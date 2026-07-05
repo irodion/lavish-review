@@ -52,6 +52,11 @@ unchanged without it. Given that set, the lint also fails when:
   match. An open-only seam or a reversed pair otherwise passes a naive presence check but
   makes the injector silently no-op — the bake appends a duplicate block, live-evidence
   records the fragment but leaves the page unchanged — a silent break the lint now catches.
+* **Misplaced evidence seam.** A claim's live-evidence seam must sit *inside that claim's*
+  ``<details class="claim">`` panel. The injector matches the marker text wherever it is,
+  so a ``tN.cM`` seam planted under a different claim's panel would render that claim's
+  answer under the wrong one; the lint attributes each seam to its enclosing panel and
+  fails if they disagree.
 
 See ``DESIGN.md`` and ``docs/adr/0002-deterministic-escape-boundary.md`` (Escape
 Boundary) and ``docs/adr/0014-deck-presentation-mode.md`` (structural rules).
@@ -148,6 +153,11 @@ _UNTRUSTED_RE = re.compile(
     re.DOTALL,
 )
 
+# The content of a live-evidence seam comment — ``brc:evidence:<claim id>`` for an
+# open marker, ``/brc:evidence:<claim id>`` for a close — as HTMLParser hands it to
+# handle_comment (the ``<!--``/``-->`` stripped). Captures the claim id from either.
+_EVIDENCE_COMMENT = re.compile(r"^\s*/?brc:evidence:(t\d+\.c\d+)\s*$")
+
 
 @dataclass(frozen=True)
 class LintError:
@@ -230,18 +240,51 @@ class _TagAuditor(HTMLParser):
         self.element_ids: set[str] = set()
         self.claim_ids: list[str] = []
         self.anchor_fragments: list[str] = []
+        # A stack of currently-open <details> elements — each entry is the element's
+        # claim id if it is a <details class="claim">, else None — so a live-evidence
+        # seam comment can be attributed to the claim panel that encloses it (an
+        # evidence seam must live inside its own claim, not merely somewhere in the doc).
+        self._details_stack: list[str | None] = []
+        # Per claim id: the enclosing claim panel of each of its evidence-seam markers
+        # (None = not inside any claim panel). A correctly-placed seam has every marker
+        # enclosed by its own claim; anything else is misfiled.
+        self.evidence_marker_panels: dict[str, list[str | None]] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._audit(tag, attrs)
         if tag == "script":
             self._in_script = True
+        elif tag == "details":
+            attr_map = {name.lower(): (value or "") for name, value in attrs}
+            claim_id = attr_map.get("id") if "claim" in attr_map.get("class", "").split() else None
+            self._details_stack.append(claim_id)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._audit(tag, attrs)  # self-closing: no body to track
+        self._audit(tag, attrs)  # self-closing: no body to track (no seam can nest here)
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "script":
             self._in_script = False
+        elif tag == "details" and self._details_stack:
+            self._details_stack.pop()
+
+    def handle_comment(self, data: str) -> None:
+        # Attribute a live-evidence seam marker (open or close) to the claim panel that
+        # encloses it, so the structural pass can reject a seam planted under the wrong
+        # claim. Non-evidence comments (untrusted/Q&A markers, plain comments) are ignored.
+        match = _EVIDENCE_COMMENT.match(data)
+        if match is None:
+            return
+        self.evidence_marker_panels.setdefault(match.group(1), []).append(
+            self._enclosing_claim_panel()
+        )
+
+    def _enclosing_claim_panel(self) -> str | None:
+        """The nearest enclosing <details class="claim"> id, or None if inside none."""
+        for claim_id in reversed(self._details_stack):
+            if claim_id is not None:
+                return claim_id
+        return None
 
     def handle_data(self, data: str) -> None:
         # A non-empty body inside a <script src=...> is dead code the browser
@@ -510,6 +553,20 @@ def _check_structure(html: str, auditor: _TagAuditor, claim_ids: Iterable[str]) 
                     "seam-missing",
                     f"claim {cid!r} has no fillable live-evidence seam (needs the open "
                     "marker before its close)",
+                )
+            )
+            continue
+        # A fillable seam is not enough: it must sit inside *this* claim's panel, or
+        # inject_evidence would render the answer under the wrong claim (the injector
+        # matches the marker text globally, wherever it is). Every marker of cid's seam
+        # must be enclosed by the <details class="claim" id="cid"> panel.
+        panels = auditor.evidence_marker_panels.get(cid, [])
+        if any(panel != cid for panel in panels):
+            errors.append(
+                LintError(
+                    "seam-misplaced",
+                    f"the live-evidence seam for claim {cid!r} is planted outside its own "
+                    '<details class="claim"> panel',
                 )
             )
 

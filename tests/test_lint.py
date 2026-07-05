@@ -515,6 +515,17 @@ _STRUCTURAL_CASES = [
         _ANALYSIS_IDS,
         "seam-missing",
     ),
+    # Misplaced seam: t1.c1's seam is fillable but planted inside t1.c2's panel, so the
+    # injector would render t1.c1's evidence under t1.c2. Lint must reject the misfile.
+    (
+        "misplaced-evidence-seam",
+        {
+            "claims": _claim("t1.c1", evidence_seam=False)
+            + _claim("t1.c2", extra_body="<!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1-->")
+        },
+        _ANALYSIS_IDS,
+        "seam-misplaced",
+    ),
 ]
 
 
