@@ -131,12 +131,14 @@ def inject_evidence_html(html: str, claim_id: str, seam_content: str) -> tuple[s
 
 
 def _load_claim_ids(path: Path) -> list[str] | None:
-    """Claim ids from a sibling ``analysis.json``, or ``None`` if it is absent/corrupt.
+    """Claim ids from the **defaulted** sibling ``analysis.json``, or ``None`` if absent/corrupt.
 
-    Best-effort: the analysis is always present in a real run dir, so the
-    post-injection lint gets the structural pass (issue #62) for free — but a missing
-    or malformed file must degrade to ``None`` (structural pass skipped, escape/CSP
-    rules still run) rather than crash the injection, which has its own chat-only floor.
+    Best-effort, for the sibling-default path only: the analysis is always present in a
+    real run dir, so the post-injection lint gets the structural pass (issue #62) for
+    free — but a missing or malformed file degrades to ``None`` (structural pass skipped,
+    escape/CSP rules still run) rather than crash the injection, which has its own
+    chat-only floor. An **explicit** ``--analysis`` instead hard-fails in :func:`main`,
+    so a typo can't silently disable the tripwire the operator asked for.
     """
     try:
         analysis = json.loads(path.read_text(encoding="utf-8"))
@@ -301,7 +303,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read evidence body: {exc}", file=sys.stderr)
         return 2
 
-    analysis_path = args.analysis or (args.cockpit.parent / _ANALYSIS_NAME)
+    # Resolve the analysis claim ids for the linter's structural pass. An **explicit**
+    # --analysis must fail loudly on a typo or corrupt file (matching lint.py's CLI):
+    # silently skipping the drift tripwire the operator asked for is a footgun. The
+    # **defaulted** sibling may legitimately be absent or malformed, so it degrades to
+    # None (structural pass skipped, escape/CSP rules still gate the write).
+    if args.analysis is not None:
+        try:
+            analysis = json.loads(args.analysis.read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"error: cannot read {args.analysis}: {exc}", file=sys.stderr)
+            return 2
+        except json.JSONDecodeError as exc:
+            print(f"error: {args.analysis} is not valid JSON: {exc}", file=sys.stderr)
+            return 2
+        claim_ids: list[str] | None = analysis_claim_ids(analysis)
+    else:
+        claim_ids = _load_claim_ids(args.cockpit.parent / _ANALYSIS_NAME)
+
     errors = add_evidence(
         args.cockpit,
         args.claim_id,
@@ -309,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         body,
         csp_mode=args.csp_mode,
         styling=args.styling,
-        claim_ids=_load_claim_ids(analysis_path),
+        claim_ids=claim_ids,
     )
     if errors:
         for error in errors:

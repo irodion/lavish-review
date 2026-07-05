@@ -149,6 +149,53 @@ def test_cli_loads_sibling_analysis_for_the_structural_pass(
     assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched
 
 
+def test_cli_degrades_when_default_sibling_analysis_is_corrupt(tmp_path: Path) -> None:
+    # A malformed DEFAULT sibling analysis.json must not crash or block injection:
+    # _load_claim_ids returns None (its JSONDecodeError branch), the structural pass is
+    # skipped, and only the escape/CSP rules gate the write — so injection still succeeds.
+    cockpit = tmp_path / "review.html"
+    cockpit.write_text(_COCKPIT, encoding="utf-8")
+    (tmp_path / "analysis.json").write_text("{not json", encoding="utf-8")
+    body = tmp_path / "body.txt"
+    body.write_text("+ x\n", encoding="utf-8")
+    rc = main(["t1.c1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
+    assert rc == 0  # injected — structural pass skipped, not a hard fail
+    assert "Callers" in cockpit.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["missing", "corrupt"])
+def test_cli_hard_fails_on_explicit_bad_analysis(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    # Unlike the defaulted sibling, an EXPLICIT --analysis that is missing or corrupt must
+    # fail loudly (exit 2) rather than silently skip the structural tripwire the operator
+    # asked for — matching lint.py's CLI. Nothing is written on the failure.
+    cockpit = tmp_path / "review.html"
+    cockpit.write_text(_COCKPIT, encoding="utf-8")
+    body = tmp_path / "body.txt"
+    body.write_text("+ x\n", encoding="utf-8")
+    analysis = tmp_path / "analysis.json"
+    if kind == "corrupt":
+        analysis.write_text("{not json", encoding="utf-8")
+    # "missing" leaves the file absent.
+    rc = main(
+        [
+            "t1.c1",
+            "--title",
+            "Callers",
+            "--input",
+            str(body),
+            "--cockpit",
+            str(cockpit),
+            "--analysis",
+            str(analysis),
+        ]
+    )
+    assert rc == 2
+    assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched
+    assert not (cockpit.parent / EVIDENCE_NAME).exists()
+
+
 def test_add_evidence_accumulates_without_duplicating(cockpit: Path) -> None:
     assert add_evidence(cockpit, "t1.c1", "First", "+ one\n") == []
     assert add_evidence(cockpit, "t1.c1", "Second", "+ two\n") == []
