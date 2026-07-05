@@ -379,9 +379,20 @@ def test_lavish_cdn_is_an_allowed_remote_in_interactive() -> None:
 _QA_SEAM = "<!--brc:qa-log--><!--/brc:qa-log-->"
 
 
-def _claim(claim_id: str, *, evidence_seam: bool = True, extra_body: str = "") -> str:
-    """One L2 claim panel: a <details class="claim"> with its live-evidence seam."""
-    seam = f"<!--brc:evidence:{claim_id}--><!--/brc:evidence:{claim_id}-->" if evidence_seam else ""
+def _claim(
+    claim_id: str, *, evidence_seam: bool = True, seam_close: bool = True, extra_body: str = ""
+) -> str:
+    """One L2 claim panel: a <details class="claim"> with its live-evidence seam.
+
+    ``evidence_seam=False`` omits the seam entirely; ``seam_close=False`` plants only
+    the open marker (an unpaired seam the injector can't fill).
+    """
+    if evidence_seam:
+        seam = f"<!--brc:evidence:{claim_id}-->"
+        if seam_close:
+            seam += f"<!--/brc:evidence:{claim_id}-->"
+    else:
+        seam = ""
     return (
         f'<details class="claim" id="{claim_id}"><summary>claim {claim_id}</summary>'
         f'<div class="claim-body">{extra_body}{seam}</div></details>'
@@ -460,9 +471,23 @@ _STRUCTURAL_CASES = [
         _ANALYSIS_IDS,
         "seam-missing",
     ),
+    # Unpaired seams: only the open marker is planted. The injectors match open…close,
+    # so lint must reject these too — otherwise the failure surfaces only later.
+    (
+        "unpaired-qa-seam",
+        {"qa_seam": "<!--brc:qa-log-->"},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
     (
         "missing-evidence-seam",
         {"claims": _claim("t1.c1", evidence_seam=False) + _claim("t1.c2")},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    (
+        "unpaired-evidence-seam",
+        {"claims": _claim("t1.c1", seam_close=False) + _claim("t1.c2")},
         _ANALYSIS_IDS,
         "seam-missing",
     ),

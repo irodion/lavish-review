@@ -45,10 +45,12 @@ unchanged without it. Given that set, the lint also fails when:
   ``<details class="claim">`` elements) are not *exactly* the analysis's claim id set:
   a claim present in the analysis but missing from the page, one on the page that the
   analysis never minted, or the same id on two elements.
-* **Missing seam.** A required pre-planted seam is absent — the Q&A seam the bake fills
-  (:mod:`branch_review.bake`), or any analysis claim's live-evidence seam
-  (:mod:`branch_review.evidence`). Without them the bake and live-evidence injection
-  silently no-op.
+* **Missing seam.** A required pre-planted seam is absent or unpaired — the Q&A seam
+  the bake fills (:mod:`branch_review.bake`), or any analysis claim's live-evidence
+  seam (:mod:`branch_review.evidence`). Both markers of a seam are required, because
+  the injectors match the open…close pair: an author who plants only the open marker
+  would otherwise pass lint but see the bake append a duplicate block and live-evidence
+  injection refuse — a silent no-op the lint now catches.
 
 See ``DESIGN.md`` and ``docs/adr/0002-deterministic-escape-boundary.md`` (Escape
 Boundary) and ``docs/adr/0014-deck-presentation-mode.md`` (structural rules).
@@ -67,6 +69,7 @@ from pathlib import Path
 
 from branch_review.escape import (
     LAVISH_CDN,
+    QA_SEAM_CLOSE,
     QA_SEAM_OPEN,
     UNTRUSTED_CLOSE,
     UNTRUSTED_OPEN,
@@ -468,13 +471,28 @@ def _check_structure(html: str, auditor: _TagAuditor, claim_ids: Iterable[str]) 
                 )
             )
 
-    if QA_SEAM_OPEN not in html:
+    # Both the open AND close marker must be present: the bake and live-evidence
+    # injectors match the open…close pair, so an author who plants only one gets a
+    # silent failure downstream — inject_qa appends a duplicate block, inject_evidence
+    # refuses. Require the pair here so that drift breaks the lint instead.
+    if QA_SEAM_OPEN not in html or QA_SEAM_CLOSE not in html:
         errors.append(
-            LintError("seam-missing", "the Q&A seam is absent (plant it after the Test Checklist)")
+            LintError(
+                "seam-missing",
+                "the Q&A seam is absent or unpaired (plant both the open and close "
+                "markers after the Test Checklist)",
+            )
         )
     for cid in expected:
-        if evidence_seam_markers(cid)[0] not in html:
-            errors.append(LintError("seam-missing", f"claim {cid!r} has no live-evidence seam"))
+        seam_open, seam_close = evidence_seam_markers(cid)
+        if seam_open not in html or seam_close not in html:
+            errors.append(
+                LintError(
+                    "seam-missing",
+                    f"claim {cid!r} has no live-evidence seam (needs both the open and "
+                    "close markers)",
+                )
+            )
 
     return errors
 
