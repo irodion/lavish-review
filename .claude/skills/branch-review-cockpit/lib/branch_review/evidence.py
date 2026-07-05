@@ -41,13 +41,13 @@ import argparse
 import json
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from branch_review.analysis import claim_ids as analysis_claim_ids
-from branch_review.escape import diff_fragment, escape_text
+from branch_review.escape import diff_fragment, escape_text, evidence_seam_markers
 from branch_review.feedback import DEFAULT_COCKPIT
 from branch_review.lint import lint_cockpit
 
@@ -76,7 +76,7 @@ def evidence_seam(claim_id: str) -> tuple[str, str]:
     """
     if not _CLAIM_ID.match(claim_id):
         raise ValueError(f"not a claim id: {claim_id!r}")
-    return f"<!--brc:evidence:{claim_id}-->", f"<!--/brc:evidence:{claim_id}-->"
+    return evidence_seam_markers(claim_id)
 
 
 @dataclass(frozen=True)
@@ -199,6 +199,7 @@ def add_evidence(
     *,
     csp_mode: str = "interactive",
     styling: str = "vendored",
+    claim_ids: Iterable[str] | None = None,
     now: datetime | None = None,
 ) -> list[str]:
     """Inject one new evidence fragment under ``claim_id``; return blocking errors.
@@ -207,6 +208,10 @@ def add_evidence(
     and the **post-injection page passes the Cockpit Linter** — only then are the
     record and the cockpit written (both or neither). A non-empty return means
     nothing was written and the loop should answer in chat instead (the floor).
+
+    ``claim_ids`` is the analysis claim id set the linter's structural pass checks
+    against — an explicit input like ``styling``/``csp_mode``, resolved by the caller
+    (:func:`main` loads it from the sibling ``analysis.json``); ``None`` skips that pass.
     """
     if not _CLAIM_ID.match(claim_id):
         return [f"not a claim id: {claim_id!r}"]
@@ -239,7 +244,6 @@ def add_evidence(
             "the cockpit was authored without one; answer in chat instead"
         ]
 
-    claim_ids = _load_claim_ids(cockpit.parent / _ANALYSIS_NAME)
     lint_errors = lint_cockpit(
         candidate_html, styling=styling, csp_mode=csp_mode, claim_ids=claim_ids
     )
@@ -282,6 +286,13 @@ def main(argv: list[str] | None = None) -> int:
         default="vendored",
         help="Resolved cockpit styling for the lint (default: vendored).",
     )
+    parser.add_argument(
+        "--analysis",
+        type=Path,
+        default=None,
+        help="Path to the run's analysis.json (default: analysis.json beside the "
+        "cockpit). Its claim id set turns on the linter's structural pass.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -290,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read evidence body: {exc}", file=sys.stderr)
         return 2
 
+    analysis_path = args.analysis or (args.cockpit.parent / _ANALYSIS_NAME)
     errors = add_evidence(
         args.cockpit,
         args.claim_id,
@@ -297,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         body,
         csp_mode=args.csp_mode,
         styling=args.styling,
+        claim_ids=_load_claim_ids(analysis_path),
     )
     if errors:
         for error in errors:

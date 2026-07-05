@@ -57,6 +57,7 @@ Boundary) and ``docs/adr/0014-deck-presentation-mode.md`` (structural rules).
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections.abc import Iterable
@@ -64,7 +65,13 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
-from branch_review.escape import LAVISH_CDN, UNTRUSTED_CLOSE, UNTRUSTED_OPEN
+from branch_review.escape import (
+    LAVISH_CDN,
+    QA_SEAM_OPEN,
+    UNTRUSTED_CLOSE,
+    UNTRUSTED_OPEN,
+    evidence_seam_markers,
+)
 
 # A remote reference the vendored cockpit must not load: an absolute http(s) URL
 # or a protocol-relative ``//host`` one. Local relative paths (``assets/app.js``),
@@ -136,19 +143,6 @@ _UNTRUSTED_RE = re.compile(
     re.escape(UNTRUSTED_OPEN) + "(.*?)" + re.escape(UNTRUSTED_CLOSE),
     re.DOTALL,
 )
-
-# The structural seams the cockpit author pre-plants (issue #62). The marker syntax
-# is a contract owned by :mod:`branch_review.bake` (``QA_SEAM_OPEN``) and
-# :mod:`branch_review.evidence` (``evidence_seam``); it is duplicated here — rather
-# than imported — to keep this linter a leaf module, because ``evidence`` imports
-# ``lint_cockpit`` and importing it back would be a cycle. ``test_lint`` pins these
-# to their owning modules so the copies can never drift.
-_QA_SEAM_OPEN = "<!--brc:qa-log-->"
-
-
-def _evidence_seam_open(claim_id: str) -> str:
-    """The open marker of one claim's live-evidence seam (evidence.evidence_seam)."""
-    return f"<!--brc:evidence:{claim_id}-->"
 
 
 @dataclass(frozen=True)
@@ -435,6 +429,7 @@ def _check_structure(
 
     # DOM claim ids: dedupe while flagging repeats (a duplicate id also breaks anchor
     # resolution, but here it is specifically a claim invariant the reviewer relies on).
+    # ``seen`` ends up equal to the unique DOM claim id set — reuse it for the checks.
     dom_unique: list[str] = []
     seen: set[str] = set()
     for cid in auditor.claim_ids:
@@ -448,10 +443,9 @@ def _check_structure(
         else:
             seen.add(cid)
             dom_unique.append(cid)
-    dom_set = set(dom_unique)
 
     for cid in expected:
-        if cid not in dom_set:
+        if cid not in seen:
             errors.append(
                 LintError(
                     "claim-id-missing",
@@ -476,12 +470,12 @@ def _check_structure(
                 )
             )
 
-    if _QA_SEAM_OPEN not in html:
+    if QA_SEAM_OPEN not in html:
         errors.append(
             LintError("seam-missing", "the Q&A seam is absent (plant it after the Test Checklist)")
         )
     for cid in expected:
-        if _evidence_seam_open(cid) not in html:
+        if evidence_seam_markers(cid)[0] not in html:
             errors.append(
                 LintError("seam-missing", f"claim {cid!r} has no live-evidence seam")
             )
@@ -564,8 +558,6 @@ def main(argv: list[str] | None = None) -> int:
 
     claim_ids: list[str] | None = None
     if args.analysis is not None:
-        import json
-
         from branch_review.analysis import claim_ids as analysis_claim_ids
 
         try:

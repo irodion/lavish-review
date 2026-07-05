@@ -36,6 +36,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
+from branch_review.analysis import claim_ids as _analysis_claim_ids
 from branch_review.feedback import LAST_POLL_NAME, Prompt, extract_prompts
 
 # The closed disposition vocabulary (ADR-0012). ``unreviewed`` is the default and is
@@ -115,21 +116,12 @@ def extract_updates(prompts: Iterable[Prompt]) -> list[tuple[str, str]]:
 
 
 def claim_ids(analysis: Mapping[str, object]) -> set[str]:
-    """The claim ids the analysis actually minted — the only valid disposition keys."""
-    ids: set[str] = set()
-    threads = analysis.get("threads")
-    if not isinstance(threads, list):
-        return ids
-    for thread in threads:
-        if not isinstance(thread, Mapping):
-            continue
-        claims = thread.get("claims")
-        if not isinstance(claims, list):
-            continue
-        for claim in claims:
-            if isinstance(claim, Mapping) and isinstance(claim.get("id"), str):
-                ids.add(claim["id"])
-    return ids
+    """The claim ids the analysis actually minted — the only valid disposition keys.
+
+    The set of the canonical ordered walk (:func:`branch_review.analysis.claim_ids`);
+    dispositions only needs membership, so it drops order and duplicates.
+    """
+    return set(_analysis_claim_ids(analysis))
 
 
 def apply_updates(

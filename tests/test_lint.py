@@ -526,19 +526,18 @@ def test_real_escape_boundary_cockpit_passes_structural_pass() -> None:
     assert lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS) == []
 
 
-# --- seam-marker contract (the linter's copies must track their owners) --------
+# --- seam markers have one source of truth (the escape leaf) ------------------
 
 
-def test_seam_markers_match_their_owning_modules() -> None:
-    # lint.py duplicates the seam marker syntax to stay a leaf module (evidence imports
-    # lint). These asserts fail the moment bake/evidence change the contract, so the
-    # copies can never silently drift.
-    from branch_review import lint as lint_mod
-    from branch_review.bake import QA_SEAM_OPEN
+def test_seam_markers_come_from_the_escape_leaf() -> None:
+    # The linter, the bake, and the evidence injector all check/plant the same seams;
+    # escape.py owns the one definition so they cannot drift. This pins that wiring.
+    from branch_review import escape
+    from branch_review.bake import QA_SEAM_OPEN as bake_qa
     from branch_review.evidence import evidence_seam
 
-    assert lint_mod._QA_SEAM_OPEN == QA_SEAM_OPEN
-    assert lint_mod._evidence_seam_open("t1.c2") == evidence_seam("t1.c2")[0]
+    assert bake_qa is escape.QA_SEAM_OPEN
+    assert evidence_seam("t1.c2") == escape.evidence_seam_markers("t1.c2")
 
 
 # --- CLI: --analysis turns on the structural pass ----------------------------
