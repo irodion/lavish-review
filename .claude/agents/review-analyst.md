@@ -109,7 +109,7 @@ first and mirror its shape. Structure:
       **1-based** index into that file's hunk sequence — to point at the *exact*
       hunk that substantiates the claim, so the reviewer lands on the code, not
       the whole file. Read the count from the file's `hunks` array in
-      `fragments.json` (`[{index, anchor, header}, …]`) and use its 1-based
+      `fragments.json` (`[{index, anchor, header_html}, …]`) and use its 1-based
       `index`; count hunks yourself in `diff.patch` if you prefer, but the index
       must match the file's hunk order. A `hunk` belongs **only on a `{path}`
       ref** (a `{note}` has no diff to anchor into), and a plain `{path}` with no

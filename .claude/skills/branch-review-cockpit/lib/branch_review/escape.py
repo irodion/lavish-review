@@ -320,12 +320,12 @@ def file_diff_fragment(
     per hunk).
 
     Returns ``(html, hunks)`` where each ``hunks`` entry is
-    ``{index, anchor, header}`` — the 1-based index, the :func:`hunk_anchor_id`
-    element id, and the raw ``@@`` header line — the per-file hunk index the manifest
-    carries and the cockpit links evidence to. A diff with no hunk (a pure rename or a
-    mode-only change) yields just its preamble and an empty index; an empty
-    ``diff_text`` (never written for an omitted body) degrades to the trusted empty
-    notice with no hunks.
+    ``{index, anchor, header_html}`` — the 1-based index, the :func:`hunk_anchor_id`
+    element id, and the ``@@`` header line **crossed through the boundary** (escaped,
+    marker-wrapped) — the per-file hunk index the manifest carries and the cockpit
+    links evidence to. A diff with no hunk (a pure rename or a mode-only change) yields
+    just its preamble and an empty index; an empty ``diff_text`` (never written for an
+    omitted body) degrades to the trusted empty notice with no hunks.
     """
     if not diff_text:
         return diff_fragment(diff_text), []
@@ -334,28 +334,30 @@ def file_diff_fragment(
     parts: list[str] = ['<div class="file-diff">']
     hunks: list[dict[str, object]] = []
 
-    if not starts:
-        # No hunk header at all (pure rename / mode change): the whole diff is preamble.
-        parts.append(f'<pre class="diff diff-preamble">{fragment(diff_text)}</pre>')
-    else:
-        preamble = diff_text[: starts[0]]
-        if preamble:
-            parts.append(f'<pre class="diff diff-preamble">{fragment(preamble)}</pre>')
-        for i, start in enumerate(starts):
-            end = starts[i + 1] if i + 1 < len(starts) else len(diff_text)
-            hunk_text = diff_text[start:end]
-            index = i + 1
-            anchor = hunk_anchor_id(fragment_id, index)
-            # The header line only — the raw ``@@ -a,b +c,d @@ section`` — as an author
-            # aid to map a claim's ``hunk`` index to a hunk; it is manifest *data* (like
-            # ``path``), never injected into HTML (the escaped body already carries it).
-            header = hunk_text.split("\n", 1)[0]
-            hunks.append({"index": index, "anchor": anchor, "header": header})
-            parts.append(
-                f'<section class="hunk" id="{anchor}">'
-                f'<pre class="diff">{fragment(hunk_text)}</pre>'
-                "</section>"
-            )
+    # Everything before the first hunk header is the preamble — the whole diff when
+    # there is no hunk (a pure rename / mode change), and possibly empty when the diff
+    # opens straight on a hunk. Each hunk then runs to the next header or to EOF.
+    preamble = diff_text[: starts[0]] if starts else diff_text
+    if preamble:
+        parts.append(f'<pre class="diff diff-preamble">{fragment(preamble)}</pre>')
+
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(diff_text)
+        hunk_text = diff_text[start:end]
+        index = i + 1
+        anchor = hunk_anchor_id(fragment_id, index)
+        # The ``@@ -a,b +c,d @@ <section>`` header, crossed through the boundary. Its
+        # trailing context is git's function heading, lifted from (attacker-influenceable)
+        # source, so it is untrusted — escaped + marker-wrapped exactly like ``path_html``
+        # so an author who labels a hunk card has a safe-by-construction value. The raw
+        # line is never handed out (the escaped ``<pre>`` body already shows it verbatim).
+        header_html = fragment(hunk_text.split("\n", 1)[0])
+        hunks.append({"index": index, "anchor": anchor, "header_html": header_html})
+        parts.append(
+            f'<section class="hunk" id="{anchor}">'
+            f'<pre class="diff">{fragment(hunk_text)}</pre>'
+            "</section>"
+        )
 
     parts.append("</div>")
     return "\n".join(parts) + "\n", hunks
@@ -384,8 +386,8 @@ def fragment_index_entry(
     merged verbatim into the entry — the classifier's per-file line counts (``added``,
     ``deleted``, ``binary``) that survive even when the body does. ``hunks`` (when
     given) is the file's per-hunk index from :func:`file_diff_fragment` —
-    ``[{index, anchor, header}, …]``, the manifest side of the Hunk Anchorer (ADR-0014)
-    that lets a ``{path, hunk}`` evidence ref link to the exact hunk. It rides only on
+    ``[{index, anchor, header_html}, …]``, the manifest side of the Hunk Anchorer
+    (ADR-0014) that lets a ``{path, hunk}`` evidence ref link to the exact hunk. It rides only on
     an included body — an **omitted** file has no fragment, hence no hunk ids (the key
     is simply absent, never ``[]`` masquerading as "no hunks in a shown diff"). Keeping
     the whole entry schema in this one builder is deliberate: ``fragments.json`` has a

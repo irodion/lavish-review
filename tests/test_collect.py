@@ -310,7 +310,7 @@ def test_multi_hunk_file_gets_one_anchored_section_and_index_entry_per_hunk(repo
     hunks = rec["hunks"]
     assert [h["index"] for h in hunks] == [1, 2]  # 1-based, in file order
     assert [h["anchor"] for h in hunks] == [hunk_anchor_id(fid, 1), hunk_anchor_id(fid, 2)]
-    assert all(h["header"].startswith("@@") for h in hunks)
+    assert all("@@" in h["header_html"] for h in hunks)  # escaped @@ header, marker-wrapped
 
     frag = (out / str(rec["fragment"])).read_text()
     # Each hunk index entry's anchor is a real element id in the fragment the cockpit

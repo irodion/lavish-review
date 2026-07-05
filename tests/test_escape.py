@@ -364,8 +364,9 @@ def test_file_diff_fragment_splits_each_hunk_into_an_anchored_section() -> None:
 
     assert [h["index"] for h in hunks] == [1, 2]
     assert [h["anchor"] for h in hunks] == [hunk_anchor_id(fid, 1), hunk_anchor_id(fid, 2)]
-    assert hunks[0]["header"] == "@@ -1,3 +1,3 @@ def head():"
-    assert hunks[1]["header"] == "@@ -20,2 +20,3 @@ def tail():"
+    # header_html is the @@ line crossed through the boundary (escaped, marker-wrapped).
+    assert hunks[0]["header_html"] == fragment("@@ -1,3 +1,3 @@ def head():")
+    assert hunks[1]["header_html"] == fragment("@@ -20,2 +20,3 @@ def tail():")
     # Each hunk is an individually anchored <pre>, and the preamble leads separately.
     assert html.startswith('<div class="file-diff">')
     assert html.count('<section class="hunk"') == 2
@@ -404,8 +405,11 @@ def test_file_diff_fragment_escapes_hostile_hunk_content() -> None:
     html, hunks = file_diff_fragment(hostile, fid)
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
-    # Even the hostile section heading survives only as manifest data, never markup.
-    assert hunks[0]["header"] == "@@ -1 +1 @@ <script>owner()</script>"
+    # The hostile section heading crosses the boundary too — escaped, marker-wrapped,
+    # never a raw untrusted string in the manifest.
+    hdr = str(hunks[0]["header_html"])
+    assert "<script>" not in hdr and "&lt;script&gt;" in hdr
+    assert hdr.startswith(UNTRUSTED_OPEN) and hdr.endswith(UNTRUSTED_CLOSE)
     assert html.count(UNTRUSTED_OPEN) == html.count(UNTRUSTED_CLOSE)
 
 
@@ -449,7 +453,7 @@ def test_file_diff_fragment_cr_in_body_does_not_forge_a_hunk() -> None:
 
 
 def test_fragment_index_entry_carries_hunk_index_when_given() -> None:
-    hunks = [{"index": 1, "anchor": "hunk-abc-1", "header": "@@ -1 +1 @@"}]
+    hunks = [{"index": 1, "anchor": "hunk-abc-1", "header_html": fragment("@@ -1 +1 @@")}]
     entry = fragment_index_entry({"status": "M", "path": "m.py"}, hunks=hunks)
     assert entry["hunks"] == hunks
     # No hunks passed → no key (back-compat with pre-0.3 callers/consumers).
@@ -463,5 +467,5 @@ def test_fragment_index_entry_rejects_hunks_on_an_omitted_body() -> None:
             {"status": "M", "path": "uv.lock"},
             omitted=True,
             reason="dependency lockfile",
-            hunks=[{"index": 1, "anchor": "hunk-x-1", "header": "@@"}],
+            hunks=[{"index": 1, "anchor": "hunk-x-1", "header_html": fragment("@@")}],
         )

@@ -608,11 +608,10 @@ def test_real_escape_boundary_cockpit_passes_structural_pass() -> None:
 def _cockpit_with_hunk_evidence(*, anchor: str, fragment_html: str) -> str:
     """A two-claim cockpit whose t1.c1 links evidence to ``anchor`` and shows the fragment."""
     claims = _claim("t1.c1", extra_body=f'<a href="#{anchor}">jump to hunk</a>') + _claim("t1.c2")
-    body = (
-        f'<section class="thread" id="t1"><h2>Thread</h2>{claims}</section>'
-        f'<section><h2>Evidence</h2>{fragment_html}</section>'
+    return _structured_cockpit(
+        claims=claims,
+        body_extra=f'<section><h2>Evidence</h2>{fragment_html}</section>',
     )
-    return _cockpit(csp=INTERACTIVE_CSP, body=f"{body}\n{_QA_SEAM}")
 
 
 def test_hunk_anchored_evidence_link_resolves() -> None:

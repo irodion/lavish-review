@@ -213,9 +213,10 @@ relay it and stop. The collector computes the `base...HEAD` diff and writes to
   added, deleted, binary, old_path?, old_path_html?, reason?}`. For a rename,
   inject `old_path_html` (already escaped) if you show the old path in a heading —
   never hand-type `old_path`. `hunks` (on an included body only) is that file's hunk
-  index `[{index, anchor, header}, …]` — the 1-based `index` an evidence `hunk` ref
-  names, the `anchor` element id its link targets (**read it here, never hand-type
-  it**), and the raw `@@` `header` for identification; an omitted body has no `hunks`.
+  index `[{index, anchor, header_html}, …]` — the 1-based `index` an evidence `hunk`
+  ref names, the `anchor` element id its link targets (**read it here, never hand-type
+  it**), and `header_html`, the `@@` header line already escaped and marker-wrapped
+  (like `path_html`) for a hunk label if you show one; an omitted body has no `hunks`.
   `disposition` is the Change Classifier's verdict
   (`include-body` / `omit:lockfile` / `omit:excluded` / `omit:too-large`); `added`/
   `deleted` are the file's line stats (always present, even when the body is
