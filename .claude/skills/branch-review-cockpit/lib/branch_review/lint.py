@@ -32,19 +32,55 @@ Rules enforced:
   rejected anywhere. A policy like ``script-src 'self'`` with no ``default-src``
   fails: it would leave every other resource type governed by the browser default.
 
-See ``DESIGN.md`` and ``docs/adr/0002-deterministic-escape-boundary.md``.
+**Structural rules (ADR-0014, issue #62).** The rules above keep the cockpit *safe*;
+these keep it *coherent*, so authoring drift breaks the lint instead of the reviewer's
+session. They run only when the caller supplies the run's analysis claim ids (the
+``claim_ids`` argument / the CLI's ``--analysis``) — the pure-security lint above is
+unchanged without it. Given that set, the lint also fails when:
+
+* **Dangling evidence anchor.** An in-page link (``<a href="#…">``) points at a
+  fragment that no element ``id`` in the document carries — a deep link that would
+  land nowhere.
+* **Claim id set mismatch.** The claim ids in the DOM (the ids of
+  ``<details class="claim">`` elements) are not *exactly* the analysis's claim id set:
+  a claim present in the analysis but missing from the page, one on the page that the
+  analysis never minted, or the same id on two elements.
+* **Missing seam.** A required pre-planted seam is absent, unpaired, or out of order —
+  the Q&A seam the bake fills (:mod:`branch_review.bake`), or any analysis claim's
+  live-evidence seam (:mod:`branch_review.evidence`). The seam must be *fillable*: an
+  open marker followed by its close, exactly the ``open .*? close`` pattern the injectors
+  match. An open-only seam or a reversed pair otherwise passes a naive presence check but
+  makes the injector silently no-op — the bake appends a duplicate block, live-evidence
+  records the fragment but leaves the page unchanged — a silent break the lint now catches.
+* **Misplaced evidence seam.** A claim's live-evidence seam must sit *inside that claim's*
+  ``<details class="claim">`` panel. The injector matches the marker text wherever it is,
+  so a ``tN.cM`` seam planted under a different claim's panel would render that claim's
+  answer under the wrong one; the lint attributes each seam to its enclosing panel and
+  fails if they disagree.
+
+See ``DESIGN.md`` and ``docs/adr/0002-deterministic-escape-boundary.md`` (Escape
+Boundary) and ``docs/adr/0014-deck-presentation-mode.md`` (structural rules).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
-from branch_review.escape import LAVISH_CDN, UNTRUSTED_CLOSE, UNTRUSTED_OPEN
+from branch_review.escape import (
+    LAVISH_CDN,
+    QA_SEAM_CLOSE,
+    QA_SEAM_OPEN,
+    UNTRUSTED_CLOSE,
+    UNTRUSTED_OPEN,
+    evidence_seam_markers,
+)
 
 # A remote reference the vendored cockpit must not load: an absolute http(s) URL
 # or a protocol-relative ``//host`` one. Local relative paths (``assets/app.js``),
@@ -117,6 +153,11 @@ _UNTRUSTED_RE = re.compile(
     re.DOTALL,
 )
 
+# The content of a live-evidence seam comment — ``brc:evidence:<claim id>`` for an
+# open marker, ``/brc:evidence:<claim id>`` for a close — as HTMLParser hands it to
+# handle_comment (the ``<!--``/``-->`` stripped). Captures the claim id from either.
+_EVIDENCE_COMMENT = re.compile(r"^\s*/?brc:evidence:(t\d+\.c\d+)\s*$")
+
 
 @dataclass(frozen=True)
 class LintError:
@@ -142,6 +183,22 @@ def _normalize_url(value: str) -> str:
 def _is_remote(url: str) -> bool:
     """True if ``url`` points at a remote resource (absolute or protocol-relative)."""
     return url.lower().startswith(_REMOTE_PREFIXES)
+
+
+def _first_attr(attrs: list[tuple[str, str | None]], name: str) -> str | None:
+    """The FIRST value of ``name`` (case-insensitive) — the one the browser keeps.
+
+    HTML parsers and browsers honour the first occurrence of a duplicated attribute and
+    ignore the rest, but a collapsed ``{name: value}`` dict keeps the LAST. The
+    structural reads (a claim panel's ``id`` and ``class``) must therefore use this, not
+    the dict, or ``class="not-claim" class="claim"`` would read as a claim to the lint
+    while the browser DOM has none — a divergence a hand-authored cockpit could exploit
+    to pass the claim/seam checks without rendering the panel. ``None`` if absent.
+    """
+    for raw_name, raw_value in attrs:
+        if raw_name.lower() == name:
+            return raw_value or ""
+    return None
 
 
 def _check_untrusted_regions(html: str) -> list[LintError]:
@@ -191,18 +248,60 @@ class _TagAuditor(HTMLParser):
         self._in_script = False
         self._script_has_src = False
         self._script_inline_flagged = False
+        # Structural bookkeeping (issue #62), consumed only when the caller asked
+        # for the structural pass. Every element id (anchor-resolution targets); the
+        # ids of <details class="claim"> elements in document order (duplicates kept
+        # so the mismatch check can report a repeat); and the fragment of every
+        # in-page <a href="#…"> (dangling-anchor sources).
+        self.element_ids: set[str] = set()
+        self.claim_ids: list[str] = []
+        self.anchor_fragments: list[str] = []
+        # A stack of currently-open <details> elements — each entry is the element's
+        # claim id if it is a <details class="claim">, else None — so a live-evidence
+        # seam comment can be attributed to the claim panel that encloses it (an
+        # evidence seam must live inside its own claim, not merely somewhere in the doc).
+        self._details_stack: list[str | None] = []
+        # Per claim id: the enclosing claim panel of each of its evidence-seam markers
+        # (None = not inside any claim panel). A correctly-placed seam has every marker
+        # enclosed by its own claim; anything else is misfiled.
+        self.evidence_marker_panels: dict[str, list[str | None]] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._audit(tag, attrs)
         if tag == "script":
             self._in_script = True
+        elif tag == "details":
+            # First-wins id/class (browser semantics), matching the DOM claim-id read in
+            # _audit — so a duplicate attribute can't misattribute a seam's enclosing panel.
+            is_claim = "claim" in (_first_attr(attrs, "class") or "").split()
+            self._details_stack.append(_first_attr(attrs, "id") if is_claim else None)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._audit(tag, attrs)  # self-closing: no body to track
+        self._audit(tag, attrs)  # self-closing: no body to track (no seam can nest here)
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "script":
             self._in_script = False
+        elif tag == "details" and self._details_stack:
+            self._details_stack.pop()
+
+    def handle_comment(self, data: str) -> None:
+        # Attribute a live-evidence seam marker (open or close) to the claim panel that
+        # encloses it, so the structural pass can reject a seam planted under the wrong
+        # claim. Non-evidence comments (untrusted/Q&A markers, plain comments) are ignored.
+        match = _EVIDENCE_COMMENT.match(data)
+        if match is None:
+            return
+        self.evidence_marker_panels.setdefault(match.group(1), []).append(
+            self._enclosing_claim_panel()
+        )
+
+    def _enclosing_claim_panel(self) -> str | None:
+        """The nearest enclosing <details class="claim"> id, or None if inside none."""
+        for claim_id in reversed(self._details_stack):
+            if claim_id is not None:
+                return claim_id
+        return None
 
     def handle_data(self, data: str) -> None:
         # A non-empty body inside a <script src=...> is dead code the browser
@@ -247,6 +346,20 @@ class _TagAuditor(HTMLParser):
                             f"<{tag}> {name}={value!r} is remote under styling: vendored",
                         )
                     )
+                # An in-page anchor (<a href="#frag">) — the fragment must resolve to
+                # an element id. Bare "#" (scroll-to-top) carries no fragment to check.
+                if tag == "a" and name == "href" and value.startswith("#") and len(value) > 1:
+                    self.anchor_fragments.append(value[1:])
+
+        # Element id (an anchor target) and, when the element is a claim panel, its
+        # claim id — the DOM side of the analysis↔page set check. Read id/class with
+        # browser first-wins semantics (not the last-wins attr_map), so a duplicated
+        # attribute can't make the lint disagree with the rendered DOM.
+        element_id = _first_attr(attrs, "id")
+        if element_id:
+            self.element_ids.add(element_id)
+            if "claim" in (_first_attr(attrs, "class") or "").split():
+                self.claim_ids.append(element_id)
 
         if tag == "script":
             self._script_has_src = "src" in attr_map
@@ -362,8 +475,129 @@ def _check_csp(content: str | None, *, csp_mode: str = "strict") -> list[LintErr
     return errors
 
 
+def _seam_is_fillable(html: str, open_marker: str, close_marker: str) -> bool:
+    """True iff the injectors could fill this seam — an open marker *followed by* a close.
+
+    Both the Q&A bake (:func:`branch_review.bake.inject_qa`) and live-evidence injector
+    (:func:`branch_review.evidence.inject_evidence_html`) locate the seam with the regex
+    ``open .*? close`` under ``DOTALL`` and replace what it spans. Mere presence of both
+    marker strings is not enough: a reversed pair (``close`` before ``open``) or an
+    open-only seam matches nothing, so the injector silently no-ops — the bake appends a
+    duplicate block, evidence records the fragment but leaves the page unchanged. Mirror
+    the injectors' own pattern here so the lint accepts exactly the seams they can fill.
+    """
+    return (
+        re.search(re.escape(open_marker) + ".*?" + re.escape(close_marker), html, re.DOTALL)
+        is not None
+    )
+
+
+def _check_structure(html: str, auditor: _TagAuditor, claim_ids: Iterable[str]) -> list[LintError]:
+    """Fail on cockpit↔analysis structural drift (issue #62).
+
+    Given the analysis's claim id set, checks that the authored DOM matches it and
+    carries the seams the bake and live-evidence injection depend on: exact claim id
+    correspondence (no missing, extra, or duplicated ids), every in-page anchor
+    resolving to a real element id, and the Q&A seam plus each claim's live-evidence
+    seam being present. Each message names the offending id, anchor, or seam so a
+    failure points straight at what to fix. These are separate from — and never
+    substitute for — the escape/CSP rules: this returns its own list, appended after.
+    """
+    errors: list[LintError] = []
+
+    expected = list(claim_ids)
+    expected_set = set(expected)
+
+    # DOM claim ids: dedupe while flagging repeats (a duplicate id also breaks anchor
+    # resolution, but here it is specifically a claim invariant the reviewer relies on).
+    # ``seen`` ends up equal to the unique DOM claim id set — reuse it for the checks.
+    dom_unique: list[str] = []
+    seen: set[str] = set()
+    for cid in auditor.claim_ids:
+        if cid in seen:
+            errors.append(
+                LintError(
+                    "claim-id-duplicate",
+                    f"claim id {cid!r} appears on more than one element",
+                )
+            )
+        else:
+            seen.add(cid)
+            dom_unique.append(cid)
+
+    for cid in expected:
+        if cid not in seen:
+            errors.append(
+                LintError(
+                    "claim-id-missing",
+                    f'analysis claim {cid!r} has no <details class="claim"> element',
+                )
+            )
+    for cid in dom_unique:
+        if cid not in expected_set:
+            errors.append(
+                LintError(
+                    "claim-id-unknown",
+                    f"cockpit claim {cid!r} is not in the analysis's claim set",
+                )
+            )
+
+    for fragment_id in auditor.anchor_fragments:
+        if fragment_id not in auditor.element_ids:
+            errors.append(
+                LintError(
+                    "dangling-anchor",
+                    f"in-page link '#{fragment_id}' resolves to no element id",
+                )
+            )
+
+    # Both the open AND close marker must be present: the bake and live-evidence
+    # injectors match the open…close pair, so an author who plants only one gets a
+    # silent failure downstream — inject_qa appends a duplicate block, inject_evidence
+    # records the fragment but leaves the page unchanged. Require a *fillable* pair here
+    # so that drift breaks the lint instead.
+    if not _seam_is_fillable(html, QA_SEAM_OPEN, QA_SEAM_CLOSE):
+        errors.append(
+            LintError(
+                "seam-missing",
+                "the Q&A seam is missing or malformed (plant the open marker before its "
+                "close, after the Test Checklist)",
+            )
+        )
+    for cid in expected:
+        seam_open, seam_close = evidence_seam_markers(cid)
+        if not _seam_is_fillable(html, seam_open, seam_close):
+            errors.append(
+                LintError(
+                    "seam-missing",
+                    f"claim {cid!r} has no fillable live-evidence seam (needs the open "
+                    "marker before its close)",
+                )
+            )
+            continue
+        # A fillable seam is not enough: it must sit inside *this* claim's panel, or
+        # inject_evidence would render the answer under the wrong claim (the injector
+        # matches the marker text globally, wherever it is). Every marker of cid's seam
+        # must be enclosed by the <details class="claim" id="cid"> panel.
+        panels = auditor.evidence_marker_panels.get(cid, [])
+        if any(panel != cid for panel in panels):
+            errors.append(
+                LintError(
+                    "seam-misplaced",
+                    f"the live-evidence seam for claim {cid!r} is planted outside its own "
+                    '<details class="claim"> panel',
+                )
+            )
+
+    return errors
+
+
 def lint_cockpit(
-    html: str, *, styling: str = "vendored", csp_mode: str = "strict"
+    html: str,
+    *,
+    styling: str = "vendored",
+    csp_mode: str = "strict",
+    claim_ids: Iterable[str] | None = None,
 ) -> list[LintError]:
     """Lint a cockpit's HTML; return every violation (empty list means it passes).
 
@@ -374,6 +608,13 @@ def lint_cockpit(
     :func:`_check_csp`). The untrusted-markup and no-inline-JS rules are unchanged
     by either: the cockpit we author never contains inline JS, even in
     ``interactive`` mode (Lavish injects its own at serve time).
+
+    ``claim_ids`` is the run's analysis claim id set (from
+    :func:`branch_review.analysis.claim_ids`). When given, the structural pass
+    (:func:`_check_structure`) also runs — claim id correspondence, anchor
+    resolution, and seam presence. When ``None`` (a caller with no analysis to hand,
+    e.g. a bare security re-lint) only the escape/CSP rules run. Either way the two
+    families are independent: a structural failure never suppresses an escape/CSP one.
     """
     errors: list[LintError] = []
     errors.extend(_check_untrusted_regions(html))
@@ -383,6 +624,8 @@ def lint_cockpit(
     auditor.close()
     errors.extend(auditor.errors)
     errors.extend(_check_csp(auditor.csp_content, csp_mode=csp_mode))
+    if claim_ids is not None:
+        errors.extend(_check_structure(html, auditor, claim_ids))
     return errors
 
 
@@ -406,6 +649,14 @@ def main(argv: list[str] | None = None) -> int:
         help="CSP baseline: strict (portable file:// artifact) or interactive "
         "(served through Lavish-AXI). Default: strict.",
     )
+    parser.add_argument(
+        "--analysis",
+        type=Path,
+        default=None,
+        help="Path to the run's analysis.json. When given, the structural pass also "
+        "runs: claim ids must match the analysis, in-page anchors must resolve, and "
+        "the Q&A / per-claim evidence seams must be present.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -414,7 +665,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read {args.path}: {exc}", file=sys.stderr)
         return 2
 
-    errors = lint_cockpit(html, styling=args.styling, csp_mode=args.csp_mode)
+    claim_ids: list[str] | None = None
+    if args.analysis is not None:
+        from branch_review.analysis import claim_ids as analysis_claim_ids
+
+        try:
+            analysis = json.loads(args.analysis.read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"error: cannot read {args.analysis}: {exc}", file=sys.stderr)
+            return 2
+        except json.JSONDecodeError as exc:
+            print(f"error: {args.analysis} is not valid JSON: {exc}", file=sys.stderr)
+            return 2
+        claim_ids = analysis_claim_ids(analysis)
+
+    errors = lint_cockpit(html, styling=args.styling, csp_mode=args.csp_mode, claim_ids=claim_ids)
     if errors:
         for error in errors:
             print(f"lint: {error}", file=sys.stderr)

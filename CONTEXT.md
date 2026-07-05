@@ -49,7 +49,7 @@ One assertion the reviewer must judge, belonging to a thread (L2): a behavior ch
 _Avoid_: finding, issue, item, comment.
 
 **Evidence**:
-What substantiates a claim at L3: pre-escaped diff hunks, code excerpts, caller references. The unified diff is demoted to leaf-level evidence — never the spine of the review. Evidence `{path}` references name changed files (fragments) and may address a specific hunk (`{path, hunk?}`, schema 0.3 — [ADR-0014](./docs/adr/0014-deck-presentation-mode.md)); material from widened-into files travels as `{note}` text. A mid-review answer that *is* new evidence may be injected live at the claim's pre-planted seam (recorded run-scoped in `live-evidence.json`, escaped and linted like everything else); chat remains the default answer path.
+What substantiates a claim at L3: pre-escaped diff hunks, code excerpts, caller references. The unified diff is demoted to leaf-level evidence — never the spine of the review. Under the current contract (`review-analysis/0.2`), an Evidence ref carries a `path` and/or a `note`: `{path}` names a changed file (a fragment); `{note}` text anchors evidence with no L3 fragment — prose and **widened-into** files. Author `{path}`/`{note}` only — hunk-anchored refs (`{path, hunk?}`, `review-analysis/0.3` — [ADR-0014](./docs/adr/0014-deck-presentation-mode.md)) are **Next (Deck Mode)**, not yet supported by the validator, and a stray `hunk` key is silently dropped today. A mid-review answer that *is* new evidence may be injected live at the claim's pre-planted seam (recorded run-scoped in `live-evidence.json`, escaped and linted like everything else); chat remains the default answer path.
 _Avoid_: proof, attachment, snippet.
 
 **Goal Evidence**:

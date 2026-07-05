@@ -115,6 +115,83 @@ def test_add_evidence_injects_escaped_and_lint_clean(cockpit: Path) -> None:
     assert len(fragments) == 1 and fragments[0].claim == "t1.c1"
 
 
+def test_injection_runs_structural_lint_with_claim_ids(cockpit: Path) -> None:
+    # Passing the analysis claim set turns on the structural pass (issue #62); the
+    # fixture's claim set (t1.c1) matches, so injection still succeeds.
+    assert add_evidence(cockpit, "t1.c1", "Callers", "+ x\n", claim_ids=["t1.c1"]) == []
+
+
+def test_injection_blocked_when_structural_pass_fails(cockpit: Path) -> None:
+    # A claim set declaring t1.c2 (which the fixture never authored): the structural
+    # pass fails (missing element + seam), so nothing is written — the chat-only floor.
+    errors = add_evidence(cockpit, "t1.c1", "Callers", "+ x\n", claim_ids=["t1.c1", "t1.c2"])
+    assert errors and any("claim-id-missing" in e or "seam-missing" in e for e in errors)
+    assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched
+    assert not (cockpit.parent / EVIDENCE_NAME).exists()
+
+
+def test_cli_loads_sibling_analysis_for_the_structural_pass(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The CLI defaults --analysis to analysis.json beside the cockpit, so the
+    # post-injection structural pass runs without the caller wiring it (issue #62).
+    cockpit = tmp_path / "review.html"
+    cockpit.write_text(_COCKPIT, encoding="utf-8")
+    (tmp_path / "analysis.json").write_text(
+        json.dumps({"threads": [{"claims": [{"id": "t1.c1"}, {"id": "t1.c2"}]}]}),
+        encoding="utf-8",
+    )
+    body = tmp_path / "body.txt"
+    body.write_text("+ x\n", encoding="utf-8")
+    rc = main(["t1.c1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
+    assert rc == 1  # t1.c2 is in the analysis but not the page → structural failure
+    assert "claim-id-missing" in capsys.readouterr().err
+    assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched
+
+
+def test_cli_degrades_when_default_sibling_analysis_is_corrupt(cockpit: Path) -> None:
+    # A malformed DEFAULT sibling analysis.json must not crash or block injection:
+    # _load_claim_ids returns None (its JSONDecodeError branch), the structural pass is
+    # skipped, and only the escape/CSP rules gate the write — so injection still succeeds.
+    (cockpit.parent / "analysis.json").write_text("{not json", encoding="utf-8")
+    body = cockpit.parent / "body.txt"
+    body.write_text("+ x\n", encoding="utf-8")
+    rc = main(["t1.c1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
+    assert rc == 0  # injected — structural pass skipped, not a hard fail
+    assert "Callers" in cockpit.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["missing", "corrupt"])
+def test_cli_hard_fails_on_explicit_bad_analysis(
+    cockpit: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    # Unlike the defaulted sibling, an EXPLICIT --analysis that is missing or corrupt must
+    # fail loudly (exit 2) rather than silently skip the structural tripwire the operator
+    # asked for — matching lint.py's CLI. Nothing is written on the failure.
+    body = cockpit.parent / "body.txt"
+    body.write_text("+ x\n", encoding="utf-8")
+    analysis = cockpit.parent / "analysis.json"
+    if kind == "corrupt":
+        analysis.write_text("{not json", encoding="utf-8")
+    # "missing" leaves the file absent.
+    rc = main(
+        [
+            "t1.c1",
+            "--title",
+            "Callers",
+            "--input",
+            str(body),
+            "--cockpit",
+            str(cockpit),
+            "--analysis",
+            str(analysis),
+        ]
+    )
+    assert rc == 2
+    assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched
+    assert not (cockpit.parent / EVIDENCE_NAME).exists()
+
+
 def test_add_evidence_accumulates_without_duplicating(cockpit: Path) -> None:
     assert add_evidence(cockpit, "t1.c1", "First", "+ one\n") == []
     assert add_evidence(cockpit, "t1.c1", "Second", "+ two\n") == []

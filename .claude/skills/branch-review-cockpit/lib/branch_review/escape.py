@@ -36,6 +36,27 @@ from html import escape as _html_escape
 UNTRUSTED_OPEN = "<!--brc:untrusted-->"
 UNTRUSTED_CLOSE = "<!--/brc:untrusted-->"
 
+# Structural seams the cockpit author pre-plants empty for a later mechanical fill:
+# the Q&A log the bake folds in (issue #9) and each claim's live evidence (issue #43).
+# Same ``brc:`` HTML-comment family as the untrusted markers above — invisible in the
+# browser and, being comments, they never perturb the linter's untrusted-marker
+# balance count. They live here in the escape leaf so their producers (:mod:`bake`,
+# :mod:`evidence`) and the linter that checks they were planted (:mod:`lint`) share
+# one definition instead of duplicating it — escape imports nothing, so no cycle.
+QA_SEAM_OPEN = "<!--brc:qa-log-->"
+QA_SEAM_CLOSE = "<!--/brc:qa-log-->"
+
+
+def evidence_seam_markers(claim_id: str) -> tuple[str, str]:
+    """The raw open/close markers of one claim's live-evidence seam.
+
+    Just the string format — callers that write a seam validate the claim id first
+    (:func:`branch_review.evidence.evidence_seam`); the linter only checks presence,
+    so it builds the markers straight from the analysis's claim ids.
+    """
+    return f"<!--brc:evidence:{claim_id}-->", f"<!--/brc:evidence:{claim_id}-->"
+
+
 # The strict Content-Security-Policy the vendored cockpit must ship — the
 # defense-in-depth twin of the escaping above (ADR-0002). `script-src 'self'`
 # with no `'unsafe-inline'` forbids inline JS and forces all behaviour into the

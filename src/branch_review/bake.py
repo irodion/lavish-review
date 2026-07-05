@@ -56,6 +56,16 @@ from branch_review.dispositions import (
     parse_disposition_prompt,
     progress,
 )
+
+# ``QA_SEAM_OPEN`` / ``QA_SEAM_CLOSE`` are re-exported here (the ``as`` form marks the
+# re-export explicit) as the bake's public contract: escape owns the one seam-marker
+# definition, so the bake and the Cockpit Linter that checks the seam can never drift.
+from branch_review.escape import (
+    QA_SEAM_CLOSE as QA_SEAM_CLOSE,
+)
+from branch_review.escape import (
+    QA_SEAM_OPEN as QA_SEAM_OPEN,
+)
 from branch_review.escape import STRICT_CSP, escape_text, fragment
 
 # ``Prompt`` / ``extract_prompts`` are re-exported here (the ``as`` form marks the
@@ -79,13 +89,9 @@ from branch_review.feedback import (
 ANALYSIS_NAME = "analysis.json"  # the structured Analysis (for the Markdown export)
 DEFAULT_MD_NAME = "review.md"  # the optional Markdown export
 
-# The seam the bake fills. The agent authors an empty placeholder
-# ``<!--brc:qa-log--><!--/brc:qa-log-->`` after the Test Checklist (SKILL.md §5); the
-# bake replaces everything between the markers, so re-baking is idempotent. These are
-# HTML comments — invisible in the browser — and are distinct from the Escape
-# Boundary's ``brc:untrusted`` markers, so they never perturb the linter's balance count.
-QA_SEAM_OPEN = "<!--brc:qa-log-->"
-QA_SEAM_CLOSE = "<!--/brc:qa-log-->"
+# The bake fills the seam the agent authors as an empty placeholder
+# ``<!--brc:qa-log--><!--/brc:qa-log-->`` after the Test Checklist (SKILL.md §5),
+# replacing everything between the markers so re-baking is idempotent.
 
 
 # --- Loading the transcript -------------------------------------------------

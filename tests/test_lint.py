@@ -7,7 +7,9 @@ known-good baseline so every rule is pinned in isolation.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
+from pathlib import Path
 
 import pytest
 
@@ -18,7 +20,7 @@ from branch_review.escape import (
     UNTRUSTED_OPEN,
     fragment,
 )
-from branch_review.lint import LintError, lint_cockpit
+from branch_review.lint import LintError, lint_cockpit, main
 
 
 def _cockpit(
@@ -366,3 +368,279 @@ def test_lavish_cdn_is_an_allowed_remote_in_interactive() -> None:
     # The bound permits exactly the Lavish CDN (and data:/blob:), so the real
     # interactive policy must not be rejected by the remote-host scan.
     assert _csp_rules(lint_cockpit(_cockpit(csp=INTERACTIVE_CSP), csp_mode="interactive")) == set()
+
+
+# --- structural rules (analysis↔cockpit coherence, issue #62) ----------------
+#
+# These run ONLY when the caller passes the analysis's claim id set. The helpers
+# below assemble a well-formed cockpit whose claim panels, seams, and evidence
+# anchors match a two-claim analysis, then each table row perturbs one thing.
+
+_QA_SEAM = "<!--brc:qa-log--><!--/brc:qa-log-->"
+
+
+def _claim(
+    claim_id: str,
+    *,
+    evidence_seam: bool = True,
+    seam_close: bool = True,
+    seam_reversed: bool = False,
+    extra_body: str = "",
+) -> str:
+    """One L2 claim panel: a <details class="claim"> with its live-evidence seam.
+
+    ``evidence_seam=False`` omits the seam entirely; ``seam_close=False`` plants only
+    the open marker (an unpaired seam); ``seam_reversed=True`` plants the close before
+    the open (both present but unfillable — the injector's regex matches nothing).
+    """
+    open_m = f"<!--brc:evidence:{claim_id}-->"
+    close_m = f"<!--/brc:evidence:{claim_id}-->"
+    if not evidence_seam:
+        seam = ""
+    elif seam_reversed:
+        seam = close_m + open_m
+    elif seam_close:
+        seam = open_m + close_m
+    else:
+        seam = open_m
+    return (
+        f'<details class="claim" id="{claim_id}"><summary>claim {claim_id}</summary>'
+        f'<div class="claim-body">{extra_body}{seam}</div></details>'
+    )
+
+
+def _structured_cockpit(
+    *,
+    claims: str | None = None,
+    qa_seam: str = _QA_SEAM,
+    body_extra: str = "",
+) -> str:
+    """A well-formed two-claim cockpit (t1.c1, t1.c2) with both seams and the Q&A seam."""
+    if claims is None:
+        claims = _claim("t1.c1") + _claim("t1.c2")
+    body = f'<section class="thread" id="t1"><h2>Thread</h2>{claims}</section>{body_extra}'
+    return _cockpit(csp=INTERACTIVE_CSP, body=f"{body}\n{qa_seam}")
+
+
+# The analysis's claim id set for the well-formed fixture above.
+_ANALYSIS_IDS = ["t1.c1", "t1.c2"]
+
+
+def test_well_formed_cockpit_passes_the_structural_pass() -> None:
+    html = _structured_cockpit()
+    assert lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS) == []
+
+
+def test_structural_pass_is_off_without_claim_ids() -> None:
+    # No analysis handed in → only escape/CSP rules run; a page with no claims/seams
+    # (the minimal fixture) must still pass, exactly as before this rule existed.
+    assert lint_cockpit(_cockpit(csp=INTERACTIVE_CSP), csp_mode="interactive") == []
+
+
+# (label, cockpit kwargs, analysis claim ids, expected structural rule)
+_STRUCTURAL_CASES = [
+    (
+        "dangling-anchor",
+        {"body_extra": '<a href="#t9.c9">see</a>'},
+        _ANALYSIS_IDS,
+        "dangling-anchor",
+    ),
+    (
+        "resolving-anchor-ok",
+        {"body_extra": '<a href="#t1.c2">see</a>'},
+        _ANALYSIS_IDS,
+        None,
+    ),
+    (
+        "bare-hash-anchor-ok",
+        {"body_extra": '<a href="#">top</a>'},
+        _ANALYSIS_IDS,
+        None,
+    ),
+    (
+        "claim-missing-from-dom",
+        {"claims": _claim("t1.c1")},  # analysis expects t1.c1 AND t1.c2
+        _ANALYSIS_IDS,
+        "claim-id-missing",
+    ),
+    (
+        "claim-extra-in-dom",
+        {"claims": _claim("t1.c1") + _claim("t1.c2") + _claim("t1.c3")},
+        _ANALYSIS_IDS,
+        "claim-id-unknown",
+    ),
+    (
+        "claim-duplicate",
+        {"claims": _claim("t1.c1") + _claim("t1.c1") + _claim("t1.c2")},
+        _ANALYSIS_IDS,
+        "claim-id-duplicate",
+    ),
+    (
+        "missing-qa-seam",
+        {"qa_seam": ""},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    # Unpaired seams: only the open marker is planted. The injectors match open…close,
+    # so lint must reject these too — otherwise the failure surfaces only later.
+    (
+        "unpaired-qa-seam",
+        {"qa_seam": "<!--brc:qa-log-->"},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    (
+        "missing-evidence-seam",
+        {"claims": _claim("t1.c1", evidence_seam=False) + _claim("t1.c2")},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    (
+        "unpaired-evidence-seam",
+        {"claims": _claim("t1.c1", seam_close=False) + _claim("t1.c2")},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    # Reversed seams: both markers present but close precedes open, so the injector's
+    # `open .*? close` regex matches nothing — a naive presence check misses it.
+    (
+        "reversed-qa-seam",
+        {"qa_seam": "<!--/brc:qa-log--><!--brc:qa-log-->"},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    (
+        "reversed-evidence-seam",
+        {"claims": _claim("t1.c1", seam_reversed=True) + _claim("t1.c2")},
+        _ANALYSIS_IDS,
+        "seam-missing",
+    ),
+    # Misplaced seam: t1.c1's seam is fillable but planted inside t1.c2's panel, so the
+    # injector would render t1.c1's evidence under t1.c2. Lint must reject the misfile.
+    (
+        "misplaced-evidence-seam",
+        {
+            "claims": _claim("t1.c1", evidence_seam=False)
+            + _claim("t1.c2", extra_body="<!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1-->")
+        },
+        _ANALYSIS_IDS,
+        "seam-misplaced",
+    ),
+]
+
+
+@pytest.mark.parametrize(("label", "kwargs", "ids", "expected"), _STRUCTURAL_CASES, ids=lambda c: c)
+def test_structural_rules(
+    label: str, kwargs: dict[str, str], ids: list[str], expected: str | None
+) -> None:
+    errors = lint_cockpit(_structured_cockpit(**kwargs), csp_mode="interactive", claim_ids=ids)
+    struct_rules = {
+        r for r in _rules(errors) if r.startswith(("claim-id-", "dangling-anchor", "seam-"))
+    }
+    if expected is None:
+        assert struct_rules == set(), f"{label}: unexpected {struct_rules}"
+    else:
+        assert expected in struct_rules, f"{label}: expected {expected} in {struct_rules}"
+
+
+def test_duplicate_class_uses_browser_first_value_semantics() -> None:
+    # The browser keeps the FIRST of duplicate attributes; a collapsed dict keeps the
+    # last. `class="not-claim" class="claim"` must read as "not-claim" (browser truth),
+    # so the panel is NOT a claim and the analysis's claim goes missing — lint must not
+    # be fooled by the last-wins dict into believing the claim panel exists.
+    panel = (
+        '<details class="not-claim" class="claim" id="t1.c1"><summary>c</summary>'
+        '<div class="claim-body"><!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1--></div>'
+        "</details>"
+    )
+    html = _cockpit(
+        csp=INTERACTIVE_CSP,
+        body=f'<section class="thread" id="t1">{panel}</section>\n{_QA_SEAM}',
+    )
+    assert "claim-id-missing" in _rules(
+        lint_cockpit(html, csp_mode="interactive", claim_ids=["t1.c1"])
+    )
+
+
+def test_structural_failures_do_not_mask_escape_or_csp_failures() -> None:
+    # A cockpit that is BOTH structurally broken (missing Q&A seam) and unsafe
+    # (unescaped markup in an untrusted region + no CSP) must report every family —
+    # the structural pass never short-circuits the escape/CSP one.
+    html = _structured_cockpit(
+        qa_seam="",
+        body_extra=_diff("<script>alert(1)</script>"),
+    ).replace(f'<meta http-equiv="Content-Security-Policy" content="{INTERACTIVE_CSP}">\n', "")
+    rules = _rules(lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS))
+    assert "untrusted-markup" in rules  # escape
+    assert "csp-missing" in rules  # CSP
+    assert "seam-missing" in rules  # structural
+
+
+def test_real_escape_boundary_cockpit_passes_structural_pass() -> None:
+    # The e2e hostile-input path: real Escape Boundary output (a hostile branch,
+    # path, and commit) wrapped in a well-formed two-claim frame with matching seams
+    # and a resolving evidence anchor must pass BOTH the escape and structural passes.
+    from branch_review.escape import build_fragments, diff_fragment
+
+    frag = build_fragments(
+        branch="evil<branch>",
+        base="main",
+        head_sha="deadbeefcafef00d",
+        changed_file_count=1,
+        files=[{"status": "A", "path": "x/<script>.py"}],
+        commit_lines=["abc123 feat: <script>alert(1)</script>"],
+    )
+    diff = diff_fragment('+x = "<script>alert(1)</script>"\n')
+    claims = _claim("t1.c1", extra_body='<a href="#t1.c2">related</a>') + _claim(
+        "t1.c2", extra_body=frag + diff
+    )
+    html = _structured_cockpit(claims=claims)
+    assert lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS) == []
+
+
+# --- seam markers have one source of truth (the escape leaf) ------------------
+
+
+def test_seam_markers_come_from_the_escape_leaf() -> None:
+    # The linter, the bake, and the evidence injector all check/plant the same seams;
+    # escape.py owns the one definition so they cannot drift. This pins that wiring.
+    from branch_review import escape
+    from branch_review.bake import QA_SEAM_OPEN as bake_qa
+    from branch_review.evidence import evidence_seam
+
+    assert bake_qa is escape.QA_SEAM_OPEN
+    assert evidence_seam("t1.c2") == escape.evidence_seam_markers("t1.c2")
+
+
+# --- CLI: --analysis turns on the structural pass ----------------------------
+
+
+def _analysis_json(ids: list[str]) -> dict[str, object]:
+    """A minimal analysis-shaped object carrying just the claim ids to extract."""
+    return {"threads": [{"claims": [{"id": cid} for cid in ids]}]}
+
+
+def test_cli_without_analysis_skips_structural(tmp_path: Path) -> None:
+    # A cockpit with a dangling anchor but no --analysis: security-only lint passes.
+    page = tmp_path / "review.html"
+    page.write_text(_structured_cockpit(body_extra='<a href="#t9.c9">x</a>'), encoding="utf-8")
+    assert main([str(page), "--csp-mode", "interactive"]) == 0
+
+
+def test_cli_with_analysis_runs_structural(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    page = tmp_path / "review.html"
+    page.write_text(_structured_cockpit(body_extra='<a href="#t9.c9">x</a>'), encoding="utf-8")
+    analysis = tmp_path / "analysis.json"
+    analysis.write_text(json.dumps(_analysis_json(_ANALYSIS_IDS)), encoding="utf-8")
+    assert main([str(page), "--csp-mode", "interactive", "--analysis", str(analysis)]) == 1
+    assert "dangling-anchor" in capsys.readouterr().err
+
+
+def test_cli_with_analysis_passes_a_well_formed_cockpit(tmp_path: Path) -> None:
+    page = tmp_path / "review.html"
+    page.write_text(_structured_cockpit(), encoding="utf-8")
+    analysis = tmp_path / "analysis.json"
+    analysis.write_text(json.dumps(_analysis_json(_ANALYSIS_IDS)), encoding="utf-8")
+    assert main([str(page), "--csp-mode", "interactive", "--analysis", str(analysis)]) == 0
