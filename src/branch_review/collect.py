@@ -38,6 +38,8 @@ from branch_review.escape import (
     FRAGMENTS_DIRNAME,
     build_fragments,
     diff_fragment,
+    file_diff_fragment,
+    file_fragment_id,
     fragment_index_entry,
     notice_fragment,
 )
@@ -418,6 +420,19 @@ def _write_file_fragments(
     seen: dict[str, str] = {}
     for record, (_path, stats, classification) in zip(files, classified, strict=True):
         omitted = classification.omitted
+        fid = file_fragment_id(record["path"])
+        if seen.get(fid, record["path"]) != record["path"]:
+            raise GitError(f"fragment id collision on {fid!r}: {seen[fid]!r} vs {record['path']!r}")
+        seen[fid] = record["path"]
+        # An included body is split into anchored per-hunk blocks (the Hunk Anchorer,
+        # ADR-0014); the returned hunk index rides into the manifest entry so a
+        # ``{path, hunk}`` evidence ref can link the exact hunk. An omitted body has no
+        # fragment and therefore no hunk ids (``hunks`` stays None → key absent).
+        hunks: list[dict[str, object]] | None = None
+        if not omitted:
+            diff_text = _per_file_diff(diff_range, record, cwd)
+            fragment_html, hunks = file_diff_fragment(diff_text, fid)
+            (frag_dir / f"{fid}.html").write_text(fragment_html, encoding="utf-8")
         entry = fragment_index_entry(
             record,
             omitted=omitted,
@@ -425,14 +440,8 @@ def _write_file_fragments(
             disposition=classification.disposition.value,
             # Existence and stats are never dropped — only bodies (issue #7).
             stats={"added": stats.added, "deleted": stats.deleted, "binary": stats.binary},
+            hunks=hunks,
         )
-        fid = str(entry["id"])
-        if seen.get(fid, record["path"]) != record["path"]:
-            raise GitError(f"fragment id collision on {fid!r}: {seen[fid]!r} vs {record['path']!r}")
-        seen[fid] = record["path"]
-        if not omitted:
-            diff_text = _per_file_diff(diff_range, record, cwd)
-            (frag_dir / f"{fid}.html").write_text(diff_fragment(diff_text), encoding="utf-8")
         entries.append(entry)
     return entries, changeset
 

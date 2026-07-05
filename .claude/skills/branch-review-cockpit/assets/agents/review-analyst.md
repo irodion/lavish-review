@@ -52,7 +52,7 @@ You are read-only with one exception: you write `<out-dir>/analysis.json`. You
 never modify source, never run tests or any command, and never write anything
 else.
 
-## What to write: `analysis.json` (`review-analysis/0.2`, ADR-0009)
+## What to write: `analysis.json` (`review-analysis/0.3`, ADR-0009/0014)
 
 A complete, annotated example lives at
 `.claude/skills/branch-review-cockpit/reference/analysis.example.json` — read it
@@ -105,6 +105,16 @@ first and mirror its shape. Structure:
     diff fragment, so it has no L3 anchor — reference it in a `{note}`
     ("widened: src/client/pool.py shares one policy instance"), never as a
     `path`. **A claim with no evidence is not a claim.**
+    - **Hunk anchor (schema 0.3):** a `{path}` ref may add `"hunk": N` — a
+      **1-based** index into that file's hunk sequence — to point at the *exact*
+      hunk that substantiates the claim, so the reviewer lands on the code, not
+      the whole file. Read the count from the file's `hunks` array in
+      `fragments.json` (`[{index, anchor, header_html}, …]`) and use its 1-based
+      `index`; count hunks yourself in `diff.patch` if you prefer, but the index
+      must match the file's hunk order. A `hunk` belongs **only on a `{path}`
+      ref** (a `{note}` has no diff to anchor into), and a plain `{path}` with no
+      `hunk` still anchors at file level — reach for a hunk when a claim is about
+      one specific region of a multi-hunk file.
 - `test_runner` — the detected runner passed in your task prompt, verbatim:
   `{runner, runner_evidence?, command?}`, all nullable. Concrete checks are
   `verify` claims on their threads; this only records the detected runner —

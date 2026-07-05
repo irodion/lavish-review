@@ -1,5 +1,5 @@
 {
-  "schema": "review-analysis/0.2",
+  "schema": "review-analysis/0.3",
   "title": "Retry backoff becomes exponential; config key renamed",
   "intent_summary": "Replaces the fixed 1s retry delay with capped exponential backoff so a struggling upstream is not hammered at a constant rate, and renames the RETRY_DELAY config key to RETRY_BASE_DELAY to match the new meaning.",
   "widened_into": ["src/client/pool.py"],
@@ -24,7 +24,7 @@
             "Is the cap applied before or after the doubling — can a single delay exceed 60s?"
           ],
           "evidence": [
-            { "path": "src/retry.py" }
+            { "path": "src/retry.py", "hunk": 1 }
           ]
         },
         {
@@ -89,7 +89,7 @@
             "Should the old key be honored for one release with a deprecation warning?"
           ],
           "evidence": [
-            { "path": "src/config.py" }
+            { "path": "src/config.py", "hunk": 1 }
           ]
         },
         {

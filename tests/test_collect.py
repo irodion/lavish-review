@@ -156,11 +156,13 @@ def test_per_file_fragments_written_in_changed_files_order(repo: Path) -> None:
     indexed = [rec["path"] for rec in json.loads((out / "fragments.json").read_text())["files"]]
     assert indexed == changed  # ordered index preserves changed-files order
 
-    # Every non-omitted entry has a real, escaped fragment file on disk.
+    # Every non-omitted entry has a real, escaped fragment file on disk — the
+    # Hunk Anchorer wraps its per-hunk blocks in a <div class="file-diff"> (ADR-0014).
     for rec in _fragments_index(out).values():
         frag = out / str(rec["fragment"])
         assert frag.is_file()
-        assert frag.read_text().startswith('<pre class="diff">')
+        assert frag.read_text().startswith('<div class="file-diff">')
+        assert '<pre class="diff">' in frag.read_text()
 
 
 def test_per_file_fragment_isolates_html_in_one_file(repo: Path) -> None:
@@ -273,6 +275,102 @@ def test_per_file_fragments_rebuilt_without_orphans(repo: Path) -> None:
     collect(repo)
     assert "gone.py" not in _fragments_index(out)
     assert not stale.exists()  # fragments/ rebuilt from scratch
+
+
+# --- Hunk Anchorer: per-hunk ids in fragments + a manifest hunk index (issue #63) ---
+
+
+def _seeded_branch(
+    repo: Path, name: str, seed: str, edited: str, filename: str = "multi.py"
+) -> None:
+    """Seed ``filename`` on ``main`` (the merge-base) then edit it on a new branch.
+
+    A file that exists only on the branch would diff as one all-additions hunk against
+    the base; seeding it into the merge-base first makes the branch edit a *modification*,
+    so distant edits surface as the multiple hunks the Hunk Anchorer must anchor.
+    """
+    _git(repo, "checkout", "main")
+    _commit(repo, filename, seed, "base: seed for hunks")
+    _git(repo, "checkout", "-b", name)
+    _commit(repo, filename, edited, "feat: edit distant regions")
+
+
+def test_multi_hunk_file_gets_one_anchored_section_and_index_entry_per_hunk(repo: Path) -> None:
+    from branch_review.escape import hunk_anchor_id
+
+    # A 20-line base with two edits far enough apart that git emits two hunks.
+    base = "".join(f"line {i}\n" for i in range(1, 21))
+    edited = base.replace("line 2\n", "line 2 changed\n").replace("line 18\n", "line 18 changed\n")
+    _seeded_branch(repo, "hunks", base, edited)
+    collect(repo)
+    out = repo / ".review-agent"
+
+    rec = _fragments_index(out)["multi.py"]
+    fid = str(rec["id"])
+    hunks = rec["hunks"]
+    assert isinstance(hunks, list)  # narrow the untyped JSON record before iterating
+    assert [h["index"] for h in hunks] == [1, 2]  # 1-based, in file order
+    assert [h["anchor"] for h in hunks] == [hunk_anchor_id(fid, 1), hunk_anchor_id(fid, 2)]
+    assert all("@@" in h["header_html"] for h in hunks)  # escaped @@ header, marker-wrapped
+
+    frag = (out / str(rec["fragment"])).read_text()
+    # Each hunk index entry's anchor is a real element id in the fragment the cockpit
+    # injects — so a `{path, hunk}` evidence link resolves via native anchor scroll.
+    for h in hunks:
+        assert f'<section class="hunk" id="{h["anchor"]}">' in frag
+    assert frag.count('<section class="hunk"') == 2
+
+
+def test_hunk_anchors_are_deterministic_across_runs(repo: Path) -> None:
+    base = "".join(f"line {i}\n" for i in range(1, 21))
+    edited = base.replace("line 3\n", "line 3!\n").replace("line 17\n", "line 17!\n")
+    _seeded_branch(repo, "hunks", base, edited)
+    out = repo / ".review-agent"
+    collect(repo)
+    first = (out / str(_fragments_index(out)["multi.py"]["fragment"])).read_text()
+    first_index = _fragments_index(out)["multi.py"]["hunks"]
+    collect(repo)
+    second = (out / str(_fragments_index(out)["multi.py"]["fragment"])).read_text()
+    second_index = _fragments_index(out)["multi.py"]["hunks"]
+    assert first == second  # byte-identical fragment across runs
+    assert first_index == second_index  # identical hunk index across runs
+
+
+def test_pure_rename_has_no_hunks(repo: Path) -> None:
+    # A pure rename (R100) has a preamble but no `@@` hunk — the index is empty, but
+    # the file still appears with its fragment. No hunk anchors to hand out.
+    _git(repo, "checkout", "feature")
+    _git(repo, "mv", "app.py", "moved.py")
+    (repo / "moved.py").write_text("x = 1\n")  # match base → scored a pure rename
+    _git(repo, "add", "moved.py")
+    _git(repo, "commit", "-m", "refactor: rename")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    rec = _fragments_index(out)["moved.py"]
+    assert rec["hunks"] == []
+    frag = (out / str(rec["fragment"])).read_text()
+    assert '<section class="hunk"' not in frag
+    assert '<pre class="diff diff-preamble">' in frag  # the rename header is shown
+
+
+def test_omitted_body_carries_no_hunk_index(repo: Path) -> None:
+    # An omitted body has no diff fragment, so it hands out no hunk ids at all —
+    # the `hunks` key is simply absent (never an empty list masquerading as a shown
+    # diff with zero hunks).
+    _git(repo, "checkout", "feature")
+    _commit(repo, "app.py", "x = 3\n", "feat: real change")
+    (repo / "uv.lock").write_text("locked = 1\n")  # a built-in lockfile → body omitted
+    _git(repo, "add", "uv.lock")
+    _git(repo, "commit", "-m", "chore: add lockfile")
+    collect(repo)
+    out = repo / ".review-agent"
+
+    locked = _fragments_index(out)["uv.lock"]
+    assert locked["omitted"] is True
+    assert "hunks" not in locked
+    # A shown file still carries its index (possibly used for hunk-anchored evidence).
+    assert "hunks" in _fragments_index(out)["app.py"]
 
 
 def _run_scoped_names() -> tuple[str, ...]:

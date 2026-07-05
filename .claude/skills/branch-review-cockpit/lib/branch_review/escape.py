@@ -25,6 +25,7 @@ See ``DESIGN.md``, ``CONTEXT.md`` (Review Cockpit), and
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Iterable, Mapping
 from html import escape as _html_escape
 
@@ -271,6 +272,95 @@ def file_fragment_id(path: str) -> str:
     return digest[:16]
 
 
+# --- Hunk anchors (Deck Mode, ADR-0014, issue #63) ----------------------------
+#
+# A per-file fragment used to be one big ``<pre class="diff">``; the Deck Mode Stage
+# wants to land a claim's evidence on the *exact hunk* that substantiates it, not the
+# whole file. So the boundary now emits a deterministic per-hunk id inside each
+# fragment and records a hunk index in the fragments manifest — the **Hunk Anchorer**.
+# The split happens on our side of the boundary (each hunk's body still crosses
+# :func:`fragment`), so ADR-0002 holds per hunk exactly as it held per file, and a
+# ``<script>`` hidden in a hunk still renders as text. Evidence refs may address a hunk
+# (``{path, hunk}``, analysis schema 0.3); the anchor is read from the manifest and
+# never hand-typed, and the browser's native ``#anchor`` scroll completes the deep link.
+
+# A unified-diff hunk header — a line beginning ``@@`` (multiline ``^`` matches at
+# string start and after every ``\n``, git's own line model). Body lines are prefixed
+# with a space/``+``/``-`` (or ``\`` for the no-newline marker), so a bare ``@@`` at a
+# line start is always a header, never content. Anchored on ``\n`` alone — never
+# ``str.splitlines`` — so an embedded ``\r`` inside a hunk body can't forge a split.
+_HUNK_HEADER_RE = re.compile(r"(?m)^@@")
+
+
+def hunk_anchor_id(fragment_id: str, index: int) -> str:
+    """The deterministic element id of the ``index``-th hunk (1-based) in a file's diff.
+
+    ``fragment_id`` is the file's :func:`file_fragment_id` (16 hex chars) and ``index``
+    is the hunk's 1-based position in that file's hunk sequence, so ``hunk-<fid>-<n>`` is
+    unique per (file, hunk) across the whole document and — being ``[0-9a-f-]`` only — is
+    safe both as an HTML ``id`` and as a URL ``#fragment``. The cockpit links a
+    ``{path, hunk}`` evidence ref to this id straight from the manifest (never
+    hand-typed), and the browser's native anchor scroll lands the reviewer on the hunk.
+    """
+    return f"hunk-{fragment_id}-{index}"
+
+
+def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict[str, object]]]:
+    """Render one changed file's diff as anchored per-hunk blocks + its hunk index.
+
+    Splits the file's unified diff at each hunk header so every hunk becomes an
+    individually anchored ``<section class="hunk" id=…>`` wrapping its own escaped
+    ``<pre class="diff">``; the header preamble (the ``diff --git`` / ``---`` / ``+++``
+    lines, or a pure rename's ``rename from/to``) leads as a ``diff-preamble`` block.
+    The bytes are **sliced from** ``diff_text`` verbatim — preamble and every hunk
+    concatenate back to the original — so the reviewed change is shown byte-for-byte and
+    each hunk body still crosses the boundary through :func:`fragment` (ADR-0002 holds
+    per hunk).
+
+    Returns ``(html, hunks)`` where each ``hunks`` entry is
+    ``{index, anchor, header_html}`` — the 1-based index, the :func:`hunk_anchor_id`
+    element id, and the ``@@`` header line **crossed through the boundary** (escaped,
+    marker-wrapped) — the per-file hunk index the manifest carries and the cockpit
+    links evidence to. A diff with no hunk (a pure rename or a mode-only change) yields
+    just its preamble and an empty index; an empty ``diff_text`` (never written for an
+    omitted body) degrades to the trusted empty notice with no hunks.
+    """
+    if not diff_text:
+        return diff_fragment(diff_text), []
+
+    starts = [match.start() for match in _HUNK_HEADER_RE.finditer(diff_text)]
+    parts: list[str] = ['<div class="file-diff">']
+    hunks: list[dict[str, object]] = []
+
+    # Everything before the first hunk header is the preamble — the whole diff when
+    # there is no hunk (a pure rename / mode change), and possibly empty when the diff
+    # opens straight on a hunk. Each hunk then runs to the next header or to EOF.
+    preamble = diff_text[: starts[0]] if starts else diff_text
+    if preamble:
+        parts.append(f'<pre class="diff diff-preamble">{fragment(preamble)}</pre>')
+
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(diff_text)
+        hunk_text = diff_text[start:end]
+        index = i + 1
+        anchor = hunk_anchor_id(fragment_id, index)
+        # The ``@@ -a,b +c,d @@ <section>`` header, crossed through the boundary. Its
+        # trailing context is git's function heading, lifted from (attacker-influenceable)
+        # source, so it is untrusted — escaped + marker-wrapped exactly like ``path_html``
+        # so an author who labels a hunk card has a safe-by-construction value. The raw
+        # line is never handed out (the escaped ``<pre>`` body already shows it verbatim).
+        header_html = fragment(hunk_text.split("\n", 1)[0])
+        hunks.append({"index": index, "anchor": anchor, "header_html": header_html})
+        parts.append(
+            f'<section class="hunk" id="{anchor}">'
+            f'<pre class="diff">{fragment(hunk_text)}</pre>'
+            "</section>"
+        )
+
+    parts.append("</div>")
+    return "\n".join(parts) + "\n", hunks
+
+
 def fragment_index_entry(
     record: Mapping[str, str],
     *,
@@ -278,27 +368,35 @@ def fragment_index_entry(
     reason: str | None = None,
     disposition: str | None = None,
     stats: Mapping[str, object] | None = None,
+    hunks: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """One ordered ``fragments.json`` record for a changed file.
 
     Maps a ``changed-files.json`` record to ``{path, path_html, status, id,
-    fragment, omitted, disposition?, <stats…>, old_path?, old_path_html?, reason?}``.
-    ``fragment`` is the relative path of the escaped fragment file, or ``None`` when
-    the body is omitted (excluded, capped, or otherwise classified out by the Change
-    Classifier, issue #7) — an omitted file still appears in the index with its
-    status, its ``stats``, and a **required** ``reason`` so **nothing omitted is ever
-    hidden** (DESIGN). ``disposition`` (when given) is the classifier's stable verdict
-    string (``include-body``/``omit:lockfile``/…) so the cockpit can group omissions
-    by kind rather than parse the prose ``reason``. ``stats`` (when given) is merged
-    verbatim into the entry — the classifier's per-file line counts (``added``,
-    ``deleted``, ``binary``) that survive even when the body does. Keeping the whole
-    entry schema in this one builder is deliberate: ``fragments.json`` has a single
-    authoring site. ``path``/``old_path`` are the raw agent-facing strings;
+    fragment, omitted, hunks?, disposition?, <stats…>, old_path?, old_path_html?,
+    reason?}``. ``fragment`` is the relative path of the escaped fragment file, or
+    ``None`` when the body is omitted (excluded, capped, or otherwise classified out by
+    the Change Classifier, issue #7) — an omitted file still appears in the index with
+    its status, its ``stats``, and a **required** ``reason`` so **nothing omitted is
+    ever hidden** (DESIGN). ``disposition`` (when given) is the classifier's stable
+    verdict string (``include-body``/``omit:lockfile``/…) so the cockpit can group
+    omissions by kind rather than parse the prose ``reason``. ``stats`` (when given) is
+    merged verbatim into the entry — the classifier's per-file line counts (``added``,
+    ``deleted``, ``binary``) that survive even when the body does. ``hunks`` (when
+    given) is the file's per-hunk index from :func:`file_diff_fragment` —
+    ``[{index, anchor, header_html}, …]``, the manifest side of the Hunk Anchorer
+    (ADR-0014) that lets a ``{path, hunk}`` evidence ref link to the exact hunk. It rides only on
+    an included body — an **omitted** file has no fragment, hence no hunk ids (the key
+    is simply absent, never ``[]`` masquerading as "no hunks in a shown diff"). Keeping
+    the whole entry schema in this one builder is deliberate: ``fragments.json`` has a
+    single authoring site. ``path``/``old_path`` are the raw agent-facing strings;
     ``path_html``/``old_path_html`` are the same values having crossed the boundary
     (escaped, marker-wrapped) for injection into cockpit headings.
     """
     if omitted and not (reason and reason.strip()):
         raise ValueError("an omitted fragment index entry requires a non-empty reason")
+    if omitted and hunks is not None:
+        raise ValueError("an omitted fragment index entry has no body, so it carries no hunks")
     fid = file_fragment_id(record["path"])
     entry: dict[str, object] = {
         "path": record["path"],
@@ -312,6 +410,8 @@ def fragment_index_entry(
         "fragment": None if omitted else f"{FRAGMENTS_DIRNAME}/{fid}.html",
         "omitted": omitted,
     }
+    if hunks is not None:
+        entry["hunks"] = hunks
     if disposition is not None:
         entry["disposition"] = disposition
     if stats is not None:

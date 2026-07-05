@@ -63,7 +63,8 @@ def _valid() -> dict[str, Any]:
                         "confidence": "medium",
                         "challenge_questions": ["Do concurrent callers share the schedule?"],
                         "evidence": [
-                            {"path": "src/retry.py", "note": "the backoff computation"},
+                            # A hunk-anchored path ref (schema 0.3): a 1-based hunk index.
+                            {"path": "src/retry.py", "hunk": 2, "note": "the backoff computation"},
                         ],
                     },
                     {
@@ -107,6 +108,19 @@ def _valid() -> dict[str, Any]:
 
 def test_complete_analysis_passes() -> None:
     assert validate_analysis(_valid()) == []
+
+
+def test_reference_example_analysis_is_valid() -> None:
+    # The shipped reference the analyst is told to mirror must itself validate under
+    # the current schema — otherwise the example teaches a shape the validator rejects.
+    import json
+    from pathlib import Path
+
+    skill = Path(__file__).resolve().parents[1] / ".claude" / "skills" / "branch-review-cockpit"
+    example = skill / "reference" / "analysis.example.json"
+    doc = json.loads(example.read_text(encoding="utf-8"))
+    assert doc["schema"] == SCHEMA  # the example carries the current tag
+    assert validate_analysis(doc) == []
 
 
 def test_empty_optional_lists_are_allowed() -> None:
@@ -156,6 +170,16 @@ def test_goal_omission_with_alignment_passes() -> None:
     assert validate_analysis(doc) == []
 
 
+def test_hunk_anchored_evidence_is_optional_and_passes() -> None:
+    # Schema 0.3: a {path} ref may carry a 1-based hunk index, or omit it entirely —
+    # a path-only ref keeps file-level anchoring. Both shapes are valid.
+    doc = _valid()
+    doc["threads"][0]["claims"][0]["evidence"] = [{"path": "src/retry.py", "hunk": 1}]
+    assert validate_analysis(doc) == []
+    doc["threads"][0]["claims"][0]["evidence"] = [{"path": "src/retry.py"}]  # no hunk
+    assert validate_analysis(doc) == []
+
+
 # (label, mutate(doc), expected location substring) — each trips exactly one rule.
 def _drop(key: str) -> Mutator:
     def mutate(doc: dict[str, Any]) -> None:
@@ -198,8 +222,10 @@ _BAD_CASES = [
     ("empty-title", _set(["title"], "   "), "title"),
     ("missing-intent", _drop("intent_summary"), "intent_summary"),
     ("bad-schema", _set(["schema"], "something-else"), "schema"),
-    # The old revision must fail — this validator encodes only 0.2.
-    ("outdated-schema-version", _set(["schema"], "review-analysis/0.1"), "schema"),
+    # An older revision must fail — this validator encodes only 0.3, so a 0.2 (or
+    # 0.1) document is refused with a located error, not revalidated under new rules.
+    ("outdated-schema-0.2", _set(["schema"], "review-analysis/0.2"), "schema"),
+    ("outdated-schema-0.1", _set(["schema"], "review-analysis/0.1"), "schema"),
     # ADR-0011: widened_into is required (an honest "nothing" is [], not absence).
     ("missing-widened-into", _drop("widened_into"), "widened_into"),
     ("widened-into-not-list", _set(["widened_into"], "src/retry.py"), "widened_into"),
@@ -251,6 +277,30 @@ _BAD_CASES = [
         "claim-evidence-bad-path",
         _set([*_C, 0, "evidence"], [{"path": 5}]),
         "threads[0].claims[0].evidence[0].path",
+    ),
+    # Hunk-anchored evidence (schema 0.3, ADR-0014): optional, path-only, 1-based int.
+    (
+        # A hunk anchors a diff fragment; a note-only ref has none to anchor to.
+        "evidence-hunk-on-note-ref",
+        _set([*_C, 2, "evidence", 0, "hunk"], 1),
+        "threads[0].claims[2].evidence[0].hunk",
+    ),
+    (
+        "evidence-hunk-not-integer",
+        _set([*_C, 0, "evidence", 0, "hunk"], "2"),
+        "threads[0].claims[0].evidence[0].hunk",
+    ),
+    (
+        # 1-based: 0 (and any value < 1) is out of the declared range.
+        "evidence-hunk-out-of-range",
+        _set([*_C, 0, "evidence", 0, "hunk"], 0),
+        "threads[0].claims[0].evidence[0].hunk",
+    ),
+    (
+        # bool is an int subclass — True must not read as the hunk index 1.
+        "evidence-hunk-boolean",
+        _set([*_C, 0, "evidence", 0, "hunk"], True),
+        "threads[0].claims[0].evidence[0].hunk",
     ),
     # Risk claims: category + level required; level is risk-only.
     ("risk-missing-category", _del([*_C, 1, "category"]), "threads[0].claims[1].category"),

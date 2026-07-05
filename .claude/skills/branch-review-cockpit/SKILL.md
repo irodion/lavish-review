@@ -203,12 +203,21 @@ relay it and stop. The collector computes the `base...HEAD` diff and writes to
   commits). The goal block is the stated goal escaped with its provenance line — or,
   when no goal was found, the fixed degraded notice ("No stated goal found; intent
   inferred from the diff"). Paste whichever it holds verbatim into L0.
-- `fragments/<id>.html` — **one pre-escaped `<pre class="diff">` per changed file**
+- `fragments/<id>.html` — **one pre-escaped `<div class="file-diff">` per changed
+  file**, its diff split into per-hunk `<section class="hunk" id="hunk-…">` blocks
+  (the Hunk Anchorer, ADR-0014) with the header preamble leading as a
+  `<pre class="diff diff-preamble">`. Paste it verbatim; the per-hunk ids become the
+  anchors a hunk-scoped evidence link lands on.
 - `fragments.json` — the ordered, path-keyed index of those per-file fragments,
-  each entry `{path, path_html, status, id, fragment, omitted, disposition,
+  each entry `{path, path_html, status, id, fragment, omitted, hunks, disposition,
   added, deleted, binary, old_path?, old_path_html?, reason?}`. For a rename,
   inject `old_path_html` (already escaped) if you show the old path in a heading —
-  never hand-type `old_path`. `disposition` is the Change Classifier's verdict
+  never hand-type `old_path`. `hunks` (on an included body only) is that file's hunk
+  index `[{index, anchor, header_html}, …]` — the 1-based `index` an evidence `hunk`
+  ref names, the `anchor` element id its link targets (**read it here, never hand-type
+  it**), and `header_html`, the `@@` header line already escaped and marker-wrapped
+  (like `path_html`) for a hunk label if you show one; an omitted body has no `hunks`.
+  `disposition` is the Change Classifier's verdict
   (`include-body` / `omit:lockfile` / `omit:excluded` / `omit:too-large`); `added`/
   `deleted` are the file's line stats (always present, even when the body is
   omitted). The top-level `too_large` / `too_large_reason` flag the total-diff
@@ -246,7 +255,7 @@ checklist's suggestion (verbatim) and `evidence` to say *why* it was suggested.
 
 ### 3. Spawn the isolated analyst to author `.review-agent/analysis.json`
 
-The Analysis — threads, claims, confidences (`review-analysis/0.2`, ADR-0009) —
+The Analysis — threads, claims, confidences (`review-analysis/0.3`, ADR-0009/0014) —
 is formed **blind, by construction** (ADR-0011): spawn the **`review-analyst`**
 subagent (its definition, `.claude/agents/review-analyst.md`, carries the full
 authoring contract and *is* the inspectable isolation boundary). Use the Agent
@@ -361,7 +370,14 @@ the ancestors of any `#anchor` they follow:
      `<h4>Evidence</h4><ul class="evidence-list">` — each `{path}` ref rendered as
      `<a href="#file-ID">` (the `fragments.json` entry's `id`, with the entry's
      `path_html` as the link body) and each `{note}` as `<span class="note">`.
-     Every `path` evidence ref **must** link to a real L3 anchor. Then plant the
+     When a `{path}` ref carries a **`hunk`** (schema 0.3), link the exact hunk
+     instead of the file: use `<a href="#HUNK-ANCHOR">` where `HUNK-ANCHOR` is the
+     `anchor` of that file's `hunks[index-1]` entry in `fragments.json` (the ref's
+     1-based `hunk` picks the entry) — **copy the anchor from the manifest, never
+     hand-type it**. A `{path}`-only ref (no `hunk`) keeps file-level `#file-ID`
+     anchoring. Every `path` evidence ref **must** link to a real anchor — a file id
+     or a hunk id that the pasted fragment actually carries (the lint resolves both).
+     Then plant the
      claim's **live-evidence seam**, empty and exact (the id is the claim's own):
      `<!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1-->` — a mid-review answer
      that *is* new evidence is injected here (step 8 e); a claim authored without
