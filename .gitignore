@@ -7,6 +7,10 @@ CLAUDE.local.md
 # Lavish-AXI local session state
 .lavish-axi/
 
+# Node (the JS test harness has no runtime deps, but keep tooling output out)
+node_modules/
+npm-debug.log*
+
 # Python
 __pycache__/
 *.py[cod]

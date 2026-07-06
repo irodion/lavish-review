@@ -1,0 +1,154 @@
+// Deck Presenter tests (issue #67) — the repo's first JS tests. They exercise the
+// vendored app.js against the minimal DOM harness (dom.mjs / harness.mjs): the deck
+// builds from a fixture document, dots and threads stage claims, the mode toggle
+// round-trips content/open-state/tints, no deck exists on file://, and the
+// DOM-relocation-only invariant holds (a <script> in a diff renders as text).
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { Element } from "./dom.mjs";
+import { loadCockpit, click } from "./harness.mjs";
+
+const dot = (document, claimId) =>
+  document.querySelectorAll(".deck-dot").find((d) => d.dataset.claim === claimId);
+const stagedClaimId = (document) =>
+  document.querySelector(".deck-stage .deck-crumb-claim").textContent;
+
+function containsScriptElement(el) {
+  if (el.tagName === "SCRIPT") return true;
+  for (const child of el.childNodes) {
+    if (child instanceof Element && containsScriptElement(child)) return true;
+  }
+  return false;
+}
+
+test("builds the Map and Stage from the document when served", () => {
+  const { document } = loadCockpit({ protocol: "http:" });
+
+  assert.ok(document.querySelector(".deck"), "the deck container is built");
+  assert.ok(document.body.classList.contains("deck-active"), "served → deck is the presentation");
+
+  // One dot per claim, in Review Route order.
+  const dots = document.querySelectorAll(".deck-dot").map((d) => d.dataset.claim);
+  assert.deepEqual(dots, ["t1.c1", "t1.c2", "t2.c1"]);
+
+  // Threads in analysis order with their per-thread fractions.
+  const titles = document.querySelectorAll(".deck-thread-title").map((t) => t.textContent);
+  assert.deepEqual(titles, ["First thread", "Second thread"]);
+  const fracs = document.querySelectorAll(".deck-thread-frac").map((f) => f.textContent);
+  assert.deepEqual(fracs, ["0/2", "0/1"]);
+
+  // Every changed file listed with its stats (nothing-hidden in the Map).
+  const files = document.querySelectorAll(".deck-file-name").map((f) => f.textContent);
+  assert.deepEqual(files, ["one.py", "two.py", "three.py"]);
+  assert.equal(document.querySelectorAll(".deck-file .file-stats").length, 3);
+
+  // Overall progress: nothing reviewed yet.
+  assert.match(document.querySelector(".deck-tally").textContent, /^0\/3 reviewed$/);
+
+  // The first claim is staged, whole, with its challenge questions and the exact
+  // hunk that substantiates it rendered inline (line-numbered — the annotated table).
+  assert.equal(stagedClaimId(document), "t1.c1");
+  const stage = document.querySelector(".deck-stage");
+  assert.ok(stage.querySelector("details.claim .challenge-questions"), "challenge questions on Stage");
+  assert.ok(stage.querySelector(".deck-hunk .diff-table"), "the evidence hunk is inline");
+});
+
+test("clicking a dot or a thread stages that claim", () => {
+  const { document } = loadCockpit({ protocol: "http:" });
+
+  click(dot(document, "t1.c2"));
+  assert.equal(stagedClaimId(document), "t1.c2");
+  assert.ok(dot(document, "t1.c2").classList.contains("current"), "the staged dot is marked current");
+  assert.ok(!dot(document, "t1.c1").classList.contains("current"));
+
+  // A file-level evidence ref (#file-f2) stages with the file's body inline.
+  const stage = document.querySelector(".deck-stage");
+  assert.ok(stage.querySelector(".deck-hunk .diff-table"), "file-level evidence renders inline");
+
+  // The thread button stages the thread's first claim.
+  const secondThread = document.querySelectorAll(".deck-thread")[1];
+  click(secondThread);
+  assert.equal(stagedClaimId(document), "t2.c1");
+});
+
+test("the staged claim is relocated (not duplicated) out of the document", () => {
+  const { document } = loadCockpit({ protocol: "http:" });
+  // t1.c1 is staged on load. It must live in exactly one place: the Stage.
+  const matches = document.querySelectorAll("details.claim").filter((c) => c.id === "t1.c1");
+  assert.equal(matches.length, 1, "the claim exists once");
+  assert.ok(matches[0].closest(".deck-stage"), "and it is on the Stage");
+});
+
+test("the mode toggle round-trips content, open state, and disposition tints", () => {
+  const { document, window } = loadCockpit({ protocol: "http:" });
+  window.lavish = { queuePrompt() {}, sendQueuedPrompts() {} };
+
+  // Give t2.c1 a disposition from the Stage, then read its Map dot tint.
+  click(dot(document, "t2.c1"));
+  const claim = document.getElementById("t2.c1");
+  const concern = claim
+    .querySelectorAll(".disposition-controls button")
+    .find((b) => b.dataset.disposition === "concern");
+  click(concern);
+  assert.equal(claim.getAttribute("data-disposition"), "concern");
+  assert.equal(dot(document, "t2.c1").getAttribute("data-disposition"), "concern");
+  assert.match(document.querySelector(".deck-progress").textContent, /1\/3 reviewed/);
+
+  // Authored claims are closed; the staged one is forced open on the Stage.
+  assert.equal(claim.open, true, "staged claim is open on the Stage");
+
+  // Toggle to the document: the deck deactivates and the claim returns home, closed.
+  click(document.querySelector(".deck-toggle"));
+  assert.ok(!document.body.classList.contains("deck-active"), "document mode is showing");
+  assert.equal(document.querySelector(".deck-toggle").textContent, "Deck view");
+  assert.equal(claim.closest("section.thread").id, "t2", "the claim is back under its thread");
+  assert.equal(claim.open, false, "its authored (closed) open state is restored");
+  assert.equal(claim.getAttribute("data-disposition"), "concern", "its tint survives the round-trip");
+
+  // Every claim is present in the document again — nothing lost.
+  assert.equal(document.querySelectorAll("main details.claim").length, 3);
+
+  // Toggle back: the deck returns to the last-staged claim.
+  click(document.querySelector(".deck-toggle"));
+  assert.ok(document.body.classList.contains("deck-active"));
+  assert.equal(stagedClaimId(document), "t2.c1");
+});
+
+test("no deck is built on file:// (a baked record renders document mode only)", () => {
+  const { document } = loadCockpit({ protocol: "file:" });
+  assert.equal(document.querySelector(".deck"), null, "no deck container");
+  assert.equal(document.querySelector(".deck-toggle"), null, "no mode toggle");
+  assert.ok(!document.body.classList.contains("deck-active"), "the document renders as today");
+  // The document itself is untouched — all claims still in place.
+  assert.equal(document.querySelectorAll("main details.claim").length, 3);
+});
+
+test("inline evidence is cloned without ids, so the live DOM keeps unique ids", () => {
+  const { document } = loadCockpit({ protocol: "http:" });
+  const ids = [];
+  (function walk(el) {
+    if (el.id) ids.push(el.id);
+    for (const child of el.childNodes) if (child instanceof Element) walk(child);
+  })(document.documentElement);
+  assert.equal(new Set(ids).size, ids.length, "no id is duplicated by a cloned hunk");
+});
+
+test("DOM-relocation-only: a <script> in a diff renders as text, never executes", () => {
+  globalThis.__pwned = undefined;
+  const { document } = loadCockpit({ protocol: "http:" });
+
+  // t1.c1 (staged on load) cites a hunk whose diff line embeds a <script> string.
+  const stage = document.querySelector(".deck-stage");
+  const inlineHunk = stage.querySelector(".deck-hunk");
+  assert.ok(
+    inlineHunk.textContent.includes("<script>window.__pwned = true;</script>"),
+    "the hostile diff line is present verbatim, as text"
+  );
+  assert.ok(
+    !containsScriptElement(document.querySelector(".deck")),
+    "no <script> element was ever constructed in the deck"
+  );
+  assert.notEqual(globalThis.__pwned, true, "no side effect fired — the payload never executed");
+  delete globalThis.__pwned;
+});
