@@ -31,6 +31,17 @@
 // Everything is rendered with createElement/textContent from closed vocabularies —
 // no attacker-derived string ever reaches markup. On `file://` (a portable or
 // baked artifact) there is no live session, so the controls are not rendered.
+//
+// Claim-scoped questions (ADR-0015, issue #65): each claim also gets a JS-injected
+// ask affordance that queues the reviewer's question through the *same* presence-
+// gated channel, carrying the claim id as structured data
+// (`{kind: "claim-question", claim}`, `tag: "message"`, per-claim `queueKey` so
+// rapid edits collapse) — no DOM selector to resolve. The loop answers it grounded
+// in that claim; the exchange bakes into the Q&A Log like any chat question (it is
+// conversation, not state — no store, no apply step). The claim id is a closed
+// vocabulary (matched against `CLAIM_ID`); the reviewer's free-text question only
+// ever reaches an `<input>`/`<textarea>` value, never markup. Same served-only gate
+// as dispositions: absent on `file://`.
 
 (function () {
   "use strict";
@@ -189,24 +200,33 @@
     );
   }
 
-  // Queue the update through the SDK. `window.lavish` is checked at interaction
-  // time — the SDK script loads after ours (#38). The per-claim queueKey collapses
-  // rapid re-clicks to the last state; sends are presence-gated by the host, so
-  // delivery is batched/eventually-consistent within the session (also #38).
-  function sendDisposition(claimId, disposition) {
+  // Queue one prompt through the SDK and flush it. `window.lavish` is checked at
+  // interaction time — the SDK script loads after ours (#38). Sends are presence-
+  // gated by the host, so delivery is batched/eventually-consistent within the
+  // session (also #38). Returns false when there is no live SDK to accept the
+  // prompt, so a caller can tell the reviewer instead of dropping it silently.
+  // The shared seam for every structured feedback send — a disposition update and
+  // a claim-scoped question differ only in the payload they pass here.
+  function queueToSdk(message, options) {
     const sdk = window.lavish;
     if (!sdk || typeof sdk.queuePrompt !== "function") {
-      return;
+      return false;
     }
-    sdk.queuePrompt("Disposition set: " + claimId + " -> " + disposition, {
+    sdk.queuePrompt(message, options);
+    if (typeof sdk.sendQueuedPrompts === "function") {
+      sdk.sendQueuedPrompts();
+    }
+    return true;
+  }
+
+  // The per-claim queueKey collapses rapid re-clicks to the last state.
+  function sendDisposition(claimId, disposition) {
+    queueToSdk("Disposition set: " + claimId + " -> " + disposition, {
       tag: "choice",
       text: "disposition:" + disposition,
       queueKey: "disposition:" + claimId,
       data: { kind: "disposition", claim: claimId, disposition: disposition },
     });
-    if (typeof sdk.sendQueuedPrompts === "function") {
-      sdk.sendQueuedPrompts();
-    }
   }
 
   function applyDisposition(claim, disposition) {
@@ -335,6 +355,94 @@
     loadDispositions();
   }
 
+  // --- Claim-scoped questions (ADR-0015) ------------------------------------
+
+  // Queue the reviewer's question through the SDK, carrying the claim id as
+  // structured data — the same presence-gated channel dispositions use, keyed by a
+  // per-claim `queueKey` so a rapid edit-and-resend collapses to the latest text.
+  // Unlike a disposition (a `tag: "choice"` state update), a question is a plain
+  // `tag: "message"` — it flows into the Q&A Log and bakes like any chat question,
+  // never filtered out as state. Returns false (via `queueToSdk`) when there is no
+  // live SDK, so the caller can say so instead of dropping the question silently.
+  function sendClaimQuestion(claimId, text) {
+    return queueToSdk(text, {
+      tag: "message",
+      queueKey: "question:" + claimId, // collapses rapid edits, like dispositions
+      data: { kind: "claim-question", claim: claimId },
+    });
+  }
+
+  function injectAskControl(claim) {
+    const body = claim.querySelector(".claim-body");
+    if (!body || body.querySelector(".claim-ask")) {
+      return;
+    }
+    const group = document.createElement("div");
+    group.className = "claim-ask";
+
+    // A status line, updated with textContent only — never markup. `role="status"`
+    // announces "Sent"/"No live session" to assistive tech without stealing focus.
+    const status = document.createElement("span");
+    status.className = "claim-ask-status";
+    status.setAttribute("role", "status");
+
+    const input = document.createElement("textarea");
+    input.className = "claim-ask-input";
+    input.rows = 2;
+    // A fixed placeholder + aria-label — the claim id is a closed vocabulary
+    // (CLAIM_ID), so it is safe to name; the reviewer's own text stays in `.value`,
+    // never in markup. The aria-label survives once the placeholder disappears on
+    // typing, keeping an accessible name for the field.
+    input.setAttribute("aria-label", "Ask about " + claim.id);
+    input.setAttribute("placeholder", "Ask about " + claim.id + "…");
+
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "claim-ask-send";
+    send.textContent = "Ask"; // fixed label, never derived text
+
+    function submit() {
+      const text = input.value.trim();
+      if (!text) {
+        return;
+      }
+      if (sendClaimQuestion(claim.id, text)) {
+        input.value = "";
+        status.textContent = "Sent — the answer appears in the chat.";
+      } else {
+        // No SDK: a portable copy served without a live session. Keep the text so
+        // the reviewer loses nothing; just say it could not be sent.
+        status.textContent = "No live session — question not sent.";
+      }
+    }
+
+    send.addEventListener("click", submit);
+    // ⌘/Ctrl+Enter sends; a bare Enter keeps inserting newlines (a question may run
+    // to a sentence or two). Typing again clears a stale status so it never lingers.
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        submit();
+      } else if (status.textContent) {
+        status.textContent = "";
+      }
+    });
+
+    group.appendChild(input);
+    group.appendChild(send);
+    group.appendChild(status);
+    body.appendChild(group);
+  }
+
+  function setupClaimQuestions() {
+    // Same served-only gate as dispositions: on file:// there is no loop to answer,
+    // so a claim carries no ask affordance (a record, not a review surface).
+    if (location.protocol === "file:") {
+      return;
+    }
+    claimElements().forEach(injectAskControl);
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll("pre.diff").forEach(annotateDiff);
 
@@ -360,5 +468,6 @@
     revealHashTarget(); // a deep link into a fresh load
 
     setupDispositions();
+    setupClaimQuestions();
   });
 })();
