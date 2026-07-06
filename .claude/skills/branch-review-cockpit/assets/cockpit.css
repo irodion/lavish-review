@@ -4,6 +4,13 @@
    (the strict CSP and the Cockpit Linter forbid remote assets anyway, issue #4). */
 
 :root {
+  /* Opt the UA's built-in surfaces (form controls, scrollbars) into both themes. */
+  color-scheme: dark light;
+
+  /* Dark surface (default). Every colour the cockpit paints is a token here, so the
+     light palette below re-themes the whole page by overriding tokens alone. Both
+     palettes were validated for contrast and CVD separation during the Deck Mode
+     prototype (ADR-0014) — reuse, don't re-derive. */
   --bg: #0d1117;
   --panel: #161b22;
   --border: #30363d;
@@ -12,7 +19,53 @@
   --accent: #4493f8;
   --add: #3fb950;
   --del: #f85149;
+
+  /* Judgment palette — the ONLY colours in the cockpit (ADR-0014 judgment-color
+     discipline): risk level, analyst confidence, reviewer disposition. Claim kinds
+     and every other chip stay neutral (--muted). */
+  --warn: #d29922;
+  --level-low: #3fb950;
+  --level-medium: #d29922;
+  --level-high: #f85149;
+
+  /* Diff row / hunk washes — tinted backgrounds derived from the palette above,
+     tokenised so the light theme can re-tint them (a dark-surface wash is far too
+     bright over paper). */
+  --add-wash: rgba(63, 185, 80, 0.08);
+  --del-wash: rgba(248, 81, 73, 0.1);
+  --hunk-wash: rgba(68, 147, 248, 0.1);
+  --hunk-target-wash: rgba(68, 147, 248, 0.28);
+
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Light theme — follows the system preference (`prefers-color-scheme`), derived
+   from the same tokens so every surface flips together: diffs, chips, disposition
+   tints, live-evidence figures, and the baked Review outcome. Values are the
+   prototype's validated light palette (GitHub-light-derived; contrast + CVD
+   checked, ADR-0014). Pure CSS — no script — so a baked/portable `file://` copy
+   honours the theme too. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #eef1f4;
+    --panel: #ffffff;
+    --border: #d0d7de;
+    --fg: #1f2328;
+    --muted: #57606a;
+    --accent: #0969da;
+    --add: #1a7f37;
+    --del: #cf222e;
+
+    --warn: #9a6700;
+    --level-low: #1a7f37;
+    --level-medium: #9a6700;
+    --level-high: #cf222e;
+
+    --add-wash: rgba(26, 127, 55, 0.1);
+    --del-wash: rgba(207, 34, 46, 0.1);
+    --hunk-wash: rgba(9, 105, 218, 0.1);
+    --hunk-target-wash: rgba(9, 105, 218, 0.22);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -163,15 +216,15 @@ pre.diff {
 
 /* Add/delete/context tinting (preserved from the old colourizer), now with a
    faint row wash so a scanned diff reads at a glance. */
-.diff-table tr.dl-add td.code { color: var(--add); background: rgba(63, 185, 80, 0.08); }
-.diff-table tr.dl-del td.code { color: var(--del); background: rgba(248, 81, 73, 0.1); }
+.diff-table tr.dl-add td.code { color: var(--add); background: var(--add-wash); }
+.diff-table tr.dl-del td.code { color: var(--del); background: var(--del-wash); }
 
 /* Hunk header row: a full-width band in the accent colour; when the diff is a Hunk
    Anchorer section its text is a self-link to the hunk's own id. */
 .diff-table tr.dl-hunk td {
   padding: 0.2rem 0.85rem;
   color: var(--accent);
-  background: rgba(68, 147, 248, 0.1);
+  background: var(--hunk-wash);
   border-top: 1px solid var(--border);
 }
 .diff-table tr.dl-hunk a { color: inherit; text-decoration: none; }
@@ -183,14 +236,8 @@ pre.diff {
    Styling for the agent-authored layers driven by review-analysis/0.3:
    L0 orientation, L1 threads, L2 claims (native <details> progressive
    disclosure), L3 per-file evidence. Self-contained — no remote assets
-   (strict CSP / linter). */
-
-:root {
-  --warn: #d29922;
-  --level-low: #3fb950;
-  --level-medium: #d29922;
-  --level-high: #f85149;
-}
+   (strict CSP / linter). The judgment palette these layers use lives in the
+   `:root` token block at the top of the file, beside the light-theme override. */
 
 /* L0 — orientation: the goal, the intent read, and the change's shape at a glance. */
 .goal-text {
@@ -248,10 +295,13 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
   border: 1px solid currentcolor;
   white-space: nowrap;
 }
-.kind-behavior { color: var(--accent); }
-.kind-risk { color: var(--level-high); }
-.kind-omission { color: var(--warn); }
-.kind-verify { color: var(--level-low); }
+/* Judgment-color discipline (ADR-0014): claim *kinds* are neutral chips — colour
+   is reserved for the judgment signals below. Each kind reads by its word alone. */
+.kind-behavior,
+.kind-risk,
+.kind-omission,
+.kind-verify { color: var(--muted); }
+
 .confidence-high { color: var(--level-low); }
 .confidence-medium { color: var(--level-medium); }
 .confidence-low { color: var(--level-high); }
@@ -259,8 +309,30 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
 .risk-level.medium { color: var(--level-medium); }
 .risk-level.high { color: var(--level-high); }
 .risk-category { font-weight: 600; text-transform: capitalize; }
-/* Goal alignment (ADR-0010): a thread the analysis flags as unrelated to the goal. */
-.flag-drive-by { color: var(--warn); }
+
+/* Every judgment-coloured chip carries a glyph as well as its word, so nothing is
+   distinguishable by colour alone (ADR-0014; CVD-safe). The glyph is injected from
+   the chip's own class, so the authored markup is unchanged and existing cockpits
+   gain it for free. Confidence is a fill gauge (● full → ◐ half → ○ empty); risk
+   level is a severity mark (▲ high, ◆ medium, ▽ low). */
+.confidence-high::before,
+.confidence-medium::before,
+.confidence-low::before,
+.risk-level.low::before,
+.risk-level.medium::before,
+.risk-level.high::before { margin-right: 0.3em; }
+.confidence-high::before { content: "\25CF"; }   /* ● */
+.confidence-medium::before { content: "\25D0"; }  /* ◐ */
+.confidence-low::before { content: "\25CB"; }     /* ○ */
+.risk-level.high::before { content: "\25B2"; }    /* ▲ */
+.risk-level.medium::before { content: "\25C6"; }  /* ◆ */
+.risk-level.low::before { content: "\25BD"; }     /* ▽ */
+
+/* Goal alignment (ADR-0010): a thread the analysis flags as unrelated to the goal.
+   Neutral like every non-judgment chip — the ⚑ glyph and the word carry it, not
+   colour. */
+.flag-drive-by { color: var(--muted); }
+.flag-drive-by::before { content: "\2691"; margin-right: 0.3em; } /* ⚑ */
 
 /* L1 — one card per narrative thread, in descent (route) order. */
 section.thread {
@@ -484,6 +556,14 @@ details.claim[data-disposition="question-open"] { border-left: 3px solid var(--w
 #review-outcome .disposition.concern { color: var(--level-high); }
 #review-outcome .disposition.question-open { color: var(--warn); }
 #review-outcome .disposition.unreviewed { color: var(--muted); }
+/* Glyph + word on the baked outcome chips, matching the live control labels
+   (app.js `✓ verified` / `⚠ concern` / `? question`) so the disposition never
+   reads by colour alone (ADR-0014). */
+#review-outcome .disposition::before { margin-right: 0.3em; }
+#review-outcome .disposition.verified::before { content: "\2713"; }       /* ✓ */
+#review-outcome .disposition.concern::before { content: "\26A0"; }        /* ⚠ */
+#review-outcome .disposition.question-open::before { content: "?"; }
+#review-outcome .disposition.unreviewed::before { content: "\00B7"; }     /* · */
 #review-outcome .outcome-note { color: var(--muted); font-size: 0.85rem; font-style: italic; }
 
 /* Live-injected evidence (issue #43) — a fragment added mid-review at a claim's
@@ -529,7 +609,7 @@ details.claim:target > summary { outline: 2px solid var(--accent); border-radius
 .hunk:target { scroll-margin-top: 1rem; }
 .hunk:target > pre.diff { outline: 2px solid var(--accent); border-radius: 8px; }
 .hunk:target .dl-hunk td {
-  background: rgba(68, 147, 248, 0.28);
+  background: var(--hunk-target-wash);
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
