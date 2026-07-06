@@ -200,24 +200,33 @@
     );
   }
 
-  // Queue the update through the SDK. `window.lavish` is checked at interaction
-  // time — the SDK script loads after ours (#38). The per-claim queueKey collapses
-  // rapid re-clicks to the last state; sends are presence-gated by the host, so
-  // delivery is batched/eventually-consistent within the session (also #38).
-  function sendDisposition(claimId, disposition) {
+  // Queue one prompt through the SDK and flush it. `window.lavish` is checked at
+  // interaction time — the SDK script loads after ours (#38). Sends are presence-
+  // gated by the host, so delivery is batched/eventually-consistent within the
+  // session (also #38). Returns false when there is no live SDK to accept the
+  // prompt, so a caller can tell the reviewer instead of dropping it silently.
+  // The shared seam for every structured feedback send — a disposition update and
+  // a claim-scoped question differ only in the payload they pass here.
+  function queueToSdk(message, options) {
     const sdk = window.lavish;
     if (!sdk || typeof sdk.queuePrompt !== "function") {
-      return;
+      return false;
     }
-    sdk.queuePrompt("Disposition set: " + claimId + " -> " + disposition, {
+    sdk.queuePrompt(message, options);
+    if (typeof sdk.sendQueuedPrompts === "function") {
+      sdk.sendQueuedPrompts();
+    }
+    return true;
+  }
+
+  // The per-claim queueKey collapses rapid re-clicks to the last state.
+  function sendDisposition(claimId, disposition) {
+    queueToSdk("Disposition set: " + claimId + " -> " + disposition, {
       tag: "choice",
       text: "disposition:" + disposition,
       queueKey: "disposition:" + claimId,
       data: { kind: "disposition", claim: claimId, disposition: disposition },
     });
-    if (typeof sdk.sendQueuedPrompts === "function") {
-      sdk.sendQueuedPrompts();
-    }
   }
 
   function applyDisposition(claim, disposition) {
@@ -353,23 +362,14 @@
   // per-claim `queueKey` so a rapid edit-and-resend collapses to the latest text.
   // Unlike a disposition (a `tag: "choice"` state update), a question is a plain
   // `tag: "message"` — it flows into the Q&A Log and bakes like any chat question,
-  // never filtered out as state. Returns false when there is no live SDK to accept
-  // it (checked at click time — the SDK loads after us, #38), so the caller can say
-  // so instead of silently dropping the question.
+  // never filtered out as state. Returns false (via `queueToSdk`) when there is no
+  // live SDK, so the caller can say so instead of dropping the question silently.
   function sendClaimQuestion(claimId, text) {
-    const sdk = window.lavish;
-    if (!sdk || typeof sdk.queuePrompt !== "function") {
-      return false;
-    }
-    sdk.queuePrompt(text, {
+    return queueToSdk(text, {
       tag: "message",
       queueKey: "question:" + claimId, // collapses rapid edits, like dispositions
       data: { kind: "claim-question", claim: claimId },
     });
-    if (typeof sdk.sendQueuedPrompts === "function") {
-      sdk.sendQueuedPrompts();
-    }
-    return true;
   }
 
   function injectAskControl(claim) {

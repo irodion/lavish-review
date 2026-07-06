@@ -375,7 +375,9 @@ details.file > .file-body { padding: 0.5rem 0.9rem 0.9rem; }
   gap: 0.3rem;
   margin-left: auto; /* pushes the controls to the summary's right edge */
 }
-.disposition-controls button {
+/* The pill button, shared by the disposition controls and the claim-ask send. */
+.disposition-controls button,
+.claim-ask-send {
   font-family: var(--mono);
   font-size: 0.7rem;
   color: var(--muted);
@@ -386,7 +388,8 @@ details.file > .file-body { padding: 0.5rem 0.9rem 0.9rem; }
   cursor: pointer;
   white-space: nowrap;
 }
-.disposition-controls button:hover { border-color: var(--accent); color: var(--fg); }
+.disposition-controls button:hover,
+.claim-ask-send:hover { border-color: var(--accent); color: var(--fg); }
 .disposition-controls button[aria-pressed="true"] {
   border-color: currentcolor;
   font-weight: 600;
@@ -437,18 +440,7 @@ details.claim[data-disposition="question-open"] { border-left: 3px solid var(--w
   padding: 0.35rem 0.5rem;
 }
 .claim-ask-input:focus { outline: none; border-color: var(--accent); }
-.claim-ask-send {
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  color: var(--muted);
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.05rem 0.7rem;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.claim-ask-send:hover { border-color: var(--accent); color: var(--fg); }
+.claim-ask-send { padding: 0.05rem 0.7rem; } /* pill base above; only the padding differs */
 .claim-ask-status {
   flex-basis: 100%;
   font-size: 0.78rem;
