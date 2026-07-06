@@ -121,19 +121,63 @@ pre.diff {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 1rem 1.25rem;
+  padding: 0.6rem 0;
   overflow-x: auto;
   font-family: var(--mono);
   font-size: 0.82rem;
   line-height: 1.5;
   tab-size: 2;
-  white-space: pre;
+  /* The Diff Annotator (app.js, #64) rebuilds the body as a <table>; a pre with a
+     block-level table child must not force pre whitespace on the table's frame. */
+  white-space: normal;
 }
 
-/* app.js tints diff lines client-side; safe because it never injects markup. */
-pre.diff .ln-add { color: var(--add); }
-pre.diff .ln-del { color: var(--del); }
-pre.diff .ln-hunk { color: var(--accent); }
+/* Diff Annotator (Deck Mode, ADR-0014, issue #64) — app.js rebuilds each
+   `pre.diff` into this table with dual old/new line-number gutters and distinct
+   hunk-header rows. Text-only by construction (createElement/textContent), so it
+   never injects markup. Until the script runs, the pre still shows the raw escaped
+   diff text — a no-JS / pre-hydration fallback that is safe by the same escaping. */
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.diff-table td {
+  padding: 0 0.85rem;
+  vertical-align: top;
+}
+/* The two gutters shrink to their digits (`width: 1%` + nowrap); the code column
+   takes the rest and, being `white-space: pre`, scrolls the pre horizontally when
+   a line is long — the page itself never scrolls sideways. */
+.diff-table td.lno {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.diff-table td.code { white-space: pre; padding-right: 1.25rem; }
+
+/* Add/delete/context tinting (preserved from the old colourizer), now with a
+   faint row wash so a scanned diff reads at a glance. */
+.diff-table tr.dl-add td.code { color: var(--add); background: rgba(63, 185, 80, 0.08); }
+.diff-table tr.dl-del td.code { color: var(--del); background: rgba(248, 81, 73, 0.1); }
+
+/* Hunk header row: a full-width band in the accent colour; when the diff is a Hunk
+   Anchorer section its text is a self-link to the hunk's own id. */
+.diff-table tr.dl-hunk td {
+  padding: 0.2rem 0.85rem;
+  color: var(--accent);
+  background: rgba(68, 147, 248, 0.1);
+  border-top: 1px solid var(--border);
+}
+.diff-table tr.dl-hunk a { color: inherit; text-decoration: none; }
+.diff-table tr.dl-hunk a:hover { text-decoration: underline; }
+/* Preamble (diff --git / index / --- / +++ / rename) and no-newline markers. */
+.diff-table tr.dl-meta td { color: var(--muted); }
 
 /* --- Layered claim→evidence cockpit (ADR-0009, issue #39) -------------------
    Styling for the agent-authored layers driven by review-analysis/0.3:
@@ -445,9 +489,14 @@ figure.live-evidence pre.diff { margin: 0; }
 :target { scroll-margin-top: 1rem; }
 details.file:target > summary,
 details.claim:target > summary { outline: 2px solid var(--accent); border-radius: 6px; }
-/* A hunk navigated to directly gets the same emphasis, around its diff block. */
+/* A hunk navigated to directly (a claim's evidence link, #63) highlights its
+   annotated header row (#64) — the row the reviewer was sent to. */
 .hunk:target { scroll-margin-top: 1rem; }
 .hunk:target > pre.diff { outline: 2px solid var(--accent); border-radius: 8px; }
+.hunk:target .dl-hunk td {
+  background: rgba(68, 147, 248, 0.28);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 
 /* Test runner note — the suggested (never executed) runner. */
 .runner-note {
