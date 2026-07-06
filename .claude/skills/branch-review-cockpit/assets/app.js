@@ -191,13 +191,17 @@
   const SETTABLE = ["verified", "concern", "question-open"];
   const LABELS = { verified: "✓ verified", concern: "⚠ concern", "question-open": "? question" };
 
+  // Every claim panel under `root` (the document, or one thread) whose id is in the
+  // closed `t\d+.c\d+` vocabulary — the one filter the dispositions, questions, and
+  // deck all share.
+  function claimsIn(root) {
+    return Array.prototype.filter.call(root.querySelectorAll("details.claim"), function (el) {
+      return CLAIM_ID.test(el.id);
+    });
+  }
+
   function claimElements() {
-    return Array.prototype.filter.call(
-      document.querySelectorAll("details.claim"),
-      function (el) {
-        return CLAIM_ID.test(el.id);
-      }
-    );
+    return claimsIn(document);
   }
 
   // Queue one prompt through the SDK and flush it. `window.lavish` is checked at
@@ -249,12 +253,7 @@
   }
 
   function updateThreadProgress(thread) {
-    const claims = Array.prototype.filter.call(
-      thread.querySelectorAll("details.claim"),
-      function (el) {
-        return CLAIM_ID.test(el.id);
-      }
-    );
+    const claims = claimsIn(thread);
     if (!claims.length) {
       return;
     }
@@ -470,17 +469,6 @@
   // The deck's live state, or null until the deck is built (file:// / no claims).
   let deck = null;
 
-  // Claim <details> elements inside a thread, in document order — the same closed
-  // `t\d+.c\d+` vocabulary the disposition and question channels validate.
-  function claimsInThread(thread) {
-    return Array.prototype.filter.call(
-      thread.querySelectorAll("details.claim"),
-      function (el) {
-        return CLAIM_ID.test(el.id);
-      }
-    );
-  }
-
   // Disposition tallies over a set of claims — reviewed/verified/concern/question.
   function dispositionCounts(claims) {
     const totals = { reviewed: 0, verified: 0, concern: 0, "question-open": 0 };
@@ -515,72 +503,49 @@
   // A tinted count fragment for the progress line: a fixed glyph + number, its
   // colour carried by the class (never colour alone — ADR-0014). text only.
   function countBadge(className, glyph, value) {
-    const badge = document.createElement("span");
-    badge.className = "deck-count " + className;
-    badge.textContent = glyph + " " + value;
-    return badge;
+    return cell("span", "deck-count " + className, glyph + " " + value);
   }
 
-  // (Re)draw the Map from the live document. Cheap enough to rebuild wholesale on
-  // every disposition change, so the dots and fractions always mirror the claims.
+  // (Re)draw the Map's dynamic parts — the overall progress, and each thread's dots
+  // and fraction, which all move with the reviewer's dispositions. The static file
+  // rail (built once at deck-build time) is simply re-appended. Iterating the
+  // grouping captured at build time — not the live thread subtree — keeps the
+  // currently-staged claim (relocated onto the Stage) in its thread's dots and count.
   function renderMap() {
     const map = deck.map;
     map.textContent = "";
 
     const overall = dispositionCounts(deck.claims);
-    const progress = document.createElement("div");
-    progress.className = "deck-progress";
-    const tally = document.createElement("span");
-    tally.className = "deck-tally";
-    tally.textContent = overall.reviewed + "/" + deck.claims.length + " reviewed";
-    progress.appendChild(tally);
+    const progress = cell("div", "deck-progress", null);
+    progress.appendChild(cell("span", "deck-tally", overall.reviewed + "/" + deck.claims.length + " reviewed"));
     progress.appendChild(countBadge("verified", "✓", overall.verified));
     progress.appendChild(countBadge("concern", "⚠", overall.concern));
     progress.appendChild(countBadge("question-open", "?", overall["question-open"]));
     map.appendChild(progress);
 
-    const routeLabel = document.createElement("p");
-    routeLabel.className = "deck-map-label";
-    routeLabel.textContent = "Threads — review route";
-    map.appendChild(routeLabel);
+    map.appendChild(cell("p", "deck-map-label", "Threads — review route"));
 
-    // Iterate the grouping captured at build time — not the live thread subtree —
-    // so the currently-staged claim (relocated onto the Stage, no longer a child of
-    // its thread) still shows its dot and counts toward its thread's fraction.
     deck.groups.forEach(function (group) {
       const claims = group.claims;
       if (!claims.length) {
         return;
       }
-      const block = document.createElement("div");
-      block.className = "deck-thread-block";
+      const block = cell("div", "deck-thread-block", null);
 
-      const heading = group.thread.querySelector("h2");
-      const idSource = heading && heading.querySelector(".thread-id");
       const threadButton = document.createElement("button");
       threadButton.type = "button";
       threadButton.className = "deck-thread";
-      const idSpan = document.createElement("span");
-      idSpan.className = "deck-thread-id";
-      idSpan.textContent = idSource ? idSource.textContent : thread.id || "";
-      threadButton.appendChild(idSpan);
-      const titleSpan = document.createElement("span");
-      titleSpan.className = "deck-thread-title";
-      titleSpan.textContent = threadTitleText(heading);
-      threadButton.appendChild(titleSpan);
-      const fraction = document.createElement("span");
-      fraction.className = "deck-thread-frac";
-      const threadCounts = dispositionCounts(claims);
-      fraction.textContent = threadCounts.reviewed + "/" + claims.length;
-      threadButton.appendChild(fraction);
+      threadButton.appendChild(cell("span", "deck-thread-id", group.threadId));
+      threadButton.appendChild(cell("span", "deck-thread-title", group.title));
+      const counts = dispositionCounts(claims);
+      threadButton.appendChild(cell("span", "deck-thread-frac", counts.reviewed + "/" + claims.length));
       // Staging a thread lands on its first claim — the entry to that leg of the route.
       threadButton.addEventListener("click", function () {
         stageClaim(claims[0]);
       });
       block.appendChild(threadButton);
 
-      const dots = document.createElement("div");
-      dots.className = "deck-dots";
+      const dots = cell("div", "deck-dots", null);
       claims.forEach(function (claim) {
         const dot = document.createElement("button");
         dot.type = "button";
@@ -604,22 +569,22 @@
       map.appendChild(block);
     });
 
-    renderFileList(map);
+    // The file rail never changes after build; re-append the cached nodes (which
+    // appendChild moves back into place) instead of re-deriving them each render.
+    deck.fileNodes.forEach(function (node) {
+      map.appendChild(node);
+    });
   }
 
   // Every changed file, listed with its stats — the nothing-hidden invariant in
-  // the Map (ADR-0014). Read from the L3 file panels (which carry the stats); a
-  // click returns to document mode on that file so its diff is one step away.
-  function renderFileList(map) {
+  // the Map (ADR-0014). Built once from the L3 file panels (which carry the stats);
+  // a click returns to document mode on that file so its diff is one step away.
+  function buildFileNodes() {
     const files = Array.prototype.slice.call(document.querySelectorAll("details.file"));
     if (!files.length) {
-      return;
+      return [];
     }
-    const label = document.createElement("p");
-    label.className = "deck-map-label";
-    label.textContent = "Files";
-    map.appendChild(label);
-
+    const nodes = [cell("p", "deck-map-label", "Files")];
     files.forEach(function (file) {
       const summary = file.querySelector("summary");
       const stats = summary ? summary.querySelector(".file-stats") : null;
@@ -630,12 +595,9 @@
       row.className = "deck-file";
       row.setAttribute("title", pathText);
 
-      const name = document.createElement("span");
-      name.className = "deck-file-name";
       // Show the basename to fit the rail; the full path is the button's title.
       const slash = pathText.lastIndexOf("/");
-      name.textContent = slash === -1 ? pathText : pathText.slice(slash + 1);
-      row.appendChild(name);
+      row.appendChild(cell("span", "deck-file-name", slash === -1 ? pathText : pathText.slice(slash + 1)));
       if (stats) {
         row.appendChild(stats.cloneNode(true)); // pre-escaped +N/−M, text only
       }
@@ -649,8 +611,9 @@
           }
         }
       });
-      map.appendChild(row);
+      nodes.push(row);
     });
+    return nodes;
   }
 
   // The file's path from its L3 summary: the summary's text with the trailing
@@ -676,12 +639,14 @@
     }
     unstageCurrent();
 
-    claim.deckPriorOpen = claim.open;
-    claim.open = true;
-    const placeholder = document.createElement("span");
-    placeholder.className = "deck-home";
+    // Stage bookkeeping lives on the deck record (only one claim is ever staged),
+    // not as expando properties on the claim element that round-trips back into the
+    // document: where it came from, and the open state to restore when it returns.
+    const placeholder = cell("span", "deck-home", null);
     claim.parentNode.insertBefore(placeholder, claim);
-    claim.deckHome = placeholder;
+    deck.stagedHome = placeholder;
+    deck.stagedPriorOpen = claim.open;
+    claim.open = true;
 
     deck.stage.textContent = "";
     deck.stage.appendChild(buildCrumb(claim));
@@ -704,37 +669,27 @@
     if (!claim) {
       return;
     }
-    const placeholder = claim.deckHome;
+    const placeholder = deck.stagedHome;
     if (placeholder && placeholder.parentNode) {
       placeholder.parentNode.insertBefore(claim, placeholder);
       placeholder.parentNode.removeChild(placeholder);
     }
-    claim.open = claim.deckPriorOpen;
-    claim.deckHome = null;
+    claim.open = deck.stagedPriorOpen;
+    deck.stagedHome = null;
     deck.staged = null;
   }
 
   // The Stage's breadcrumb: the claim's thread (id + title) and the claim id.
   function buildCrumb(claim) {
-    const crumb = document.createElement("div");
-    crumb.className = "deck-crumb";
+    const crumb = cell("div", "deck-crumb", null);
     const thread = claim.closest("section.thread");
     const heading = thread ? thread.querySelector("h2") : null;
     const idSource = heading ? heading.querySelector(".thread-id") : null;
     if (idSource) {
-      const tid = document.createElement("span");
-      tid.className = "deck-thread-id";
-      tid.textContent = idSource.textContent;
-      crumb.appendChild(tid);
+      crumb.appendChild(cell("span", "deck-thread-id", idSource.textContent));
     }
-    const title = document.createElement("span");
-    title.className = "deck-crumb-title";
-    title.textContent = threadTitleText(heading);
-    crumb.appendChild(title);
-    const claimId = document.createElement("span");
-    claimId.className = "deck-crumb-claim";
-    claimId.textContent = claim.id;
-    crumb.appendChild(claimId);
+    crumb.appendChild(cell("span", "deck-crumb-title", threadTitleText(heading)));
+    crumb.appendChild(cell("span", "deck-crumb-claim", claim.id));
     return crumb;
   }
 
@@ -743,8 +698,7 @@
   // clone it (a hunk section, or a file body for a file-level ref). Cloning keeps
   // the L3 evidence whole in the document and lets several claims cite one hunk.
   function buildInlineEvidence(claim) {
-    const wrap = document.createElement("div");
-    wrap.className = "deck-evidence";
+    const wrap = cell("div", "deck-evidence", null);
     const seen = Object.create(null);
     const anchors = claim.querySelectorAll(".evidence-list a");
     Array.prototype.forEach.call(anchors, function (anchor) {
@@ -766,31 +720,26 @@
       if (!target) {
         return;
       }
-      const figure = document.createElement("figure");
-      figure.className = "deck-hunk";
-      const caption = document.createElement("figcaption");
-      caption.textContent = anchor.textContent; // the evidence label, text only
-      figure.appendChild(caption);
-      // A hunk section clones whole; a file panel clones just its body (its diff).
-      let source = target;
-      if (target.tagName === "DETAILS") {
-        const body = target.querySelector(".file-body");
-        if (body) {
-          source = body;
-        }
-      }
-      const clone = source.cloneNode(true); // already-escaped nodes, text only
+      const figure = cell("figure", "deck-hunk", null);
+      figure.appendChild(cell("figcaption", "", anchor.textContent)); // the label, text only
+      const clone = evidenceBody(target).cloneNode(true); // already-escaped nodes, text only
       stripIds(clone); // the original keeps the anchors; a clone must not duplicate ids
       figure.appendChild(clone);
       wrap.appendChild(figure);
     });
     if (!wrap.querySelector(".deck-hunk")) {
-      const none = document.createElement("p");
-      none.className = "deck-evidence-none";
-      none.textContent = "No inline hunk — see the evidence links in the claim.";
-      wrap.appendChild(none);
+      wrap.appendChild(cell("p", "deck-evidence-none", "No inline hunk — see the evidence links in the claim."));
     }
     return wrap;
+  }
+
+  // The node to clone for a resolved evidence anchor: a hunk `<section>` clones
+  // whole; a whole-file `<details>` panel contributes just its body (the diff).
+  function evidenceBody(target) {
+    if (target.tagName === "DETAILS") {
+      return target.querySelector(".file-body") || target;
+    }
+    return target;
   }
 
   // Remove every id in a cloned subtree so the inline copy never collides with the
@@ -806,12 +755,17 @@
     }
   }
 
+  // Point the toggle at the *other* mode: pressed = currently in deck mode.
+  function setToggle(pressed) {
+    deck.toggle.textContent = pressed ? "Document view" : "Deck view";
+    deck.toggle.setAttribute("aria-pressed", pressed ? "true" : "false");
+  }
+
   // Show the Map + Stage; the document is hidden by CSS while `deck-active` is set.
   function showDeck() {
     deck.mode = "deck";
     document.body.classList.add("deck-active");
-    deck.toggle.textContent = "Document view";
-    deck.toggle.setAttribute("aria-pressed", "true");
+    setToggle(true);
   }
 
   // Return to the single layered document: move the staged claim home, clear the
@@ -821,8 +775,7 @@
     deck.mode = "document";
     deck.stage.textContent = "";
     document.body.classList.remove("deck-active");
-    deck.toggle.textContent = "Deck view";
-    deck.toggle.setAttribute("aria-pressed", "false");
+    setToggle(false);
     renderMap();
   }
 
@@ -857,11 +810,19 @@
       return;
     }
     const threads = Array.prototype.slice.call(document.querySelectorAll("section.thread"));
-    // Capture each thread's claims once, now, while every claim still sits in its
-    // thread — the Map renders from this stable grouping even after a claim is
-    // relocated onto the Stage (a relocated claim would otherwise vanish from it).
+    // Capture each thread's claims (and its static id/title) once, now, while every
+    // claim still sits in its thread — the Map renders from this stable grouping even
+    // after a claim is relocated onto the Stage (a relocated claim would otherwise
+    // vanish from it), and the title never needs re-deriving on a disposition change.
     const groups = threads.map(function (thread) {
-      return { thread: thread, claims: claimsInThread(thread) };
+      const heading = thread.querySelector("h2");
+      const idSource = heading && heading.querySelector(".thread-id");
+      return {
+        thread: thread,
+        claims: claimsIn(thread),
+        threadId: idSource ? idSource.textContent : thread.id || "",
+        title: threadTitleText(heading),
+      };
     });
     const claims = [];
     groups.forEach(function (group) {
@@ -894,13 +855,15 @@
     });
 
     deck = {
-      container: container,
       map: map,
       stage: stage,
       toggle: toggle,
       groups: groups,
       claims: claims,
+      fileNodes: buildFileNodes(), // static — built once, re-appended each render
       staged: null,
+      stagedHome: null,
+      stagedPriorOpen: false,
       lastStaged: null,
       mode: "document",
     };
@@ -910,8 +873,8 @@
     main.parentNode.insertBefore(container, main.nextSibling);
     document.body.appendChild(toggle);
 
-    renderMap();
     // Served → the deck is the presentation; the full document is one toggle away.
+    // setMode → stageClaim renders the Map, so no separate initial render is needed.
     setMode("deck");
   }
 

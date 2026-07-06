@@ -1,19 +1,13 @@
 // A minimal, dependency-free DOM for exercising the vendored cockpit script under
 // Node (issue #67 — the repo's first JS test harness). It implements exactly the
 // slice of the DOM the cockpit's app.js touches: element creation, text content,
-// a small CSS-selector engine (type / #id / .class / [attr], [attr^=], [attr$=],
-// [attr*=], [attr=] with descendant combinators and comma groups), class lists,
-// datasets, deep cloning, and a capture→bubble event model. It is deliberately
-// NOT a general browser: there is no HTML string parsing and no innerHTML sink, so
-// the only way markup enters the tree is createElement + textContent — which is
-// precisely the discipline the cockpit itself follows, letting the tests prove that
-// a hostile diff can only ever render as text.
-
-let idCounter = 0;
-
-// Void elements never take children; nothing here needs them, but keeping the set
-// makes the tag handling explicit.
-const RAW_TEXT = new Set(["SCRIPT", "STYLE", "TEXTAREA", "TITLE"]);
+// a small CSS-selector engine (type / #id / .class / [attr] / [attr=] / [attr^=]
+// with descendant combinators and comma groups), class lists, datasets, deep
+// cloning, and a capture→bubble event model. It is deliberately NOT a general
+// browser: there is no HTML string parsing and no innerHTML sink, so the only way
+// markup enters the tree is createElement + textContent — which is precisely the
+// discipline the cockpit itself follows, letting the tests prove that a hostile
+// diff can only ever render as text.
 
 function toDatasetKey(prop) {
   // `dataset.fooBar` ⇄ `data-foo-bar`, matching the browser's camel⇄kebab mapping.
@@ -28,10 +22,6 @@ class Node {
 
   get parentElement() {
     return this.parentNode instanceof Element ? this.parentNode : null;
-  }
-
-  get firstChild() {
-    return this.childNodes[0] || null;
   }
 
   get nextSibling() {
@@ -103,17 +93,11 @@ class EventTargetBase extends Node {
     (this._listeners[type] = this._listeners[type] || []).push({ fn, capture });
   }
 
-  removeEventListener(type, fn) {
-    const list = this._listeners[type];
-    if (list) this._listeners[type] = list.filter((l) => l.fn !== fn);
-  }
-
   _runListeners(event, capture) {
     const list = this._listeners[event.type];
     if (!list) return;
     event.currentTarget = this;
     for (const l of list.slice()) {
-      if (event._immediate) break;
       if (l.capture === capture) l.fn.call(this, event);
     }
   }
@@ -129,8 +113,8 @@ class EventTargetBase extends Node {
     }
     // Target phase: both capture- and bubble-registered listeners on the target
     // fire regardless of `bubbles` (stopPropagation only affects other nodes).
-    if (!event._immediate) this._runListeners(event, true);
-    if (!event._immediate) this._runListeners(event, false);
+    this._runListeners(event, true);
+    this._runListeners(event, false);
     // Bubble phase: parent → root, only when the event bubbles.
     if (event.bubbles) {
       for (let i = 0; i < path.length && !event._stopped; i++) {
@@ -225,7 +209,6 @@ class Element extends EventTargetBase {
           el.setAttribute(toDatasetKey(prop), value);
           return true;
         },
-        has: (_t, prop) => el.hasAttribute(toDatasetKey(prop)),
       }
     );
   }
@@ -378,7 +361,7 @@ class Document extends EventTargetBase {
 
 function parseCompound(text) {
   const compound = { tag: null, id: null, classes: [], attrs: [] };
-  const re = /([.#]?[\w-]+)|\[([\w-]+)(?:([~^$*]?=)"?([^"\]]*)"?)?\]/g;
+  const re = /([.#]?[\w-]+)|\[([\w-]+)(?:(\^?=)"?([^"\]]*)"?)?\]/g;
   let m;
   while ((m = re.exec(text))) {
     if (m[1]) {
@@ -405,9 +388,6 @@ function matchesCompound(el, compound) {
     const actual = el.getAttribute(attr.name) || "";
     if (attr.op === "=" && actual !== attr.value) return false;
     if (attr.op === "^=" && !actual.startsWith(attr.value)) return false;
-    if (attr.op === "$=" && !actual.endsWith(attr.value)) return false;
-    if (attr.op === "*=" && !actual.includes(attr.value)) return false;
-    if (attr.op === "~=" && !actual.split(/\s+/).includes(attr.value)) return false;
   }
   return true;
 }
@@ -448,7 +428,6 @@ class DomEvent {
     this.currentTarget = null;
     this.defaultPrevented = false;
     this._stopped = false;
-    this._immediate = false;
   }
 
   preventDefault() {
@@ -458,12 +437,6 @@ class DomEvent {
   stopPropagation() {
     this._stopped = true;
   }
-
-  stopImmediatePropagation() {
-    this._stopped = true;
-    this._immediate = true;
-  }
 }
 
 export { Document, Element, TextNode, DomEvent };
-export const __id = () => ++idCounter;

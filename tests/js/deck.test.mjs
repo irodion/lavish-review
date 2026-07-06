@@ -23,7 +23,7 @@ function containsScriptElement(el) {
 }
 
 test("builds the Map and Stage from the document when served", () => {
-  const { document } = loadCockpit({ protocol: "http:" });
+  const { document } = loadCockpit();
 
   assert.ok(document.querySelector(".deck"), "the deck container is built");
   assert.ok(document.body.classList.contains("deck-active"), "served → deck is the presentation");
@@ -55,7 +55,7 @@ test("builds the Map and Stage from the document when served", () => {
 });
 
 test("clicking a dot or a thread stages that claim", () => {
-  const { document } = loadCockpit({ protocol: "http:" });
+  const { document } = loadCockpit();
 
   click(dot(document, "t1.c2"));
   assert.equal(stagedClaimId(document), "t1.c2");
@@ -73,7 +73,7 @@ test("clicking a dot or a thread stages that claim", () => {
 });
 
 test("the staged claim is relocated (not duplicated) out of the document", () => {
-  const { document } = loadCockpit({ protocol: "http:" });
+  const { document } = loadCockpit();
   // t1.c1 is staged on load. It must live in exactly one place: the Stage.
   const matches = document.querySelectorAll("details.claim").filter((c) => c.id === "t1.c1");
   assert.equal(matches.length, 1, "the claim exists once");
@@ -81,7 +81,7 @@ test("the staged claim is relocated (not duplicated) out of the document", () =>
 });
 
 test("the mode toggle round-trips content, open state, and disposition tints", () => {
-  const { document, window } = loadCockpit({ protocol: "http:" });
+  const { document, window } = loadCockpit();
   window.lavish = { queuePrompt() {}, sendQueuedPrompts() {} };
 
   // Give t2.c1 a disposition from the Stage, then read its Map dot tint.
@@ -113,6 +113,9 @@ test("the mode toggle round-trips content, open state, and disposition tints", (
   click(document.querySelector(".deck-toggle"));
   assert.ok(document.body.classList.contains("deck-active"));
   assert.equal(stagedClaimId(document), "t2.c1");
+
+  // The static file rail is cached and re-appended across every re-render, not lost.
+  assert.equal(document.querySelectorAll(".deck-file-name").length, 3);
 });
 
 test("no deck is built on file:// (a baked record renders document mode only)", () => {
@@ -125,7 +128,7 @@ test("no deck is built on file:// (a baked record renders document mode only)", 
 });
 
 test("inline evidence is cloned without ids, so the live DOM keeps unique ids", () => {
-  const { document } = loadCockpit({ protocol: "http:" });
+  const { document } = loadCockpit();
   const ids = [];
   (function walk(el) {
     if (el.id) ids.push(el.id);
@@ -136,7 +139,7 @@ test("inline evidence is cloned without ids, so the live DOM keeps unique ids", 
 
 test("DOM-relocation-only: a <script> in a diff renders as text, never executes", () => {
   globalThis.__pwned = undefined;
-  const { document } = loadCockpit({ protocol: "http:" });
+  const { document } = loadCockpit();
 
   // t1.c1 (staged on load) cites a hunk whose diff line embeds a <script> string.
   const stage = document.querySelector(".deck-stage");
