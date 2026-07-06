@@ -526,6 +526,20 @@ _STRUCTURAL_CASES = [
         _ANALYSIS_IDS,
         "seam-misplaced",
     ),
+    # Raw-text-hidden seam: t1.c1's markers sit inside a <style> (any raw-text element —
+    # <textarea>/<title>/<script>/<xmp> too). _seam_is_fillable finds them by substring,
+    # but HTMLParser emits no handle_comment for raw-text content, so the markers are
+    # attributed to no panel. inject_evidence would still match them and write the answer
+    # inside the <style> — invisible/wrong. Lint must reject it, not pass it vacuously.
+    (
+        "raw-text-hidden-evidence-seam",
+        {
+            "claims": _claim("t1.c1", evidence_seam=False) + _claim("t1.c2"),
+            "body_extra": "<style><!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1--></style>",
+        },
+        _ANALYSIS_IDS,
+        "seam-misplaced",
+    ),
 ]
 
 

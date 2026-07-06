@@ -577,10 +577,17 @@ def _check_structure(html: str, auditor: _TagAuditor, claim_ids: Iterable[str]) 
             continue
         # A fillable seam is not enough: it must sit inside *this* claim's panel, or
         # inject_evidence would render the answer under the wrong claim (the injector
-        # matches the marker text globally, wherever it is). Every marker of cid's seam
-        # must be enclosed by the <details class="claim" id="cid"> panel.
+        # matches the marker text globally, wherever it is). A correctly-placed seam is
+        # exactly its open + close markers, both enclosed by cid's own panel — i.e.
+        # ``panels == [cid, cid]``. Anything else is a misfile: ``[None, …]`` (outside any
+        # claim) or ``[other, …]`` (under the wrong claim), and — crucially — *fewer than
+        # two* attributed markers, which means HTMLParser never saw one as a comment
+        # because it sits inside a raw-text element (<style>, <textarea>, <title>,
+        # <script>, <xmp>). _seam_is_fillable still finds it there by substring, so the
+        # injector would rewrite the seam and land the answer inside that element,
+        # invisible/wrong. Require the full attribution, not merely no wrong-panel marker.
         panels = auditor.evidence_marker_panels.get(cid, [])
-        if any(panel != cid for panel in panels):
+        if panels != [cid, cid]:
             errors.append(
                 LintError(
                     "seam-misplaced",
