@@ -6,6 +6,16 @@
 // textContent and NEVER assigns attacker-derived strings to innerHTML, so a
 // `<script>` hidden in a diff hunk can only ever render as visible characters.
 //
+// Diff Annotator (Deck Mode, ADR-0014, issue #64): each `<pre class="diff">` is
+// rebuilt as a `<table class="diff-table">` with dual old/new line-number gutters
+// (computed client-side from the `@@` hunk headers) and visually distinct hunk
+// header rows. When the diff is a Hunk Anchorer section (`<section class="hunk"
+// id="hunk-…">`, issue #63), the header row self-links to that id so a reviewer
+// can grab the anchor, and `:target` navigation (from a claim's evidence link)
+// highlights the row. The rebuild is text-only — same discipline as before, so a
+// `<script>` in a hunk still renders as characters — and it runs identically in
+// the served cockpit and the baked/portable `file://` copy.
+//
 // Layered cockpit (ADR-0009, issue #39): disclosure is native <details> — no JS
 // needed to descend. This script only adds navigation glue: following a claim's
 // evidence link (or any #anchor) opens the target's ancestor <details> chain so a
@@ -25,26 +35,116 @@
 (function () {
   "use strict";
 
-  function colourizeDiff(pre) {
-    const lines = pre.textContent.split("\n");
-    pre.textContent = "";
-    for (let i = 0; i < lines.length; i++) {
-      const text = lines[i];
-      const span = document.createElement("span");
-      const head = text.charCodeAt(0); // 43:'+' 45:'-' 64:'@'
-      if (head === 43) {
-        span.className = "ln-add";
-      } else if (head === 45) {
-        span.className = "ln-del";
-      } else if (head === 64) {
-        span.className = "ln-hunk";
-      }
-      span.textContent = text; // text only — never markup
-      pre.appendChild(span);
-      if (i < lines.length - 1) {
-        pre.appendChild(document.createTextNode("\n"));
-      }
+  // A unified-diff hunk header — `@@ -oldStart[,oldLen] +newStart[,newLen] @@`.
+  // Two-way (base…HEAD) diffs only ever open a hunk with `@@`; the capture groups
+  // seed the old/new line counters. A line that begins `@@` but doesn't match
+  // (e.g. a combined-merge `@@@`) is still shown as a header row, just without a
+  // counter reset — never mis-numbered as content.
+  const HUNK_NUMS = /^@@+ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+  function cell(tag, className, text) {
+    const el = document.createElement(tag);
+    el.className = className;
+    if (text !== null) {
+      el.textContent = text; // text only — never markup
     }
+    return el;
+  }
+
+  // A full-width row that spans both gutters and the code column — used for the
+  // preamble (diff --git / index / --- / +++ / rename headers) and hunk headers.
+  function spanRow(className, child) {
+    const tr = document.createElement("tr");
+    tr.className = className;
+    const td = cell("td", "code", null);
+    td.colSpan = 3;
+    td.appendChild(child);
+    tr.appendChild(td);
+    return tr;
+  }
+
+  function annotateDiff(pre) {
+    const section = pre.closest ? pre.closest("section.hunk") : null;
+    const anchor = section && section.id ? section.id : null;
+
+    const lines = pre.textContent.split("\n");
+    // A unified diff ends in a trailing newline, so the final split element is an
+    // empty string — dropping it avoids a spurious blank row at the diff's foot.
+    if (lines.length && lines[lines.length - 1] === "") {
+      lines.pop();
+    }
+
+    const tbody = document.createElement("tbody");
+    let oldNo = 0;
+    let newNo = 0;
+    let inHunk = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      if (line.slice(0, 2) === "@@") {
+        const nums = HUNK_NUMS.exec(line);
+        if (nums) {
+          oldNo = parseInt(nums[1], 10);
+          newNo = parseInt(nums[2], 10);
+          inHunk = true;
+        }
+        // The header row self-links to the hunk's anchor when one exists (a Hunk
+        // Anchorer section, #63); otherwise it is plain text (e.g. the whole-diff
+        // fallback, which carries no per-hunk ids).
+        let head;
+        if (anchor) {
+          head = document.createElement("a");
+          head.className = "hunk-self";
+          head.href = "#" + anchor; // anchor is [0-9a-f-] from the Hunk Anchorer
+          head.textContent = line; // text only — never markup
+        } else {
+          head = document.createTextNode(line);
+        }
+        tbody.appendChild(spanRow("dl-hunk", head));
+        continue;
+      }
+
+      // Anything before the first hunk header is preamble — file/mode/rename lines
+      // (`---`/`+++` included, which are headers here, never deletions/additions).
+      if (!inHunk) {
+        tbody.appendChild(spanRow("dl-meta", document.createTextNode(line)));
+        continue;
+      }
+
+      const marker = line.charAt(0);
+      let cls;
+      let oldCell = "";
+      let newCell = "";
+      if (marker === "+") {
+        cls = "dl-add";
+        newCell = String(newNo++);
+      } else if (marker === "-") {
+        cls = "dl-del";
+        oldCell = String(oldNo++);
+      } else if (marker === " ") {
+        cls = "dl-ctx";
+        oldCell = String(oldNo++);
+        newCell = String(newNo++);
+      } else {
+        // `\ No newline at end of file` and any other in-hunk oddity: no numbers.
+        tbody.appendChild(spanRow("dl-meta", document.createTextNode(line)));
+        continue;
+      }
+
+      const tr = document.createElement("tr");
+      tr.className = cls;
+      tr.appendChild(cell("td", "lno", oldCell));
+      tr.appendChild(cell("td", "lno", newCell));
+      tr.appendChild(cell("td", "code", line)); // full raw line, prefix kept, text only
+      tbody.appendChild(tr);
+    }
+
+    const table = document.createElement("table");
+    table.className = "diff-table";
+    table.appendChild(tbody);
+    pre.textContent = "";
+    pre.appendChild(table);
   }
 
   // Open every <details> from the element up to the root, so a navigation target
@@ -237,7 +337,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    document.querySelectorAll("pre.diff").forEach(colourizeDiff);
+    document.querySelectorAll("pre.diff").forEach(annotateDiff);
 
     // Re-clicking an evidence link whose hash is already current fires no
     // hashchange, so reveal on click too (capture: before the browser scrolls).
