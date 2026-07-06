@@ -389,8 +389,11 @@
     const input = document.createElement("textarea");
     input.className = "claim-ask-input";
     input.rows = 2;
-    // A fixed placeholder — the claim id is a closed vocabulary (CLAIM_ID), so it is
-    // safe to name; the reviewer's own text stays in `.value`, never in markup.
+    // A fixed placeholder + aria-label — the claim id is a closed vocabulary
+    // (CLAIM_ID), so it is safe to name; the reviewer's own text stays in `.value`,
+    // never in markup. The aria-label survives once the placeholder disappears on
+    // typing, keeping an accessible name for the field.
+    input.setAttribute("aria-label", "Ask about " + claim.id);
     input.setAttribute("placeholder", "Ask about " + claim.id + "…");
 
     const send = document.createElement("button");
