@@ -412,6 +412,49 @@ details.claim[data-disposition="question-open"] { border-left: 3px solid var(--w
 }
 .thread-progress.has-concern { color: var(--warn); }
 
+/* Claim-scoped questions (ADR-0015) — JS-injected ask affordance in each claim
+   body: a text box that queues the reviewer's question anchored to the claim.
+   Absent entirely on file://. */
+.claim-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+.claim-ask-input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+}
+.claim-ask-input:focus { outline: none; border-color: var(--accent); }
+.claim-ask-send {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.claim-ask-send:hover { border-color: var(--accent); color: var(--fg); }
+.claim-ask-status {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 /* Review outcome — the baked, close-time account of the reviewer's dispositions. */
 #review-outcome .outcome-counts { font-family: var(--mono); font-size: 0.85rem; }
 #review-outcome .outcome-threads {
