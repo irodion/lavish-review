@@ -95,9 +95,8 @@
         let head;
         if (anchor) {
           head = document.createElement("a");
-          head.className = "hunk-self";
           head.href = "#" + anchor; // anchor is [0-9a-f-] from the Hunk Anchorer
-          head.textContent = line; // text only — never markup
+          head.textContent = line; // text only — never markup — styled via `tr.dl-hunk a`
         } else {
           head = document.createTextNode(line);
         }
