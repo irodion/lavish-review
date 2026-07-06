@@ -365,6 +365,11 @@ the ancestors of any `#anchor` they follow:
      claim's summary text, a confidence chip
      `<span class="chip confidence-LEVEL">confidence: LEVEL</span>`, and for risk
      claims `<span class="risk-category">` + `<span class="chip risk-level LEVEL">`.
+     Judgment-color discipline (ADR-0014): the kind chip is **neutral** — colour is
+     reserved for the confidence and risk-level chips (and the reviewer's
+     disposition). Write the chip **words** exactly as above; the stylesheet adds
+     each judgment chip's glyph (a fill gauge for confidence, a severity mark for
+     risk level) from its class — **never hand-add a glyph**, it would double.
    - `<div class="claim-body">`: the `detail` prose, then
      `<h4>Challenge</h4><ul class="challenge-questions">`, then
      `<h4>Evidence</h4><ul class="evidence-list">` — each `{path}` ref rendered as
