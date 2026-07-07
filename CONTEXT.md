@@ -25,11 +25,11 @@ One of the cockpit's four levels of disclosure ([ADR-0009](./docs/adr/0009-layer
 _Avoid_: level, tier, section (a layer holds sections; it isn't one).
 
 **Deck Mode**:
-The served-only presentation of the Review Cockpit ([ADR-0014](./docs/adr/0014-deck-presentation-mode.md)): a persistent **Map** beside a **Stage** that shows one Claim at a time, with keyboard-driven dispositions (auto-advance to the next *unreviewed* claim). Built client-side by the vendored script **from the document's own DOM** (relocating already-escaped nodes — never string-built markup); the L0–L3 document stays the single artifact, the linted form, and the baked `file://` record. Document mode is one toggle away and is the only mode on `file://`.
+The served-only presentation of the Review Cockpit ([ADR-0014](./docs/adr/0014-deck-presentation-mode.md)): a persistent **Map** beside a **Stage** that shows one Claim at a time. Built client-side by the vendored script **from the document's own DOM** (relocating already-escaped nodes — never string-built markup); the L0–L3 document stays the single artifact, the linted form, and the baked `file://` record. Document mode is one toggle away and is the only mode on `file://`. **Status:** the Map/Stage skeleton — click-to-stage from any dot or thread, the staged Claim's evidence hunk inline, and a lossless mode toggle — ships in #67; **keyboard-driven dispositions that auto-advance to the next *unreviewed* claim are not yet built (roadmap, #68)**, so a served deck today stages only by click.
 _Avoid_: app, SPA, queue view, triage mode.
 
 **Map**:
-Deck Mode's persistent navigator — the *whole* while the Stage shows the *piece*: threads in Review Route order with one disposition-tinted dot per claim, the changed files with change-size bars, overall progress, and the branch-scoped ask affordance. Clicking any dot stages that claim.
+Deck Mode's persistent navigator — the *whole* while the Stage shows the *piece*: threads in Review Route order with one disposition-tinted dot per claim, the changed files with their add/delete stats, and overall progress. Clicking any dot (or a thread) stages that claim. *(Roadmap: a **branch-scoped ask affordance** in the Map — the map-side half of the two-channel chat, [ADR-0015](./docs/adr/0015-claim-scoped-questions.md) — is not yet built; branch questions go through the ordinary loop chat for now.)*
 _Avoid_: sidebar, tree, index.
 
 **Stage**:
