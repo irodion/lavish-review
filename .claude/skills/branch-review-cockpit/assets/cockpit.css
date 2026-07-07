@@ -634,3 +634,182 @@ footer {
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+/* ================================================================
+   Deck Mode (ADR-0014) — the served Map + Stage presentation, built client-side
+   by app.js from the document's own already-escaped nodes. The deck is inert
+   until the script sets `deck-active` on <body>; document mode hides the deck and
+   shows <main>, deck mode hides <main> and shows the deck. It is never built on
+   file:// (a baked/portable record is the document, unchanged), so these rules
+   only ever take effect in a served review — the same gate as disposition controls.
+   Every colour below is a judgment token (disposition tint) or a neutral surface;
+   no new colour meaning is introduced (judgment-color discipline).
+   ================================================================ */
+
+/* app.js appends this once the deck exists; it rides at the top-right in both modes. */
+.deck-toggle {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 20;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+}
+.deck-toggle:hover { color: var(--fg); border-color: var(--accent); }
+
+.deck { display: none; } /* inert until app.js activates it */
+body.deck-active > main { display: none; }
+body.deck-active .deck {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+/* --- Map: the whole change (threads in route order, dots, files, progress) --- */
+.deck-map {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 0.85rem;
+}
+.deck-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.deck-tally { font-weight: 600; }
+.deck-count { font-variant-numeric: tabular-nums; }
+.deck-count.verified { color: var(--level-low); }
+.deck-count.concern { color: var(--level-high); }
+.deck-count.question-open { color: var(--warn); }
+
+.deck-map-label {
+  margin: 0.85rem 0 0.35rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.deck-thread-block { margin-bottom: 0.5rem; }
+.deck-thread {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.35rem;
+  cursor: pointer;
+}
+.deck-thread:hover { background: var(--bg); }
+.deck-thread-id { color: var(--accent); font-family: var(--mono); font-size: 0.72rem; }
+.deck-thread-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deck-thread-frac {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.deck-dots { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.15rem 0 0 0.35rem; }
+.deck-dot {
+  width: 20px;
+  height: 11px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  cursor: pointer;
+}
+.deck-dot[data-disposition="verified"] { background: var(--level-low); border-color: var(--level-low); }
+.deck-dot[data-disposition="concern"] { background: var(--level-high); border-color: var(--level-high); }
+.deck-dot[data-disposition="question-open"] { background: var(--warn); border-color: var(--warn); }
+.deck-dot.current { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.deck-file {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  padding: 0.15rem 0.35rem;
+  cursor: pointer;
+}
+.deck-file:hover { color: var(--fg); }
+.deck-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- Stage: one claim at a time, its evidence hunk inline --- */
+.deck-stage { min-width: 0; max-width: 900px; }
+.deck-crumb {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.deck-crumb-title { color: var(--fg); }
+.deck-crumb-claim { font-family: var(--mono); font-size: 0.78rem; margin-left: auto; }
+.deck-claim-host > details.claim { margin: 0; } /* forced open on the Stage */
+
+.deck-evidence { margin-top: 1rem; display: grid; gap: 0.75rem; }
+.deck-hunk {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.deck-hunk figcaption {
+  padding: 0.4rem 0.6rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  word-break: break-all;
+}
+/* Bounded height: a long hunk scrolls within its card instead of pushing the
+   claim's disposition control off-screen. */
+.deck-hunk > .hunk,
+.deck-hunk > .file-body,
+.deck-hunk > pre.diff { max-height: 22rem; overflow: auto; margin: 0; }
+.deck-evidence-none { color: var(--muted); font-size: 0.85rem; }
+
+.deck-home { display: none; } /* marks a staged claim's home in the document flow */
+
+/* Narrow viewports: the Map stops being a sticky side rail and stacks above the
+   Stage, so Deck Mode collapses gracefully rather than crushing two columns. */
+@media (max-width: 820px) {
+  body.deck-active .deck { grid-template-columns: 1fr; }
+  .deck-map { position: static; max-height: none; }
+  .deck-dots { gap: 6px; }
+  .deck-dot { width: 24px; height: 13px; }
+}

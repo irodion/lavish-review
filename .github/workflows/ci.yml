@@ -29,6 +29,20 @@ jobs:
       - name: Pytest
         run: pytest
 
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false # the tests never touch git; don't leave the token in .git/config
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # The Deck Presenter tests run on a zero-dependency DOM shim (tests/js/), so
+      # there is nothing to install — just Node's built-in test runner.
+      - name: Deck Presenter tests
+        run: npm test
+
   security:
     runs-on: ubuntu-latest
     steps:

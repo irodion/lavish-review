@@ -1,0 +1,10 @@
+{
+  "name": "lavish-review",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Node-based DOM test harness for the vendored Review Cockpit script (Deck Presenter, issue #67). Zero runtime dependencies — a minimal DOM shim under tests/js/ drives assets/app.js via node:test.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test \"tests/js/**/*.test.mjs\""
+  }
+}
