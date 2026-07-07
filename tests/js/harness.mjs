@@ -167,7 +167,14 @@ export function buildFixtureDocument() {
 }
 
 // Run app.js against a document in the given protocol (default served/"http:").
-export function loadCockpit({ protocol = "http:", doc = buildFixtureDocument() } = {}) {
+// `dispositions`, when given, is the `{claimId: state}` map a resumed session's
+// dispositions.json would carry — the harness serves it back through fetch so the
+// restore-tint path can be exercised without a network.
+export function loadCockpit({
+  protocol = "http:",
+  doc = buildFixtureDocument(),
+  dispositions = null,
+} = {}) {
   const location = { protocol, hash: "" };
   const window = {
     lavish: undefined,
@@ -175,8 +182,14 @@ export function loadCockpit({ protocol = "http:", doc = buildFixtureDocument() }
     removeEventListener() {},
   };
   // The presenter never fetches on file://; on http:// loadDispositions() calls
-  // fetch — resolve to a not-ok response so it no-ops without a network.
-  const fetch = () => Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+  // fetch. Serve the given dispositions store back (a resumed review), or an
+  // not-ok response so it no-ops without a network (a fresh review).
+  const fetch = () =>
+    Promise.resolve(
+      dispositions
+        ? { ok: true, json: () => Promise.resolve({ dispositions }) }
+        : { ok: false, json: () => Promise.resolve(null) }
+    );
 
   const sandbox = { window, document: doc, location, fetch, console, Promise };
   window.document = doc;
@@ -193,4 +206,23 @@ export function click(el) {
   const event = new DomEvent("click", { bubbles: true });
   el.dispatchEvent(event);
   return event;
+}
+
+// Dispatch a bubbling keydown from `target` (default: the document, i.e. no field
+// focused), carrying `key` and any modifier flags — the shape onDeckKeydown reads.
+// Dispatching from an input/textarea models a focused typing surface (the event's
+// target is that element, exactly as a real keystroke would set it).
+export function press(target, key, opts = {}) {
+  const event = new DomEvent("keydown", { bubbles: true });
+  event.key = key;
+  event.metaKey = !!opts.metaKey;
+  event.ctrlKey = !!opts.ctrlKey;
+  event.altKey = !!opts.altKey;
+  target.dispatchEvent(event);
+  return event;
+}
+
+// Let the microtask chain in loadDispositions (fetch → json → apply) settle.
+export function flush() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
