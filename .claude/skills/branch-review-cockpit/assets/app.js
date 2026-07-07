@@ -233,29 +233,41 @@
     });
   }
 
+  // Reflect a claim's disposition onto a set of controls keyed by data-disposition:
+  // `aria-pressed` is true only on the button whose disposition is the current one.
+  // Shared by the in-claim summary controls and the oversized Stage control.
+  function syncPressed(buttons, current) {
+    Array.prototype.forEach.call(buttons, function (btn) {
+      btn.setAttribute("aria-pressed", btn.dataset.disposition === current ? "true" : "false");
+    });
+  }
+
+  // The one disposition write rule, shared by the in-claim controls and the Stage:
+  // re-selecting the active state clears it back to unreviewed, and every local
+  // write is mirrored to the feedback channel. Returns the resulting state so a
+  // caller (the Stage) can decide whether to auto-advance.
+  function toggleDisposition(claim, disposition) {
+    const active = claim.getAttribute("data-disposition") === disposition;
+    const next = active ? "unreviewed" : disposition;
+    applyDisposition(claim, next);
+    sendDisposition(claim.id, next);
+    return next;
+  }
+
   function applyDisposition(claim, disposition) {
     if (disposition === "unreviewed") {
       claim.removeAttribute("data-disposition");
     } else {
       claim.setAttribute("data-disposition", disposition);
     }
-    const buttons = claim.querySelectorAll(".disposition-controls button");
-    Array.prototype.forEach.call(buttons, function (btn) {
-      btn.setAttribute("aria-pressed", btn.dataset.disposition === disposition ? "true" : "false");
-    });
+    syncPressed(claim.querySelectorAll(".disposition-controls button"), disposition);
     const thread = claim.closest("section.thread");
     if (thread) {
       updateThreadProgress(thread);
     }
-    // Keep the Map's dots and fractions in step with the disposition (no-op in
-    // document mode / before the deck is built).
+    // Keep the deck views (Map dots and fractions, the oversized Stage control) in
+    // step with the disposition (no-op in document mode / before the deck is built).
     refreshDeck();
-    // Keep the oversized Stage control in sync when the change lands on the claim
-    // currently staged — whether it came from the Stage control, a key, the claim's
-    // own in-summary buttons, or a restored disposition on load.
-    if (deck && claim === deck.staged) {
-      updateStageControl(claim);
-    }
   }
 
   function updateThreadProgress(thread) {
@@ -309,11 +321,7 @@
         // A button inside <summary> must not toggle the disclosure panel.
         event.preventDefault();
         event.stopPropagation();
-        // Re-clicking the active state clears it back to unreviewed.
-        const active = claim.getAttribute("data-disposition") === disposition;
-        const next = active ? "unreviewed" : disposition;
-        applyDisposition(claim, next);
-        sendDisposition(claim.id, next);
+        toggleDisposition(claim, disposition);
       });
       group.appendChild(btn);
     });
@@ -810,11 +818,13 @@
     }
   }
 
-  // Refresh the Map after a disposition changes (the dots and fractions are
-  // derived from the claims' `data-disposition`). No-op until the deck is built.
+  // Refresh the deck views after a disposition changes — the Map (dots and
+  // fractions) and the oversized Stage control are both derived from the claims'
+  // `data-disposition`, so they redraw on the deck's own path. No-op until built.
   function refreshDeck() {
     if (deck) {
       renderMap();
+      updateStageControl(deck.staged);
     }
   }
 
@@ -830,15 +840,20 @@
   // one claim back/forward freely (reviewed or not). Keys never fire while a
   // typing surface is focused — the claim-scoped ask box, or any host input.
 
-  // The single-key → disposition map for the Stage control and V/C/Q keys. Each
-  // entry also carries the visible hint (glyph + word, never colour alone —
-  // ADR-0014) and the key cap the control renders.
+  // The Stage control's config, in Review-Route-natural order: each settable
+  // disposition with the key that sets it and the visible hint the button renders
+  // (key cap + glyph + word — never colour alone, ADR-0014).
   const STAGE_KEYS = [
     { key: "V", disposition: "verified", glyph: "✓", word: "verified" },
     { key: "C", disposition: "concern", glyph: "⚠", word: "concern" },
     { key: "Q", disposition: "question-open", glyph: "?", word: "question" },
   ];
-  const DISPOSITION_FOR_KEY = { v: "verified", c: "concern", q: "question-open" };
+  // The lowercased-key → disposition lookup the keyboard handler uses, derived from
+  // STAGE_KEYS so the vocabulary is declared once (a new disposition adds one row).
+  const DISPOSITION_FOR_KEY = Object.create(null);
+  STAGE_KEYS.forEach(function (entry) {
+    DISPOSITION_FOR_KEY[entry.key.toLowerCase()] = entry.disposition;
+  });
 
   // Keyboard staging must never steal a keystroke meant for a text field — the
   // claim-scoped ask box (a <textarea>) or any host input/contenteditable. A
@@ -859,7 +874,7 @@
     control.appendChild(cell("p", "deck-control-label", "Set disposition"));
 
     const buttons = cell("div", "deck-control-buttons", null);
-    deck.stageControlButtons = Object.create(null);
+    deck.stageControlButtons = [];
     STAGE_KEYS.forEach(function (entry) {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -873,7 +888,7 @@
         disposeStaged(entry.disposition);
       });
       buttons.appendChild(btn);
-      deck.stageControlButtons[entry.disposition] = btn;
+      deck.stageControlButtons.push(btn);
     });
     control.appendChild(buttons);
 
@@ -889,19 +904,14 @@
   }
 
   // Reflect the staged claim's disposition on the oversized control. The Stage
-  // control and the in-claim controls both read `data-disposition`, so they can
-  // never disagree — pressing either updates the one source of truth.
+  // control and the in-claim controls both read `data-disposition` and sync the
+  // same way (syncPressed), so they can never disagree — pressing either updates
+  // the one source of truth.
   function updateStageControl(claim) {
     if (!deck || !deck.stageControlButtons) {
       return;
     }
-    const current = claim ? claim.getAttribute("data-disposition") : null;
-    Object.keys(deck.stageControlButtons).forEach(function (disposition) {
-      deck.stageControlButtons[disposition].setAttribute(
-        "aria-pressed",
-        disposition === current ? "true" : "false"
-      );
-    });
+    syncPressed(deck.stageControlButtons, claim ? claim.getAttribute("data-disposition") : null);
   }
 
   function announceStage(message) {
@@ -919,12 +929,11 @@
     if (!claim) {
       return;
     }
-    const active = claim.getAttribute("data-disposition") === disposition;
-    const next = active ? "unreviewed" : disposition;
-    applyDisposition(claim, next); // local tint + dots + fractions + both controls
-    sendDisposition(claim.id, next); // identical payload to the document-mode controls
-    if (next === "unreviewed") {
-      announceStage(""); // cleared — stay put, nothing to announce
+    // The same toggle-and-write the in-claim controls use; only the auto-advance
+    // is the Stage's own. A re-select clears to unreviewed — stay put, nothing to
+    // move on from — so advance only on a real disposition.
+    if (toggleDisposition(claim, disposition) === "unreviewed") {
+      announceStage("");
       return;
     }
     advanceToNextUnreviewed();
@@ -937,11 +946,10 @@
   function advanceToNextUnreviewed() {
     const claims = deck.claims;
     const start = claims.indexOf(deck.staged);
-    for (let step = 1; step <= claims.length; step++) {
+    // Step through every *other* claim once, forward and wrapping (step < length
+    // stops before returning to `start`), landing on the first unreviewed one.
+    for (let step = 1; step < claims.length; step++) {
       const candidate = claims[(start + step) % claims.length];
-      if (candidate === deck.staged) {
-        continue; // the just-disposed claim itself (the wrap point) is never a target
-      }
       if (!candidate.getAttribute("data-disposition")) {
         stageClaim(candidate);
         return;
@@ -1056,7 +1064,7 @@
       stagedPriorOpen: false,
       lastStaged: null,
       mode: "document",
-      stageControlButtons: null, // the current Stage control's buttons, by disposition
+      stageControlButtons: null, // the current Stage control's disposition buttons
       status: null, // the Stage's `role="status"` announcement line
     };
 
