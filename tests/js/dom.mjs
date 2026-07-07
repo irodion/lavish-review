@@ -40,9 +40,12 @@ class Node {
 
   insertBefore(node, ref) {
     if (ref == null) return this.appendChild(node);
+    // Detach `node` FIRST, then locate `ref`: if `node` was already a child of this
+    // parent and sat before `ref`, removing it shifts `ref` left by one — computing
+    // the index beforehand would splice one slot too late and reorder the siblings.
+    node.remove();
     const i = this.childNodes.indexOf(ref);
     if (i === -1) return this.appendChild(node);
-    node.remove();
     node.parentNode = this;
     this.childNodes.splice(i, 0, node);
     return node;

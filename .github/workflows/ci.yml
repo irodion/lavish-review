@@ -33,6 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false # the tests never touch git; don't leave the token in .git/config
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
