@@ -780,6 +780,56 @@ body.deck-active .deck {
 .deck-crumb-claim { font-family: var(--mono); font-size: 0.78rem; margin-left: auto; }
 .deck-claim-host > details.claim { margin: 0; } /* forced open on the Stage */
 
+/* --- The oversized V/C/Q disposition control (issue #68) ---
+   No mouse travel: three big targets below the claim (the challenge questions stay
+   above them), each carrying a key cap + glyph + word so the state never rides on
+   colour alone (ADR-0014). The tint appears only once a state is chosen. */
+.deck-control { margin-top: 1rem; }
+.deck-control-label {
+  margin: 0 0 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.deck-control-buttons { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.deck-control-btn {
+  flex: 1 1 8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.7rem 0.9rem;
+  font-size: 1rem;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.deck-control-btn:hover { border-color: var(--accent); }
+.deck-key {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+}
+.deck-control-glyph { font-size: 1.1rem; }
+.deck-control-word { font-weight: 600; }
+/* Chosen state: the button adopts its judgment tint (border + glyph + key cap). */
+.deck-control-btn[aria-pressed="true"] { border-color: currentcolor; border-width: 2px; }
+.deck-control-btn[aria-pressed="true"][data-disposition="verified"] { color: var(--level-low); }
+.deck-control-btn[aria-pressed="true"][data-disposition="concern"] { color: var(--level-high); }
+.deck-control-btn[aria-pressed="true"][data-disposition="question-open"] { color: var(--warn); }
+.deck-control-btn[aria-pressed="true"] .deck-key { color: inherit; border-color: currentcolor; }
+.deck-stage-status {
+  margin: 0.5rem 0 0;
+  min-height: 1.2em; /* reserve the line so an announcement never shifts the layout */
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
 .deck-evidence { margin-top: 1rem; display: grid; gap: 0.75rem; }
 .deck-hunk {
   margin: 0;

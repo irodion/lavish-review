@@ -250,6 +250,12 @@
     // Keep the Map's dots and fractions in step with the disposition (no-op in
     // document mode / before the deck is built).
     refreshDeck();
+    // Keep the oversized Stage control in sync when the change lands on the claim
+    // currently staged — whether it came from the Stage control, a key, the claim's
+    // own in-summary buttons, or a restored disposition on load.
+    if (deck && claim === deck.staged) {
+      updateStageControl(claim);
+    }
   }
 
   function updateThreadProgress(thread) {
@@ -654,6 +660,9 @@
     host.className = "deck-claim-host";
     host.appendChild(claim); // relocates the live element out of the document flow
     deck.stage.appendChild(host);
+    // The oversized V/C/Q control sits below the claim card, so the challenge
+    // questions (inside the card) always stay visible above it (ADR-0014 guardrail).
+    deck.stage.appendChild(buildStageControl(claim));
     deck.stage.appendChild(buildInlineEvidence(claim));
 
     deck.staged = claim;
@@ -809,6 +818,177 @@
     }
   }
 
+  // --- Deck keyboard flow + Stage dispositions (ADR-0014, issue #68) ---------
+  //
+  // On the Stage, an oversized V/C/Q control (with visible key hints) sets the
+  // staged claim's Reviewer Disposition through the very same write path the
+  // document-mode controls use — `applyDisposition` (local tint, dots, fractions,
+  // in-claim + Stage control) and `sendDisposition` (the presence-gated channel;
+  // the payload is byte-identical, so the disposition bridge needs no change).
+  // Setting a disposition auto-advances to the next *unreviewed* claim in Review
+  // Route order (never skipping one, never landing on a reviewed claim); J/K move
+  // one claim back/forward freely (reviewed or not). Keys never fire while a
+  // typing surface is focused — the claim-scoped ask box, or any host input.
+
+  // The single-key → disposition map for the Stage control and V/C/Q keys. Each
+  // entry also carries the visible hint (glyph + word, never colour alone —
+  // ADR-0014) and the key cap the control renders.
+  const STAGE_KEYS = [
+    { key: "V", disposition: "verified", glyph: "✓", word: "verified" },
+    { key: "C", disposition: "concern", glyph: "⚠", word: "concern" },
+    { key: "Q", disposition: "question-open", glyph: "?", word: "question" },
+  ];
+  const DISPOSITION_FOR_KEY = { v: "verified", c: "concern", q: "question-open" };
+
+  // Keyboard staging must never steal a keystroke meant for a text field — the
+  // claim-scoped ask box (a <textarea>) or any host input/contenteditable. A
+  // non-element target (e.g. the document itself) is never a typing surface.
+  function isTypingContext(target) {
+    if (!target || typeof target.closest !== "function") {
+      return false;
+    }
+    return !!target.closest("input, textarea, select, [contenteditable]");
+  }
+
+  // The oversized Stage control: one big button per settable disposition, each
+  // showing its key cap + glyph + word, plus a status line for the "nothing left
+  // to advance to" announcement. Rebuilt with the Stage on every stage change, so
+  // the button handles live on the deck record only for the current claim.
+  function buildStageControl(claim) {
+    const control = cell("div", "deck-control", null);
+    control.appendChild(cell("p", "deck-control-label", "Set disposition"));
+
+    const buttons = cell("div", "deck-control-buttons", null);
+    deck.stageControlButtons = Object.create(null);
+    STAGE_KEYS.forEach(function (entry) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "deck-control-btn";
+      btn.dataset.disposition = entry.disposition; // colour tint keyed off this, ADR-0014
+      btn.setAttribute("aria-pressed", "false");
+      btn.appendChild(cell("kbd", "deck-key", entry.key)); // the visible key hint
+      btn.appendChild(cell("span", "deck-control-glyph", entry.glyph));
+      btn.appendChild(cell("span", "deck-control-word", entry.word));
+      btn.addEventListener("click", function () {
+        disposeStaged(entry.disposition);
+      });
+      buttons.appendChild(btn);
+      deck.stageControlButtons[entry.disposition] = btn;
+    });
+    control.appendChild(buttons);
+
+    // `role="status"` announces the auto-advance boundary to assistive tech without
+    // stealing focus; text only, never markup.
+    const status = cell("p", "deck-stage-status", null);
+    status.setAttribute("role", "status");
+    control.appendChild(status);
+    deck.status = status;
+
+    updateStageControl(claim);
+    return control;
+  }
+
+  // Reflect the staged claim's disposition on the oversized control. The Stage
+  // control and the in-claim controls both read `data-disposition`, so they can
+  // never disagree — pressing either updates the one source of truth.
+  function updateStageControl(claim) {
+    if (!deck || !deck.stageControlButtons) {
+      return;
+    }
+    const current = claim ? claim.getAttribute("data-disposition") : null;
+    Object.keys(deck.stageControlButtons).forEach(function (disposition) {
+      deck.stageControlButtons[disposition].setAttribute(
+        "aria-pressed",
+        disposition === current ? "true" : "false"
+      );
+    });
+  }
+
+  function announceStage(message) {
+    if (deck && deck.status) {
+      deck.status.textContent = message; // text only
+    }
+  }
+
+  // Set (or clear) the staged claim's disposition through the document-mode write
+  // path, then auto-advance. Re-selecting the active state clears it to unreviewed
+  // (parity with the in-claim controls, ADR-0014 guardrail) and does NOT advance —
+  // there is nothing to move on from.
+  function disposeStaged(disposition) {
+    const claim = deck && deck.staged;
+    if (!claim) {
+      return;
+    }
+    const active = claim.getAttribute("data-disposition") === disposition;
+    const next = active ? "unreviewed" : disposition;
+    applyDisposition(claim, next); // local tint + dots + fractions + both controls
+    sendDisposition(claim.id, next); // identical payload to the document-mode controls
+    if (next === "unreviewed") {
+      announceStage(""); // cleared — stay put, nothing to announce
+      return;
+    }
+    advanceToNextUnreviewed();
+  }
+
+  // Auto-advance target: the next claim with no disposition, searching forward in
+  // Review Route order and wrapping once (so claims disposed out of order are still
+  // reached). It never lands on a reviewed claim — only unreviewed ones — and with
+  // none left anywhere it stays on the current claim and says so.
+  function advanceToNextUnreviewed() {
+    const claims = deck.claims;
+    const start = claims.indexOf(deck.staged);
+    for (let step = 1; step <= claims.length; step++) {
+      const candidate = claims[(start + step) % claims.length];
+      if (candidate === deck.staged) {
+        continue; // the just-disposed claim itself (the wrap point) is never a target
+      }
+      if (!candidate.getAttribute("data-disposition")) {
+        stageClaim(candidate);
+        return;
+      }
+    }
+    announceStage("All claims reviewed — nothing left to advance to.");
+  }
+
+  // J/K free navigation: one claim forward/back in Review Route order, clamped at
+  // the route's ends (no wrap). Unlike auto-advance, this is NOT gated by
+  // disposition — it lands on reviewed claims too, so the reviewer can revisit.
+  function navigateStage(delta) {
+    const claims = deck.claims;
+    const from = claims.indexOf(deck.staged);
+    const next = from + delta;
+    if (from === -1 || next < 0 || next >= claims.length) {
+      return;
+    }
+    stageClaim(claims[next]);
+  }
+
+  // The single global keydown handler, active only while the deck is showing (the
+  // Stage owns the keys; document mode leaves them to the browser). Modifier chords
+  // pass through so host/browser shortcuts (⌘K, etc.) are never swallowed.
+  function onDeckKeydown(event) {
+    if (!deck || deck.mode !== "deck") {
+      return;
+    }
+    if (isTypingContext(event.target)) {
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) {
+      return;
+    }
+    const key = (event.key || "").toLowerCase();
+    if (key === "j") {
+      event.preventDefault();
+      navigateStage(1); // vim-convention: j is down/forward
+    } else if (key === "k") {
+      event.preventDefault();
+      navigateStage(-1); // k is up/backward
+    } else if (DISPOSITION_FOR_KEY[key]) {
+      event.preventDefault();
+      disposeStaged(DISPOSITION_FOR_KEY[key]);
+    }
+  }
+
   function buildDeck() {
     // file:// is a record, not a review surface — no live session, so no deck
     // (the exact gate dispositions and the ask affordance use).
@@ -876,12 +1056,18 @@
       stagedPriorOpen: false,
       lastStaged: null,
       mode: "document",
+      stageControlButtons: null, // the current Stage control's buttons, by disposition
+      status: null, // the Stage's `role="status"` announcement line
     };
 
     // The deck sits after the document; document mode simply hides the deck and
     // shows <main>, deck mode hides <main> and shows the deck (both via CSS).
     main.parentNode.insertBefore(container, main.nextSibling);
     document.body.appendChild(toggle);
+
+    // Single global keydown handler — inert unless the deck is showing and the
+    // focus is not in a typing surface (both gated inside onDeckKeydown).
+    document.addEventListener("keydown", onDeckKeydown);
 
     // Served → the deck is the presentation; the full document is one toggle away.
     // setMode → stageClaim renders the Map, so no separate initial render is needed.
