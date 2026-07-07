@@ -466,13 +466,18 @@ details.file > .file-body { padding: 0.5rem 0.9rem 0.9rem; }
   border-color: currentcolor;
   font-weight: 600;
 }
-.disposition-controls button[aria-pressed="true"][data-disposition="verified"] {
+/* The pressed-state judgment tint, shared by the in-claim pill controls and the
+   oversized Stage control (issue #68) — one disposition→token mapping for both. */
+.disposition-controls button[aria-pressed="true"][data-disposition="verified"],
+.deck-control-btn[aria-pressed="true"][data-disposition="verified"] {
   color: var(--level-low);
 }
-.disposition-controls button[aria-pressed="true"][data-disposition="concern"] {
+.disposition-controls button[aria-pressed="true"][data-disposition="concern"],
+.deck-control-btn[aria-pressed="true"][data-disposition="concern"] {
   color: var(--level-high);
 }
-.disposition-controls button[aria-pressed="true"][data-disposition="question-open"] {
+.disposition-controls button[aria-pressed="true"][data-disposition="question-open"],
+.deck-control-btn[aria-pressed="true"][data-disposition="question-open"] {
   color: var(--warn);
 }
 details.claim[data-disposition="verified"] { border-left: 3px solid var(--level-low); }
@@ -817,11 +822,9 @@ body.deck-active .deck {
 }
 .deck-control-glyph { font-size: 1.1rem; }
 .deck-control-word { font-weight: 600; }
-/* Chosen state: the button adopts its judgment tint (border + glyph + key cap). */
+/* Chosen state: the button adopts its judgment tint (the colour comes from the
+   shared disposition-tint rule above; here just the heavier border + key cap). */
 .deck-control-btn[aria-pressed="true"] { border-color: currentcolor; border-width: 2px; }
-.deck-control-btn[aria-pressed="true"][data-disposition="verified"] { color: var(--level-low); }
-.deck-control-btn[aria-pressed="true"][data-disposition="concern"] { color: var(--level-high); }
-.deck-control-btn[aria-pressed="true"][data-disposition="question-open"] { color: var(--warn); }
 .deck-control-btn[aria-pressed="true"] .deck-key { color: inherit; border-color: currentcolor; }
 .deck-stage-status {
   margin: 0.5rem 0 0;
