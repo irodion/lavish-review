@@ -677,6 +677,16 @@
     claim.open = deck.stagedPriorOpen;
     deck.stagedHome = null;
     deck.staged = null;
+    // While the claim was on the Stage it was NOT a child of its thread, so a
+    // disposition set from the Stage could not update the document's per-thread
+    // progress line (applyDisposition's `closest("section.thread")` was null, and a
+    // count then would have missed the relocated claim). Now that it is home and the
+    // thread is whole again, recompute that thread's progress so document mode is
+    // never stale after a round-trip.
+    const thread = claim.closest("section.thread");
+    if (thread) {
+      updateThreadProgress(thread);
+    }
   }
 
   // The Stage's breadcrumb: the claim's thread (id + title) and the claim id.

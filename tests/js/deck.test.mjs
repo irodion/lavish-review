@@ -106,6 +106,15 @@ test("the mode toggle round-trips content, open state, and disposition tints", (
   assert.equal(claim.open, false, "its authored (closed) open state is restored");
   assert.equal(claim.getAttribute("data-disposition"), "concern", "its tint survives the round-trip");
 
+  // The document's own per-thread progress reflects the Stage-set disposition — it
+  // could not update while the claim was relocated onto the Stage, so unstaging must
+  // recompute it (else document mode would read a stale "0/1 reviewed").
+  assert.equal(
+    document.getElementById("t2").querySelector(".thread-progress").textContent,
+    "1/1 reviewed · 1 concern",
+    "document thread-progress is refreshed on unstage"
+  );
+
   // Every claim is present in the document again — nothing lost.
   assert.equal(document.querySelectorAll("main details.claim").length, 3);
 
