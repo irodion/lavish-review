@@ -1,35 +1,39 @@
-"""The Analysis Schema Validator — a deep module guarding ``analysis.json`` (issues #6, #39).
+"""The Analysis Schema Validator — a deep module guarding ``analysis.json`` (issues #6, #39, #84).
 
-``analysis.json`` is the agent's structured intermediate reasoning about the diff
-(CONTEXT: *Analysis*): the substrate the Review Cockpit is authored from and the
-substrate the feedback loop answers from (ADR-0001). Since ADR-0009 the shape is
-**claim-centric**: the changeset is decomposed into narrative **Threads** (the
-feature, the drive-by refactor, the config churn), each carrying the **Claims** a
-reviewer must judge — behavior changes, risks, suspicious omissions, verification
-steps — and every claim carries the agent's **confidence**, at least one challenge
-question, and **evidence references** into the diff. The cockpit's L1/L2/L3 layers
-are authored straight from this structure, so its correctness depends on the
-substrate being well-formed: a claim with no evidence, a risk without a level, an
-id that can't anchor a disposition (ADR-0012) would all surface as a broken or
-misleading layer.
+``analysis.json`` is the change narrator's structured intermediate reasoning about
+the diff (CONTEXT: *Analysis*): the substrate the Review Cockpit is authored from
+and the substrate the feedback loop answers from (ADR-0001). Since ADR-0016 the
+shape is **step-centric**: the changeset is decomposed into narrative **Threads**
+(the feature, the drive-by refactor, the config churn), each carrying the **Review
+Steps** that guide a reviewer through it — one guided stop each, not a finding.
+Every step carries a **Behavior Impact** (did behavior change here, or was code only
+moved?), a **why_now** (why it sits at this point on the Review Route), the agent's
+**confidence**, its **review_prompts** (the comparisons the reviewer should make),
+and **evidence references** into the diff. The cockpit's L1/L2/L3 layers are
+authored straight from this structure, so its correctness depends on the substrate
+being well-formed: a step with no evidence, an id that can't anchor a disposition
+(ADR-0012), a ``behavior-change`` step with no prompt to compare against would all
+surface as a broken or misleading layer.
 
 Deep module (a simple surface over fussy internals): the only entry point is
 :func:`validate_analysis`, which returns a list of :class:`AnalysisError` — empty
 means the file is structurally sound. It mirrors the Cockpit Linter
 (:mod:`branch_review.lint`): a tripwire that *refuses* a malformed analysis, never
 one that edits it. It validates **structure, types, vocabulary, and id integrity**,
-not editorial quality — whether a claim is *insightful* is the agent's job; whether
-it is *shaped right* is this module's.
+not editorial quality — whether a step *narrates* well is the narrator's job;
+whether it is *shaped right* is this module's.
 
-The canonical vocabularies (:data:`RISK_CATEGORIES`, :data:`RISK_LEVELS`,
-:data:`OMISSION_KINDS`, :data:`CLAIM_KINDS`, :data:`CONFIDENCE_LEVELS`) live here
-as the single source of truth the SKILL guidance and the cockpit share. See
-``CONTEXT.md``, ``DESIGN.md``, and ADR-0009/0010/0011/0012.
+The canonical vocabularies (:data:`IMPACTS`, :data:`CONFIDENCE_LEVELS`) live here as
+the single source of truth the SKILL guidance and the cockpit share. Risk levels,
+omission kinds, and the old claim ``kind`` set are gone from the default substrate
+(ADR-0016): the narrator narrates, and hunting re-enters only through an opt-in
+Focus Lens — never as a default schema surface. See ``CONTEXT.md``, ``DESIGN.md``,
+and ADR-0009/0010/0011/0012/0016.
 
 Since ADR-0010 the analysis also carries ``alignment`` — the goal↔implementation
-partition: which threads serve the stated goal and which are drive-bys, with
-goal-unserved work expressed as ``omission`` claims of kind ``goal``. ``null``
-when no goal was found.
+partition: which threads serve the stated goal and which are drive-bys. ``null``
+when no goal was found. Goal-unserved work is no longer a schema kind; it surfaces
+as an Attention Note at L0 (ADR-0016).
 """
 
 from __future__ import annotations
@@ -43,52 +47,50 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # The schema tag a valid analysis must carry; bump the suffix on a breaking change.
-# 0.2 is the Layered Review shape (ADR-0009): threads > claims > evidence, plus the
-# isolated-analysis accountability field ``widened_into`` (ADR-0011). 0.3 (ADR-0014,
-# issue #63) adds an optional ``hunk`` (1-based hunk index) to a ``{path}`` evidence
-# ref so a claim can anchor the exact hunk that substantiates it — additive, but the
-# tag is pinned so a 0.2 document is refused with a located error, not silently
-# revalidated under rules it predates (same posture as the 0.1→0.2 bump).
-SCHEMA = "review-analysis/0.3"
+# 0.4 is the Change Narrator shape (ADR-0016): threads > steps > evidence, replacing
+# 0.3's threads > claims > evidence. The break is clean — this validator encodes only
+# 0.4, so a 0.3 (or older) document is refused with a located error, not silently
+# revalidated under rules it predates. There is no dual-schema path.
+SCHEMA = "review-analysis/0.4"
 
-# The risk categories a claim may carry (CONTEXT: *Risk Map*). A closed set so the
-# cockpit can badge deterministically and the agent can't coin ad-hoc categories.
-# Language-specific concerns ride *inside* these via the Language Lens (e.g. C++
-# lifetime → correctness/security), not as new top-level categories.
-RISK_CATEGORIES = (
-    "correctness",
-    "compatibility",
-    "concurrency",
-    "security",
-    "performance",
-    "maintainability",
-    "test_coverage",
+# The Behavior Impact a step may carry (ADR-0016's L2 vocabulary) — a closed set so
+# the cockpit can badge deterministically and derive a thread's character from its
+# steps, and so the narrator cannot coin ad-hoc labels:
+#   behavior-change     — user/API/runtime/config/persistence/error/security/perf
+#                         behavior changed
+#   behavior-preserving — refactor/relocation/extraction that appears intended to
+#                         preserve behavior (the *expensive* label — earn it)
+#   test-change         — tests added/removed/re-aimed, with the behavior they document
+#   mechanical-change   — generated files, lockfiles, vendored code, formatting, build
+#   unknown-impact      — the narrator can't honestly tell without more context
+IMPACTS = (
+    "behavior-change",
+    "behavior-preserving",
+    "test-change",
+    "mechanical-change",
+    "unknown-impact",
 )
 
-# Severity levels a risk claim must carry, low→high.
-RISK_LEVELS = ("low", "medium", "high")
+# The impacts where the reviewer has a concrete comparison to make, so ≥1
+# ``review_prompt`` is required: what changed (behavior-change), what allegedly did
+# not (behavior-preserving — the preservation check), and what is unresolved
+# (unknown-impact — name the missing context). Prompts are optional on test-change
+# and mechanical-change, where a forced prompt would only breed boilerplate.
+PROMPT_REQUIRED_IMPACTS = frozenset({"behavior-change", "behavior-preserving", "unknown-impact"})
 
-# What a Suspicious Omission is adjacent to (CONTEXT: *Suspicious Omission*) — the
-# untouched thing the diff arguably should have changed. ``goal`` is the
-# goal-alignment omission (ADR-0010): the stated goal asked for something no
-# thread delivers — it therefore requires a non-null ``alignment``. ``other`` is
-# the escape hatch so the vocabulary never forces a miscategorisation.
-OMISSION_KINDS = ("tests", "callers", "docs", "config", "error_handling", "goal", "other")
-
-# What kind of assertion a claim makes (ADR-0009's L2 vocabulary):
-#   behavior — something observably changes ("retries are now exponential")
-#   risk     — something could be wrong (carries category + level + reasons)
-#   omission — something the diff did NOT change but arguably should have
-#   verify   — something the reviewer should check/run (the old Test Checklist items)
-CLAIM_KINDS = ("behavior", "risk", "omission", "verify")
-
-# The agent's stated confidence in a claim (ADR-0012: confidence, never a verdict).
+# The agent's stated confidence in a step (ADR-0012: confidence, never a verdict).
 CONFIDENCE_LEVELS = ("high", "medium", "low")
 
-# Id shapes: threads are ``t<N>``; claims are ``<thread-id>.c<N>`` (ADR-0012's
-# stable claim ids — the keys dispositions attach to, and the cockpit element ids).
+# Keys that must never ride on an Attention Note. An Attention Note is a muted,
+# secondary aside (ADR-0016) — no severity, no category, no level: those are the
+# issue-finder attributes that return only through an opt-in Focus Lens, never as a
+# default surface. Rejecting them keeps hunting from creeping back into the spine.
+_FORBIDDEN_NOTE_KEYS = ("severity", "category", "level")
+
+# Id shapes: threads are ``t<N>``; steps are ``<thread-id>.s<N>`` (the stable ids a
+# disposition attaches to and the cockpit element ids — ADR-0012/0016).
 _THREAD_ID = re.compile(r"^t\d+$")
-_CLAIM_ID_SUFFIX = re.compile(r"^c\d+$")
+_STEP_ID_SUFFIX = re.compile(r"^s\d+$")
 
 
 @dataclass(frozen=True)
@@ -168,22 +170,22 @@ def _as_objects(
     return objects, errors
 
 
-# --- Claim / thread validators (ADR-0009's L1/L2) ------------------------------
+# --- Step / thread validators (ADR-0009's L1/L2, ADR-0016's step substrate) ----
 
 
 def _validate_evidence(value: object, loc: str) -> list[AnalysisError]:
-    """``evidence``: ≥1 ``{path?, hunk?, note?}`` refs — a claim must be substantiated.
+    """``evidence``: ≥1 ``{path?, hunk?, note?}`` refs — a step must be substantiated.
 
-    ``path`` links the claim to a **changed** file's L3 fragment (a
+    ``path`` links the step to a **changed** file's L3 fragment (a
     ``fragments.json`` entry); ``note`` anchors evidence that has no L3 anchor —
     prose ("no test touches this") and **widened-into** files, which have no diff
     fragment and therefore must never be a ``path``. Each entry needs at least one
     of the two.
 
-    ``hunk`` (schema 0.3, ADR-0014) narrows a ``path`` ref to the exact hunk that
-    substantiates the claim: a **1-based** index into that file's hunk sequence, read
-    from the manifest's per-file hunk index. It only makes sense **on a ``path`` ref** —
-    a ``note`` has no diff fragment to anchor into — and must be a positive integer.
+    ``hunk`` (ADR-0014) narrows a ``path`` ref to the exact hunk that substantiates
+    the step: a **1-based** index into that file's hunk sequence, read from the
+    manifest's per-file hunk index. It only makes sense **on a ``path`` ref** — a
+    ``note`` has no diff fragment to anchor into — and must be a positive integer.
     Whether the index actually names an existing hunk (its upper bound) is **not**
     checked here: the validator is pure (it never sees ``fragments.json``); that
     resolution belongs to the Cockpit Linter's anchor rule, exactly as whether a
@@ -207,7 +209,7 @@ def _validate_evidence(value: object, loc: str) -> list[AnalysisError]:
 
 
 def _validate_hunk(value: object, ref: Mapping[str, object], loc: str) -> list[AnalysisError]:
-    """A ``{path}`` ref's optional ``hunk``: a 1-based hunk index (schema 0.3)."""
+    """A ``{path}`` ref's optional ``hunk``: a 1-based hunk index (ADR-0014)."""
     errors: list[AnalysisError] = []
     # A hunk anchors into a diff fragment, which only a ``path`` ref has — a
     # ``note``-only ref (prose, a widened-in file) has nothing to anchor to.
@@ -223,92 +225,150 @@ def _validate_hunk(value: object, ref: Mapping[str, object], loc: str) -> list[A
     return errors
 
 
-def _validate_claim(
-    claim: Mapping[str, object], loc: str, thread_id: str, seen_ids: dict[str, str]
-) -> list[AnalysisError]:
-    """One L2 claim: the assertion a reviewer judges (ADR-0009, ADR-0012).
+def _validate_attention_notes(value: object, loc: str) -> list[AnalysisError]:
+    """``attention_notes``: optional muted asides — ``{text, evidence?}`` only (ADR-0016).
 
-    The contract: a stable id (``<thread-id>.c<N>`` — the disposition key and the
-    cockpit element id), a kind from the closed vocabulary, the agent's confidence,
-    at least one challenge question (what makes a claim auditable instead of a
-    verdict), and at least one evidence reference. Risk claims additionally carry
-    ``category`` + ``level``; ``level`` means risk severity and is risk-only.
+    A note is *narration from the negative side* (an untested behavior change, a
+    goal gap), not an adjudicated finding: it carries no severity, no category, no
+    level, no disposition of its own. Those hunting attributes are lens-gated, so a
+    note that carries one is rejected — that is what keeps issue-finding out of the
+    default spine. ``text`` is required; ``evidence`` (if present) is validated like
+    any step's evidence.
+    """
+    objects, errors = _as_objects(value, loc)
+    for i, note in objects:
+        note_loc = f"{loc}[{i}]"
+        errors.extend(_require_str(note.get("text"), f"{note_loc}.text"))
+        if "evidence" in note:
+            errors.extend(_validate_evidence(note["evidence"], f"{note_loc}.evidence"))
+        for key in _FORBIDDEN_NOTE_KEYS:
+            if key in note:
+                errors.append(
+                    AnalysisError(
+                        f"{note_loc}.{key}",
+                        f"an attention note carries no {key!r} — severity/category/level are "
+                        "lens-gated hunting attributes, not a default surface (ADR-0016)",
+                    )
+                )
+    return errors
+
+
+def _validate_step(
+    step: Mapping[str, object],
+    loc: str,
+    thread_id: str,
+    seen_ids: dict[str, str],
+    step_ids_seen: set[str],
+    pending_relates: list[tuple[str, str | None, object]],
+) -> list[AnalysisError]:
+    """One L2 Review Step: a guided stop on the walkthrough (ADR-0009/0012/0016).
+
+    The contract: a stable id (``<thread-id>.s<N>`` — the disposition key and the
+    cockpit element id), a Behavior Impact from the closed vocabulary, the agent's
+    confidence, a ``why_now`` (why the step sits here on the route), at least one
+    evidence reference, and — where the reviewer has a comparison to make
+    (behavior-change / behavior-preserving / unknown-impact) — at least one
+    ``review_prompt``. ``relates_to`` links (validated for id integrity after every
+    step is known) and ``attention_notes`` are optional.
     """
     errors: list[AnalysisError] = []
 
-    claim_id = claim.get("id")
-    errors.extend(_require_str(claim_id, f"{loc}.id"))
-    if isinstance(claim_id, str) and claim_id.strip():
-        prefix, dot, suffix = claim_id.partition(".")
-        if prefix != thread_id or dot != "." or not _CLAIM_ID_SUFFIX.match(suffix):
+    step_id = step.get("id")
+    errors.extend(_require_str(step_id, f"{loc}.id"))
+    if isinstance(step_id, str) and step_id.strip():
+        prefix, dot, suffix = step_id.partition(".")
+        if prefix != thread_id or dot != "." or not _STEP_ID_SUFFIX.match(suffix):
             errors.append(
                 AnalysisError(
                     f"{loc}.id",
-                    f"must be '{thread_id}.c<N>' (its thread's id + '.c<N>'), got {claim_id!r}",
+                    f"must be '{thread_id}.s<N>' (its thread's id + '.s<N>'), got {step_id!r}",
                 )
             )
-        elif claim_id in seen_ids:
-            errors.append(AnalysisError(f"{loc}.id", f"duplicate id {claim_id!r}"))
+        elif step_id in seen_ids:
+            errors.append(AnalysisError(f"{loc}.id", f"duplicate id {step_id!r}"))
         else:
-            seen_ids[claim_id] = loc
+            seen_ids[step_id] = loc
+            step_ids_seen.add(step_id)
 
-    kind = claim.get("kind")
-    errors.extend(_require_enum(kind, f"{loc}.kind", CLAIM_KINDS))
-    errors.extend(_require_str(claim.get("summary"), f"{loc}.summary"))
-    if "detail" in claim:
-        errors.extend(_require_str(claim["detail"], f"{loc}.detail", allow_empty=True))
-    errors.extend(_require_enum(claim.get("confidence"), f"{loc}.confidence", CONFIDENCE_LEVELS))
-    errors.extend(
-        _require_str_list(claim.get("challenge_questions"), f"{loc}.challenge_questions", min_len=1)
-    )
-    errors.extend(_validate_evidence(claim.get("evidence"), f"{loc}.evidence"))
+    impact = step.get("impact")
+    errors.extend(_require_enum(impact, f"{loc}.impact", IMPACTS))
+    errors.extend(_require_str(step.get("summary"), f"{loc}.summary"))
+    if "detail" in step:
+        errors.extend(_require_str(step["detail"], f"{loc}.detail", allow_empty=True))
+    errors.extend(_require_enum(step.get("confidence"), f"{loc}.confidence", CONFIDENCE_LEVELS))
+    errors.extend(_require_str(step.get("why_now"), f"{loc}.why_now"))
 
-    # category: required on risk claims, optional framing elsewhere; always vocabulary.
-    if kind == "risk" and "category" not in claim:
-        errors.append(AnalysisError(f"{loc}.category", "required on a risk claim"))
-    if "category" in claim:
-        errors.extend(_require_enum(claim["category"], f"{loc}.category", RISK_CATEGORIES))
+    # review_prompts: required (≥1) where the reviewer has a comparison to make;
+    # optional on test-change / mechanical-change, but well-formed if present.
+    if impact in PROMPT_REQUIRED_IMPACTS:
+        errors.extend(
+            _require_str_list(step.get("review_prompts"), f"{loc}.review_prompts", min_len=1)
+        )
+    elif "review_prompts" in step:
+        errors.extend(_require_str_list(step["review_prompts"], f"{loc}.review_prompts"))
 
-    # level: risk severity — required on risk claims, meaningless (so rejected) elsewhere.
-    if kind == "risk":
-        errors.extend(_require_enum(claim.get("level"), f"{loc}.level", RISK_LEVELS))
-    elif "level" in claim:
-        errors.append(AnalysisError(f"{loc}.level", "only a risk claim carries a level"))
+    errors.extend(_validate_evidence(step.get("evidence"), f"{loc}.evidence"))
 
-    # omission_kind: what the omission is adjacent to — omission claims only.
-    if "omission_kind" in claim:
-        if kind == "omission":
-            errors.extend(
-                _require_enum(claim["omission_kind"], f"{loc}.omission_kind", OMISSION_KINDS)
-            )
-        else:
-            errors.append(
-                AnalysisError(
-                    f"{loc}.omission_kind", "only an omission claim carries omission_kind"
-                )
-            )
+    if "attention_notes" in step:
+        errors.extend(_validate_attention_notes(step["attention_notes"], f"{loc}.attention_notes"))
+
+    # relates_to: shape-checked now, id-integrity after all steps are collected (a
+    # link may point forward into a later thread, so the full id set must exist first).
+    if "relates_to" in step:
+        errors.extend(_require_str_list(step["relates_to"], f"{loc}.relates_to"))
+        own = step_id if isinstance(step_id, str) else None
+        pending_relates.append((f"{loc}.relates_to", own, step["relates_to"]))
 
     return errors
 
 
-def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str], list[str]]:
+def _validate_relates_to(
+    pending_relates: Sequence[tuple[str, str | None, object]], step_ids_seen: set[str]
+) -> list[AnalysisError]:
+    """``relates_to`` id integrity: each target is a real, other step id (ADR-0016).
+
+    Runs after every thread is walked, so a step may relate forward to a later
+    thread's step. A dangling id (no such step) and a self-reference (a step relating
+    to itself) are both rejected — the Stage renders these as one-click jumps, so a
+    bad id would resolve to nothing.
+    """
+    errors: list[AnalysisError] = []
+    for loc, own_id, values in pending_relates:
+        if not isinstance(values, Sequence) or isinstance(values, str | bytes):
+            continue  # a non-list was already reported by _require_str_list
+        for i, target in enumerate(values):
+            if not isinstance(target, str):
+                continue  # a non-string item was already reported
+            target_loc = f"{loc}[{i}]"
+            if target == own_id:
+                errors.append(
+                    AnalysisError(target_loc, f"a step cannot relate to itself ({target!r})")
+                )
+            elif target not in step_ids_seen:
+                errors.append(AnalysisError(target_loc, f"unknown step id {target!r}"))
+    return errors
+
+
+def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str]]:
     """``threads``: ≥1 narrative threads in descent order (ADR-0009's L1).
 
     Thread order *is* the Review Route — the recommended reading order. Each thread
     carries a stable id (``t<N>``), a title, a summary, the changed files it covers
-    (``paths``, may be empty for a purely-adjacent thread), and ≥1 claims.
+    (``paths``, may be empty for a purely-adjacent thread), and ≥1 steps. A thread
+    carries **no authored impact** — its character is derived from its steps
+    (ADR-0016), so an ``impact`` key on a thread is rejected.
 
-    Returns ``(errors, thread_ids, goal_omission_locs)``: the well-formed thread ids
-    in analysis order (what ``alignment`` must partition) and the locations of claims
-    carrying ``omission_kind: "goal"`` (which only a non-null ``alignment`` permits).
+    Returns ``(errors, thread_ids)``: the well-formed thread ids in analysis order
+    (what ``alignment`` must partition).
     """
     objects, errors = _as_objects(value, "threads")
     if not errors and not objects:
         errors.append(AnalysisError("threads", "expected at least 1 item(s), got 0"))
 
     seen_ids: dict[str, str] = {}
+    step_ids_seen: set[str] = set()
+    pending_relates: list[tuple[str, str | None, object]] = []
     thread_ids: list[str] = []
-    goal_omission_locs: list[str] = []
     for i, thread in objects:
         loc = f"threads[{i}]"
         thread_id = thread.get("id")
@@ -327,44 +387,44 @@ def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str], li
         errors.extend(_require_str(thread.get("summary"), f"{loc}.summary"))
         errors.extend(_require_str_list(thread.get("paths"), f"{loc}.paths"))
 
-        claims, claim_errors = _as_objects(thread.get("claims"), f"{loc}.claims")
-        errors.extend(claim_errors)
-        if not claim_errors and not claims:
-            errors.append(AnalysisError(f"{loc}.claims", "expected at least 1 item(s), got 0"))
-        for j, claim in claims:
-            claim_loc = f"{loc}.claims[{j}]"
-            errors.extend(_validate_claim(claim, claim_loc, tid, seen_ids))
-            if claim.get("omission_kind") == "goal":
-                goal_omission_locs.append(claim_loc)
+        # A thread's impact is derived, never authored (ADR-0016) — reject it.
+        if "impact" in thread:
+            errors.append(
+                AnalysisError(
+                    f"{loc}.impact",
+                    "a thread carries no impact — thread character is derived from its "
+                    "steps' Behavior Impact (ADR-0016)",
+                )
+            )
 
-    return errors, thread_ids, goal_omission_locs
+        steps, step_errors = _as_objects(thread.get("steps"), f"{loc}.steps")
+        errors.extend(step_errors)
+        if not step_errors and not steps:
+            errors.append(AnalysisError(f"{loc}.steps", "expected at least 1 item(s), got 0"))
+        for j, step in steps:
+            step_loc = f"{loc}.steps[{j}]"
+            errors.extend(
+                _validate_step(step, step_loc, tid, seen_ids, step_ids_seen, pending_relates)
+            )
+
+    errors.extend(_validate_relates_to(pending_relates, step_ids_seen))
+    return errors, thread_ids
 
 
-def _validate_alignment(
-    value: object, thread_ids: Sequence[str], goal_omission_locs: Sequence[str]
-) -> list[AnalysisError]:
+def _validate_alignment(value: object, thread_ids: Sequence[str]) -> list[AnalysisError]:
     """``alignment``: the goal↔implementation partition (ADR-0010), or ``null``.
 
     With a stated goal, every thread is accounted for: it either **serves the
     goal** (``serves_goal``) or is a **drive-by** (``drive_by``) — the two lists
     partition the thread ids (each exactly once, none missing, none unknown).
-    What the goal asked for that no thread delivers is not listed here: it lives
-    as an ``omission`` claim with ``omission_kind: "goal"`` on its thread, so a
-    disposition can attach to it like any other claim (ADR-0012).
+    What the goal asked for that no thread delivers is not listed here: since
+    ADR-0016 it surfaces as an Attention Note at L0, not a schema kind.
 
-    ``null`` means no stated goal was found (``context.json``'s ``goal`` is
-    null); nothing can then be unserved, so goal-kind omission claims are
-    rejected — an inferred intent is never measured like a stated goal.
+    ``null`` means no stated goal was found (``context.json``'s ``goal`` is null);
+    there is then nothing to measure the threads against.
     """
     if value is None:
-        return [
-            AnalysisError(
-                f"{loc}.omission_kind",
-                "'goal' requires a non-null alignment — with no stated goal, "
-                "nothing can be goal-unserved",
-            )
-            for loc in goal_omission_locs
-        ]
+        return []
     if not isinstance(value, Mapping):
         return [AnalysisError("alignment", f"expected an object or null, got {_typename(value)}")]
 
@@ -412,10 +472,9 @@ def _validate_alignment(
 def _validate_test_runner(value: object) -> list[AnalysisError]:
     """``test_runner``: ``{runner, runner_evidence?, command?}`` — all nullable.
 
-    The read-only runner detection from step 2. Concrete things to *check* are
-    ``verify`` claims on their threads (ADR-0009: the old checklist items became
-    claims so dispositions can attach to them, ADR-0012); this block only records
-    what runner exists. The runner is *suggested, never executed* (DESIGN).
+    The read-only runner detection from step 2. It only records what runner exists;
+    the runner is *suggested, never executed* (DESIGN). Concrete things to check are
+    review_prompts on their steps now, not a separate checklist (ADR-0016).
     """
     if not isinstance(value, Mapping):
         return [AnalysisError("test_runner", f"expected an object, got {_typename(value)}")]
@@ -451,23 +510,24 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
 
     Checks the top-level object carries the schema tag, a non-empty ``title`` and
     ``intent_summary`` (L0's fallback read when there is no stated goal,
-    ADR-0010), ≥1 threads each with ≥1 substantiated claims (ids well-formed and
-    unique — the disposition keys of ADR-0012), the ``alignment`` partition
-    measuring the threads against the stated goal (nullable — ``null`` when no
-    goal was found), the ``widened_into`` accountability list (ADR-0011: files
-    read beyond the diff, possibly empty), the ``test_runner`` block, and
-    ``diagrams``. Returns a flat list of :class:`AnalysisError` with ``location``
-    paths (e.g. ``threads[0].claims[2].level``) so a malformed file points the
-    agent straight at what to fix.
+    ADR-0010), ≥1 threads each with ≥1 substantiated steps (ids well-formed and
+    unique — the disposition keys of ADR-0012; ``relates_to`` links resolving to
+    real steps), the ``alignment`` partition measuring the threads against the
+    stated goal (nullable — ``null`` when no goal was found), the ``widened_into``
+    accountability list (ADR-0011: files read beyond the diff, possibly empty), the
+    ``test_runner`` block, and ``diagrams``. Returns a flat list of
+    :class:`AnalysisError` with ``location`` paths (e.g.
+    ``threads[0].steps[2].review_prompts``) so a malformed file points the narrator
+    straight at what to fix.
     """
     if not isinstance(obj, Mapping):
         return [AnalysisError("$", f"analysis must be a JSON object, got {_typename(obj)}")]
 
     errors: list[AnalysisError] = []
 
-    # Pin to the exact supported revision: this validator encodes the 0.3 shape, so
-    # an older or unknown tag (e.g. review-analysis/0.2) must fail rather than be
-    # validated against rules it does not match. Bump SCHEMA when the shape changes.
+    # Pin to the exact supported revision: this validator encodes the 0.4 shape, so
+    # an older or unknown tag (e.g. review-analysis/0.3) must fail rather than be
+    # validated against rules it does not match. The break is clean — no dual path.
     schema = obj.get("schema")
     if schema != SCHEMA:
         errors.append(AnalysisError("schema", f"must be {SCHEMA!r}, got {schema!r}"))
@@ -484,11 +544,10 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
 
     # Threads first: alignment is validated against the thread ids they declare.
     thread_ids: list[str] = []
-    goal_omission_locs: list[str] = []
     if "threads" not in obj:
         errors.append(AnalysisError("threads", "required section is missing"))
     else:
-        thread_errors, thread_ids, goal_omission_locs = _validate_threads(obj["threads"])
+        thread_errors, thread_ids = _validate_threads(obj["threads"])
         errors.extend(thread_errors)
 
     # ADR-0010: required (possibly null) so writer and validator cannot diverge —
@@ -496,7 +555,7 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
     if "alignment" not in obj:
         errors.append(AnalysisError("alignment", "required section is missing"))
     else:
-        errors.extend(_validate_alignment(obj["alignment"], thread_ids, goal_omission_locs))
+        errors.extend(_validate_alignment(obj["alignment"], thread_ids))
 
     for name, validator in _SECTION_VALIDATORS.items():
         if name not in obj:
@@ -507,16 +566,46 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
     return errors
 
 
-def claim_ids(analysis: object) -> list[str]:
-    """Every claim id declared in an analysis, in document order (duplicates kept).
+def step_ids(analysis: object) -> list[str]:
+    """Every step id declared in an analysis, in document order (duplicates kept).
 
     The set the Cockpit Linter (:mod:`branch_review.lint`) checks the authored DOM
-    against — the claims that must each have a ``<details class="claim">`` element and
+    against — the steps that must each have a ``<details class="step">`` element and
     a live-evidence seam, and no others. Deliberately **tolerant**: it walks the same
-    ``threads[].claims[].id`` path :func:`validate_analysis` guards but skips anything
+    ``threads[].steps[].id`` path :func:`validate_analysis` guards but skips anything
     malformed rather than raising, so a caller that lints an already-validated analysis
     gets its ids and one that passes a rough draft still gets whatever ids are present.
     Order and duplicates are preserved so the linter can report a repeated id itself.
+    """
+    ids: list[str] = []
+    threads = analysis.get("threads") if isinstance(analysis, Mapping) else None
+    if not isinstance(threads, list):
+        return ids
+    for thread in threads:
+        if not isinstance(thread, Mapping):
+            continue
+        steps = thread.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if isinstance(step, Mapping) and isinstance(step.get("id"), str):
+                ids.append(step["id"])
+    return ids
+
+
+def claim_ids(analysis: object) -> list[str]:
+    """Legacy id walk over the retired ``threads[].claims[]`` path — **transitional**.
+
+    The deep consumers of the id set — the Cockpit Linter (:mod:`branch_review.lint`),
+    Reviewer Dispositions (:mod:`branch_review.dispositions`), and live-evidence
+    injection (:mod:`branch_review.evidence`) — still speak the 0.3 claim vocabulary
+    end to end (DOM ``class="claim"``, ``brc:evidence:<claim id>`` seams, the
+    ``verified | concern | question-open`` states). They are reframed onto Review
+    Steps in their own slices (#86/#87); until then they import *this* walker, so the
+    0.4 schema break lands in the validator without churning modules it doesn't own.
+    A 0.4 analysis has no ``claims`` key, so this returns ``[]`` for one — those
+    consumers are dormant against real runs until their slices wire the step-shaped
+    cockpit. Remove this once all three import :func:`step_ids`.
     """
     ids: list[str] = []
     threads = analysis.get("threads") if isinstance(analysis, Mapping) else None
@@ -537,7 +626,7 @@ def claim_ids(analysis: object) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     """CLI: validate an ``analysis.json`` file; exit non-zero on any problem.
 
-    The skill runs this after the agent authors ``analysis.json`` and before it
+    The skill runs this after the narrator authors ``analysis.json`` and before it
     authors the cockpit — a malformed analysis is fixed first, never rendered.
     """
     parser = argparse.ArgumentParser(
