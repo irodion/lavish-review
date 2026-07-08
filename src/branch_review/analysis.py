@@ -141,6 +141,19 @@ def _require_enum(value: object, location: str, allowed: Sequence[str]) -> list[
     return []
 
 
+def _forbid_keys(
+    mapping: Mapping[str, object], keys: Sequence[str], location: str, reason: str
+) -> list[AnalysisError]:
+    """None of ``keys`` may appear on ``mapping`` — the negative of ``_require_*``.
+
+    Lets a section validator state what must be *absent* as declaratively as it
+    states what must be present: a derived or lens-gated attribute that has no place
+    on this object (a thread's ``impact``, a note's ``severity``). ``reason`` is the
+    shared explanation; each offending key is located as ``<location>.<key>``.
+    """
+    return [AnalysisError(f"{location}.{key}", reason) for key in keys if key in mapping]
+
+
 def _typename(value: object) -> str:
     """A friendly type name for messages (``null`` rather than ``NoneType``)."""
     return "null" if value is None else type(value).__name__
@@ -241,15 +254,15 @@ def _validate_attention_notes(value: object, loc: str) -> list[AnalysisError]:
         errors.extend(_require_str(note.get("text"), f"{note_loc}.text"))
         if "evidence" in note:
             errors.extend(_validate_evidence(note["evidence"], f"{note_loc}.evidence"))
-        for key in _FORBIDDEN_NOTE_KEYS:
-            if key in note:
-                errors.append(
-                    AnalysisError(
-                        f"{note_loc}.{key}",
-                        f"an attention note carries no {key!r} — severity/category/level are "
-                        "lens-gated hunting attributes, not a default surface (ADR-0016)",
-                    )
-                )
+        errors.extend(
+            _forbid_keys(
+                note,
+                _FORBIDDEN_NOTE_KEYS,
+                note_loc,
+                "an attention note carries no severity, category, or level — those are "
+                "lens-gated hunting attributes, not a default surface (ADR-0016)",
+            )
+        )
     return errors
 
 
@@ -257,7 +270,6 @@ def _validate_step(
     step: Mapping[str, object],
     loc: str,
     thread_id: str,
-    seen_ids: dict[str, str],
     step_ids_seen: set[str],
     pending_relates: list[tuple[str, str | None, object]],
 ) -> list[AnalysisError]:
@@ -284,10 +296,9 @@ def _validate_step(
                     f"must be '{thread_id}.s<N>' (its thread's id + '.s<N>'), got {step_id!r}",
                 )
             )
-        elif step_id in seen_ids:
+        elif step_id in step_ids_seen:
             errors.append(AnalysisError(f"{loc}.id", f"duplicate id {step_id!r}"))
         else:
-            seen_ids[step_id] = loc
             step_ids_seen.add(step_id)
 
     impact = step.get("impact")
@@ -365,7 +376,11 @@ def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str]]:
     if not errors and not objects:
         errors.append(AnalysisError("threads", "expected at least 1 item(s), got 0"))
 
-    seen_ids: dict[str, str] = {}
+    # Two id sets, each with one purpose: thread ids (the ``thread_ids`` list below,
+    # which also carries their order for ``alignment``) and step ids (``step_ids_seen``,
+    # which serves both duplicate detection and ``relates_to`` integrity). Thread ids
+    # (``t<N>``) and step ids (``t<N>.s<N>``) can never collide, so the two namespaces
+    # stay cleanly separate.
     step_ids_seen: set[str] = set()
     pending_relates: list[tuple[str, str | None, object]] = []
     thread_ids: list[str] = []
@@ -377,10 +392,9 @@ def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str]]:
         if tid.strip():
             if not _THREAD_ID.match(tid):
                 errors.append(AnalysisError(f"{loc}.id", f"must be 't<N>', got {tid!r}"))
-            elif tid in seen_ids:
+            elif tid in thread_ids:
                 errors.append(AnalysisError(f"{loc}.id", f"duplicate id {tid!r}"))
             else:
-                seen_ids[tid] = loc
                 thread_ids.append(tid)
 
         errors.extend(_require_str(thread.get("title"), f"{loc}.title"))
@@ -388,14 +402,15 @@ def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str]]:
         errors.extend(_require_str_list(thread.get("paths"), f"{loc}.paths"))
 
         # A thread's impact is derived, never authored (ADR-0016) — reject it.
-        if "impact" in thread:
-            errors.append(
-                AnalysisError(
-                    f"{loc}.impact",
-                    "a thread carries no impact — thread character is derived from its "
-                    "steps' Behavior Impact (ADR-0016)",
-                )
+        errors.extend(
+            _forbid_keys(
+                thread,
+                ("impact",),
+                loc,
+                "a thread carries no authored impact — thread character is derived from "
+                "its steps' Behavior Impact (ADR-0016)",
             )
+        )
 
         steps, step_errors = _as_objects(thread.get("steps"), f"{loc}.steps")
         errors.extend(step_errors)
@@ -403,9 +418,7 @@ def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str]]:
             errors.append(AnalysisError(f"{loc}.steps", "expected at least 1 item(s), got 0"))
         for j, step in steps:
             step_loc = f"{loc}.steps[{j}]"
-            errors.extend(
-                _validate_step(step, step_loc, tid, seen_ids, step_ids_seen, pending_relates)
-            )
+            errors.extend(_validate_step(step, step_loc, tid, step_ids_seen, pending_relates))
 
     errors.extend(_validate_relates_to(pending_relates, step_ids_seen))
     return errors, thread_ids
@@ -566,16 +579,14 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
     return errors
 
 
-def step_ids(analysis: object) -> list[str]:
-    """Every step id declared in an analysis, in document order (duplicates kept).
+def _walk_ids(analysis: object, container_key: str) -> list[str]:
+    """Every ``threads[].<container_key>[].id`` in document order (duplicates kept).
 
-    The set the Cockpit Linter (:mod:`branch_review.lint`) checks the authored DOM
-    against — the steps that must each have a ``<details class="step">`` element and
-    a live-evidence seam, and no others. Deliberately **tolerant**: it walks the same
-    ``threads[].steps[].id`` path :func:`validate_analysis` guards but skips anything
-    malformed rather than raising, so a caller that lints an already-validated analysis
-    gets its ids and one that passes a rough draft still gets whatever ids are present.
-    Order and duplicates are preserved so the linter can report a repeated id itself.
+    The tolerant walk behind :func:`step_ids` and :func:`claim_ids`: it guards each
+    level and skips anything malformed rather than raising, so a caller that lints an
+    already-validated analysis gets its ids and one that passes a rough draft still
+    gets whatever ids are present. Order and duplicates are preserved so the linter
+    can report a repeated id itself.
     """
     ids: list[str] = []
     threads = analysis.get("threads") if isinstance(analysis, Mapping) else None
@@ -584,13 +595,23 @@ def step_ids(analysis: object) -> list[str]:
     for thread in threads:
         if not isinstance(thread, Mapping):
             continue
-        steps = thread.get("steps")
-        if not isinstance(steps, list):
+        items = thread.get(container_key)
+        if not isinstance(items, list):
             continue
-        for step in steps:
-            if isinstance(step, Mapping) and isinstance(step.get("id"), str):
-                ids.append(step["id"])
+        for item in items:
+            if isinstance(item, Mapping) and isinstance(item.get("id"), str):
+                ids.append(item["id"])
     return ids
+
+
+def step_ids(analysis: object) -> list[str]:
+    """Every step id declared in an analysis, in document order (duplicates kept).
+
+    The set the Cockpit Linter (:mod:`branch_review.lint`) checks the authored DOM
+    against — the steps that must each have a ``<details class="step">`` element and a
+    live-evidence seam, and no others.
+    """
+    return _walk_ids(analysis, "steps")
 
 
 def claim_ids(analysis: object) -> list[str]:
@@ -607,20 +628,7 @@ def claim_ids(analysis: object) -> list[str]:
     consumers are dormant against real runs until their slices wire the step-shaped
     cockpit. Remove this once all three import :func:`step_ids`.
     """
-    ids: list[str] = []
-    threads = analysis.get("threads") if isinstance(analysis, Mapping) else None
-    if not isinstance(threads, list):
-        return ids
-    for thread in threads:
-        if not isinstance(thread, Mapping):
-            continue
-        claims = thread.get("claims")
-        if not isinstance(claims, list):
-            continue
-        for claim in claims:
-            if isinstance(claim, Mapping) and isinstance(claim.get("id"), str):
-                ids.append(claim["id"])
-    return ids
+    return _walk_ids(analysis, "claims")
 
 
 def main(argv: list[str] | None = None) -> int:
