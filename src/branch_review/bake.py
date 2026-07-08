@@ -50,6 +50,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from branch_review.analysis import STEP_ID_PATTERN
 from branch_review.dispositions import (
     DISPOSITIONS_NAME,
     load_dispositions,
@@ -239,7 +240,7 @@ def _thread_titles(analysis: Mapping[str, object]) -> dict[str, str]:
 # The open tag of any ``<details>`` element, and within it a step-shaped id and any
 # previously baked disposition attribute (stripped first, so re-baking replaces).
 _DETAILS_TAG = re.compile(r"<details\b[^>]*>", re.IGNORECASE)
-_CLAIM_DETAILS_ID = re.compile(r'\bid\s*=\s*"(t\d+\.s\d+)"')
+_CLAIM_DETAILS_ID = re.compile(rf'\bid\s*=\s*"({STEP_ID_PATTERN})"')
 _DISPOSITION_ATTR = re.compile(r'\s+data-disposition\s*=\s*"[^"]*"')
 
 

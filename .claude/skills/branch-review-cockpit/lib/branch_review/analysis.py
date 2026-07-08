@@ -87,10 +87,22 @@ CONFIDENCE_LEVELS = ("high", "medium", "low")
 # default surface. Rejecting them keeps hunting from creeping back into the spine.
 _FORBIDDEN_NOTE_KEYS = ("severity", "category", "level")
 
-# Id shapes: threads are ``t<N>``; steps are ``<thread-id>.s<N>`` (the stable ids a
-# disposition attaches to and the cockpit element ids — ADR-0012/0016).
-_THREAD_ID = re.compile(r"^t\d+$")
+# Id shapes: a thread is ``t<N>``; a step is ``<thread-id>.s<N>`` (the stable ids a
+# disposition attaches to and the cockpit element ids — ADR-0012/0016). The lexical
+# shape is owned *here*, the module that mints ids: consumers that match a step id in
+# their own context (the live-evidence seam, the disposition bridge, the bake stamp)
+# import :data:`STEP_ID_PATTERN` instead of re-spelling ``t\d+\.s\d+``, so those regexes
+# can never drift from the validator.
+_THREAD_ID_BODY = r"t\d+"
+_THREAD_ID = re.compile(rf"^{_THREAD_ID_BODY}$")
 _STEP_ID_SUFFIX = re.compile(r"^s\d+$")
+
+#: The lexical shape of a step id (``t<N>.s<N>``), unanchored so a consumer can anchor
+#: it or embed it in a larger regex. The validator itself checks the stricter
+#: per-thread scoping (a step's prefix must equal its owning thread's id) by
+#: composition in :func:`_validate_step`; this flat shape is what a consumer needs when
+#: it only asks "is this a well-formed step id".
+STEP_ID_PATTERN = rf"{_THREAD_ID_BODY}\.s\d+"
 
 # A step's ``relates_to`` links, deferred for id-integrity checking until every step
 # id is known: ``(location, own step id, [(index, target id), …])`` — the targets are

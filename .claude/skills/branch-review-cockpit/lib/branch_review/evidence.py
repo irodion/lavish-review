@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from branch_review.analysis import STEP_ID_PATTERN
 from branch_review.analysis import step_ids as analysis_step_ids
 from branch_review.escape import diff_fragment, escape_text, evidence_seam_markers
 from branch_review.feedback import DEFAULT_COCKPIT
@@ -64,7 +65,7 @@ _SCHEMA = "review-live-evidence/0.1"
 # A step id as the analysis mints them (review-analysis/0.4, ADR-0016) — validated
 # before any seam string is built, so a hostile id can never smuggle markup or
 # marker syntax. (The L2 panel's DOM hook stays ``class="claim"`` until #88.)
-_CLAIM_ID = re.compile(r"^t\d+\.s\d+$")
+_CLAIM_ID = re.compile(rf"^{STEP_ID_PATTERN}$")
 
 
 def evidence_seam(claim_id: str) -> tuple[str, str]:

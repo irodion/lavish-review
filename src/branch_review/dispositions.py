@@ -36,6 +36,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
+from branch_review.analysis import STEP_ID_PATTERN
 from branch_review.analysis import step_ids as _analysis_step_ids
 from branch_review.feedback import LAST_POLL_NAME, Prompt, extract_prompts
 
@@ -51,7 +52,7 @@ _SCHEMA = "review-dispositions/0.1"
 # A step id as the analysis mints them: thread-scoped, e.g. ``t2.s3``
 # (review-analysis/0.4, ADR-0016). The disposition state vocabulary below is still
 # the 0.3 set; it is reframed to the five-state vocabulary in #87.
-_CLAIM_ID = re.compile(r"^t\d+\.s\d+$")
+_CLAIM_ID = re.compile(rf"^{STEP_ID_PATTERN}$")
 
 # The structured payload the in-page control attaches (spike #38): the SDK appends
 # ``data`` to the prompt text as a ``Context data:`` block holding the JSON.
@@ -59,7 +60,7 @@ _CONTEXT_DATA = re.compile(r"Context data:\s*(\{.*\})", re.DOTALL)
 
 # The guaranteed-floor fallback: the control's human-readable prompt line itself.
 _PROMPT_LINE = re.compile(
-    r"^Disposition set:\s*(t\d+\.s\d+)\s*->\s*(unreviewed|verified|concern|question-open)\b"
+    rf"^Disposition set:\s*({STEP_ID_PATTERN})\s*->\s*(unreviewed|verified|concern|question-open)\b"
 )
 
 

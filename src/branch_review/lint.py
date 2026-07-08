@@ -73,6 +73,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
+from branch_review.analysis import STEP_ID_PATTERN
 from branch_review.escape import (
     LAVISH_CDN,
     QA_SEAM_CLOSE,
@@ -158,7 +159,7 @@ _UNTRUSTED_RE = re.compile(
 # handle_comment (the ``<!--``/``-->`` stripped). Captures the step id from either.
 # Step ids are ``t<N>.s<N>`` since review-analysis/0.4 (ADR-0016); the L2 panel's DOM
 # hook is still ``class="claim"`` (renamed with the deck reframe, #88).
-_EVIDENCE_COMMENT = re.compile(r"^\s*/?brc:evidence:(t\d+\.s\d+)\s*$")
+_EVIDENCE_COMMENT = re.compile(rf"^\s*/?brc:evidence:({STEP_ID_PATTERN})\s*$")
 
 
 @dataclass(frozen=True)
