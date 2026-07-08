@@ -36,7 +36,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
-from branch_review.analysis import claim_ids as _analysis_claim_ids
+from branch_review.analysis import step_ids as _analysis_step_ids
 from branch_review.feedback import LAST_POLL_NAME, Prompt, extract_prompts
 
 # The closed disposition vocabulary (ADR-0012). ``unreviewed`` is the default and is
@@ -48,8 +48,10 @@ ANALYSIS_NAME = "analysis.json"
 
 _SCHEMA = "review-dispositions/0.1"
 
-# A claim id as ADR-0012 mints them: thread-scoped, e.g. ``t2.c3``.
-_CLAIM_ID = re.compile(r"^t\d+\.c\d+$")
+# A step id as the analysis mints them: thread-scoped, e.g. ``t2.s3``
+# (review-analysis/0.4, ADR-0016). The disposition state vocabulary below is still
+# the 0.3 set; it is reframed to the five-state vocabulary in #87.
+_CLAIM_ID = re.compile(r"^t\d+\.s\d+$")
 
 # The structured payload the in-page control attaches (spike #38): the SDK appends
 # ``data`` to the prompt text as a ``Context data:`` block holding the JSON.
@@ -57,7 +59,7 @@ _CONTEXT_DATA = re.compile(r"Context data:\s*(\{.*\})", re.DOTALL)
 
 # The guaranteed-floor fallback: the control's human-readable prompt line itself.
 _PROMPT_LINE = re.compile(
-    r"^Disposition set:\s*(t\d+\.c\d+)\s*->\s*(unreviewed|verified|concern|question-open)\b"
+    r"^Disposition set:\s*(t\d+\.s\d+)\s*->\s*(unreviewed|verified|concern|question-open)\b"
 )
 
 
@@ -116,12 +118,14 @@ def extract_updates(prompts: Iterable[Prompt]) -> list[tuple[str, str]]:
 
 
 def claim_ids(analysis: Mapping[str, object]) -> set[str]:
-    """The claim ids the analysis actually minted — the only valid disposition keys.
+    """The step ids the analysis actually minted — the only valid disposition keys.
 
-    The set of the canonical ordered walk (:func:`branch_review.analysis.claim_ids`);
-    dispositions only needs membership, so it drops order and duplicates.
+    The set of the canonical ordered walk (:func:`branch_review.analysis.step_ids`,
+    review-analysis/0.4); dispositions only needs membership, so it drops order and
+    duplicates. (The function name and the disposition state vocabulary are reframed
+    to steps in #87; here only the id source moves off the retired claim walk.)
     """
-    return set(_analysis_claim_ids(analysis))
+    return set(_analysis_step_ids(analysis))
 
 
 def apply_updates(
@@ -161,7 +165,7 @@ def progress(
         if not isinstance(thread, Mapping):
             continue
         tid = thread.get("id")
-        claims = thread.get("claims")
+        claims = thread.get("steps")
         if not isinstance(tid, str) or not isinstance(claims, list):
             continue
         ids = [c["id"] for c in claims if isinstance(c, Mapping) and isinstance(c.get("id"), str)]

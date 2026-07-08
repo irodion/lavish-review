@@ -19,7 +19,6 @@ from branch_review.analysis import (
     IMPACTS,
     PROMPT_REQUIRED_IMPACTS,
     SCHEMA,
-    claim_ids,
     step_ids,
     validate_analysis,
 )
@@ -202,17 +201,6 @@ def test_step_ids_tolerates_malformed_shapes() -> None:
     assert step_ids({"threads": "nope"}) == []
     mixed = {"threads": [{"steps": [{"id": 7}, {"summary": "no id"}, {"id": "t1.s1"}]}]}
     assert step_ids(mixed) == ["t1.s1"]
-
-
-def test_claim_ids_is_the_legacy_claims_walker() -> None:
-    # The clean break splits the id walk: ``step_ids`` reads the new ``steps`` key,
-    # while ``claim_ids`` stays a legacy walk over the retired ``claims`` key for the
-    # deep consumers not yet migrated (#86/#87). A 0.4 doc has no ``claims``, so the
-    # legacy walker yields nothing for it; a legacy shape still yields its ids.
-    assert claim_ids(_valid()) == []
-    legacy = {"threads": [{"claims": [{"id": "t1.c1"}, {"id": "t1.c2"}]}]}
-    assert claim_ids(legacy) == ["t1.c1", "t1.c2"]
-    assert step_ids(legacy) == []  # the new walker ignores the retired key
 
 
 def test_null_alignment_is_valid() -> None:

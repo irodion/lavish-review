@@ -415,15 +415,15 @@ def _structured_cockpit(
     qa_seam: str = _QA_SEAM,
     body_extra: str = "",
 ) -> str:
-    """A well-formed two-claim cockpit (t1.c1, t1.c2) with both seams and the Q&A seam."""
+    """A well-formed two-claim cockpit (t1.s1, t1.s2) with both seams and the Q&A seam."""
     if claims is None:
-        claims = _claim("t1.c1") + _claim("t1.c2")
+        claims = _claim("t1.s1") + _claim("t1.s2")
     body = f'<section class="thread" id="t1"><h2>Thread</h2>{claims}</section>{body_extra}'
     return _cockpit(csp=INTERACTIVE_CSP, body=f"{body}\n{qa_seam}")
 
 
 # The analysis's claim id set for the well-formed fixture above.
-_ANALYSIS_IDS = ["t1.c1", "t1.c2"]
+_ANALYSIS_IDS = ["t1.s1", "t1.s2"]
 
 
 def test_well_formed_cockpit_passes_the_structural_pass() -> None:
@@ -441,13 +441,13 @@ def test_structural_pass_is_off_without_claim_ids() -> None:
 _STRUCTURAL_CASES = [
     (
         "dangling-anchor",
-        {"body_extra": '<a href="#t9.c9">see</a>'},
+        {"body_extra": '<a href="#t9.s9">see</a>'},
         _ANALYSIS_IDS,
         "dangling-anchor",
     ),
     (
         "resolving-anchor-ok",
-        {"body_extra": '<a href="#t1.c2">see</a>'},
+        {"body_extra": '<a href="#t1.s2">see</a>'},
         _ANALYSIS_IDS,
         None,
     ),
@@ -459,19 +459,19 @@ _STRUCTURAL_CASES = [
     ),
     (
         "claim-missing-from-dom",
-        {"claims": _claim("t1.c1")},  # analysis expects t1.c1 AND t1.c2
+        {"claims": _claim("t1.s1")},  # analysis expects t1.s1 AND t1.s2
         _ANALYSIS_IDS,
         "claim-id-missing",
     ),
     (
         "claim-extra-in-dom",
-        {"claims": _claim("t1.c1") + _claim("t1.c2") + _claim("t1.c3")},
+        {"claims": _claim("t1.s1") + _claim("t1.s2") + _claim("t1.s3")},
         _ANALYSIS_IDS,
         "claim-id-unknown",
     ),
     (
         "claim-duplicate",
-        {"claims": _claim("t1.c1") + _claim("t1.c1") + _claim("t1.c2")},
+        {"claims": _claim("t1.s1") + _claim("t1.s1") + _claim("t1.s2")},
         _ANALYSIS_IDS,
         "claim-id-duplicate",
     ),
@@ -491,13 +491,13 @@ _STRUCTURAL_CASES = [
     ),
     (
         "missing-evidence-seam",
-        {"claims": _claim("t1.c1", evidence_seam=False) + _claim("t1.c2")},
+        {"claims": _claim("t1.s1", evidence_seam=False) + _claim("t1.s2")},
         _ANALYSIS_IDS,
         "seam-missing",
     ),
     (
         "unpaired-evidence-seam",
-        {"claims": _claim("t1.c1", seam_close=False) + _claim("t1.c2")},
+        {"claims": _claim("t1.s1", seam_close=False) + _claim("t1.s2")},
         _ANALYSIS_IDS,
         "seam-missing",
     ),
@@ -511,22 +511,22 @@ _STRUCTURAL_CASES = [
     ),
     (
         "reversed-evidence-seam",
-        {"claims": _claim("t1.c1", seam_reversed=True) + _claim("t1.c2")},
+        {"claims": _claim("t1.s1", seam_reversed=True) + _claim("t1.s2")},
         _ANALYSIS_IDS,
         "seam-missing",
     ),
-    # Misplaced seam: t1.c1's seam is fillable but planted inside t1.c2's panel, so the
-    # injector would render t1.c1's evidence under t1.c2. Lint must reject the misfile.
+    # Misplaced seam: t1.s1's seam is fillable but planted inside t1.s2's panel, so the
+    # injector would render t1.s1's evidence under t1.s2. Lint must reject the misfile.
     (
         "misplaced-evidence-seam",
         {
-            "claims": _claim("t1.c1", evidence_seam=False)
-            + _claim("t1.c2", extra_body="<!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1-->")
+            "claims": _claim("t1.s1", evidence_seam=False)
+            + _claim("t1.s2", extra_body="<!--brc:evidence:t1.s1--><!--/brc:evidence:t1.s1-->")
         },
         _ANALYSIS_IDS,
         "seam-misplaced",
     ),
-    # Raw-text-hidden seam: t1.c1's markers sit inside a <style> (any raw-text element —
+    # Raw-text-hidden seam: t1.s1's markers sit inside a <style> (any raw-text element —
     # <textarea>/<title>/<script>/<xmp> too). _seam_is_fillable finds them by substring,
     # but HTMLParser emits no handle_comment for raw-text content, so the markers are
     # attributed to no panel. inject_evidence would still match them and write the answer
@@ -534,8 +534,8 @@ _STRUCTURAL_CASES = [
     (
         "raw-text-hidden-evidence-seam",
         {
-            "claims": _claim("t1.c1", evidence_seam=False) + _claim("t1.c2"),
-            "body_extra": "<style><!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1--></style>",
+            "claims": _claim("t1.s1", evidence_seam=False) + _claim("t1.s2"),
+            "body_extra": "<style><!--brc:evidence:t1.s1--><!--/brc:evidence:t1.s1--></style>",
         },
         _ANALYSIS_IDS,
         "seam-misplaced",
@@ -563,8 +563,8 @@ def test_duplicate_class_uses_browser_first_value_semantics() -> None:
     # so the panel is NOT a claim and the analysis's claim goes missing — lint must not
     # be fooled by the last-wins dict into believing the claim panel exists.
     panel = (
-        '<details class="not-claim" class="claim" id="t1.c1"><summary>c</summary>'
-        '<div class="claim-body"><!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1--></div>'
+        '<details class="not-claim" class="claim" id="t1.s1"><summary>c</summary>'
+        '<div class="claim-body"><!--brc:evidence:t1.s1--><!--/brc:evidence:t1.s1--></div>'
         "</details>"
     )
     html = _cockpit(
@@ -572,7 +572,7 @@ def test_duplicate_class_uses_browser_first_value_semantics() -> None:
         body=f'<section class="thread" id="t1">{panel}</section>\n{_QA_SEAM}',
     )
     assert "claim-id-missing" in _rules(
-        lint_cockpit(html, csp_mode="interactive", claim_ids=["t1.c1"])
+        lint_cockpit(html, csp_mode="interactive", claim_ids=["t1.s1"])
     )
 
 
@@ -605,8 +605,8 @@ def test_real_escape_boundary_cockpit_passes_structural_pass() -> None:
         commit_lines=["abc123 feat: <script>alert(1)</script>"],
     )
     diff = diff_fragment('+x = "<script>alert(1)</script>"\n')
-    claims = _claim("t1.c1", extra_body='<a href="#t1.c2">related</a>') + _claim(
-        "t1.c2", extra_body=frag + diff
+    claims = _claim("t1.s1", extra_body='<a href="#t1.s2">related</a>') + _claim(
+        "t1.s2", extra_body=frag + diff
     )
     html = _structured_cockpit(claims=claims)
     assert lint_cockpit(html, csp_mode="interactive", claim_ids=_ANALYSIS_IDS) == []
@@ -620,8 +620,8 @@ def test_real_escape_boundary_cockpit_passes_structural_pass() -> None:
 
 
 def _cockpit_with_hunk_evidence(*, anchor: str, fragment_html: str) -> str:
-    """A two-claim cockpit whose t1.c1 links evidence to ``anchor`` and shows the fragment."""
-    claims = _claim("t1.c1", extra_body=f'<a href="#{anchor}">jump to hunk</a>') + _claim("t1.c2")
+    """A two-claim cockpit whose t1.s1 links evidence to ``anchor`` and shows the fragment."""
+    claims = _claim("t1.s1", extra_body=f'<a href="#{anchor}">jump to hunk</a>') + _claim("t1.s2")
     return _structured_cockpit(
         claims=claims,
         body_extra=f"<section><h2>Evidence</h2>{fragment_html}</section>",
@@ -664,21 +664,21 @@ def test_seam_markers_come_from_the_escape_leaf() -> None:
     from branch_review.evidence import evidence_seam
 
     assert bake_qa is escape.QA_SEAM_OPEN
-    assert evidence_seam("t1.c2") == escape.evidence_seam_markers("t1.c2")
+    assert evidence_seam("t1.s2") == escape.evidence_seam_markers("t1.s2")
 
 
 # --- CLI: --analysis turns on the structural pass ----------------------------
 
 
 def _analysis_json(ids: list[str]) -> dict[str, object]:
-    """A minimal analysis-shaped object carrying just the claim ids to extract."""
-    return {"threads": [{"claims": [{"id": cid} for cid in ids]}]}
+    """A minimal analysis-shaped object carrying just the step ids to extract."""
+    return {"threads": [{"steps": [{"id": cid} for cid in ids]}]}
 
 
 def test_cli_without_analysis_skips_structural(tmp_path: Path) -> None:
     # A cockpit with a dangling anchor but no --analysis: security-only lint passes.
     page = tmp_path / "review.html"
-    page.write_text(_structured_cockpit(body_extra='<a href="#t9.c9">x</a>'), encoding="utf-8")
+    page.write_text(_structured_cockpit(body_extra='<a href="#t9.s9">x</a>'), encoding="utf-8")
     assert main([str(page), "--csp-mode", "interactive"]) == 0
 
 
@@ -686,7 +686,7 @@ def test_cli_with_analysis_runs_structural(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     page = tmp_path / "review.html"
-    page.write_text(_structured_cockpit(body_extra='<a href="#t9.c9">x</a>'), encoding="utf-8")
+    page.write_text(_structured_cockpit(body_extra='<a href="#t9.s9">x</a>'), encoding="utf-8")
     analysis = tmp_path / "analysis.json"
     analysis.write_text(json.dumps(_analysis_json(_ANALYSIS_IDS)), encoding="utf-8")
     assert main([str(page), "--csp-mode", "interactive", "--analysis", str(analysis)]) == 1

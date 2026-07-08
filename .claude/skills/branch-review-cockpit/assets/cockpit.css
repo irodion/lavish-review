@@ -295,12 +295,18 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
   border: 1px solid currentcolor;
   white-space: nowrap;
 }
-/* Judgment-color discipline (ADR-0014): claim *kinds* are neutral chips — colour
-   is reserved for the judgment signals below. Each kind reads by its word alone. */
-.kind-behavior,
-.kind-risk,
-.kind-omission,
-.kind-verify { color: var(--muted); }
+/* Judgment-color discipline (ADR-0014/0016): a step's *Behavior Impact* is a neutral
+   chip — colour is reserved for the judgment signals below (confidence, disposition).
+   Each impact reads by its word alone; behavior-preserving reads verify-then-skim, not
+   "safe" — no green, no checkmark — leaning on the prominent confidence chip beside it. */
+.impact-behavior-change,
+.impact-behavior-preserving,
+.impact-test-change,
+.impact-mechanical-change,
+.impact-unknown-impact { color: var(--muted); }
+/* A derived impact belongs to a step, never a thread; behavior-preserving is dotted so
+   the eye registers "confirm, then skim" without a colour cue. */
+.impact-behavior-preserving { border-style: dotted; }
 
 .confidence-high { color: var(--level-low); }
 .confidence-medium { color: var(--level-medium); }
@@ -365,6 +371,15 @@ section.thread > h2 .thread-id {
   color: var(--muted);
 }
 .thread-paths code { color: var(--accent); background: none; border: none; padding: 0; }
+/* Derived impact row: the thread's character computed from its steps' Behavior Impact
+   (ADR-0016) — one neutral count chip per impact present, so a mixed thread looks mixed.
+   Never authored on the thread; it is a summary of the steps below. */
+.thread-impacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+}
 
 /* L2 — claims: native <details>, closed by default (progressive disclosure). */
 details.claim {
@@ -387,6 +402,15 @@ details.claim > summary:hover { background: var(--panel); }
 details.claim[open] > summary { border-bottom: 1px solid var(--border); }
 details.claim > .claim-body { padding: 0.75rem 1rem; }
 .claim-body .detail { margin: 0 0 0.6rem; }
+/* why_now: one line on why the reviewer reads this step here (ADR-0016) — set off
+   from the narration prose, quiet but not buried. */
+.why-now {
+  margin: 0 0 0.6rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 0.92rem;
+}
 .claim-body h4 {
   margin: 0.6rem 0 0.25rem;
   font-size: 0.75rem;
@@ -394,13 +418,26 @@ details.claim > .claim-body { padding: 0.75rem 1rem; }
   letter-spacing: 0.05em;
   color: var(--muted);
 }
-.challenge-questions {
+.challenge-questions,
+.review-prompts {
   margin: 0;
   padding-left: 1.1rem;
   color: var(--muted);
   font-size: 0.92rem;
 }
-.challenge-questions li { margin: 0.2rem 0; }
+.challenge-questions li,
+.review-prompts li { margin: 0.2rem 0; }
+/* Attention Note: a muted, secondary aside (ADR-0016) — an untested behavior change
+   or a goal gap. Never a Map dot, never counted in progress; it must read as a note,
+   not a finding, so it carries no severity colour. */
+.attention-note {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 2px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 0.88rem;
+}
 .evidence-list { margin: 0; padding-left: 1.1rem; font-size: 0.92rem; }
 .evidence-list li { margin: 0.2rem 0; }
 .evidence-list a {

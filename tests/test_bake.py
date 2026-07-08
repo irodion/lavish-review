@@ -75,8 +75,8 @@ _TOON_MULTI = (
 # corrupting the JSON and the ``Disposition set:`` line — the regression pinned here.
 _TOON_ESCAPED_NEWLINES = (
     "prompts[1]{uid,prompt,selector,tag,text}:\n"
-    '  "9","Disposition set: t2.c4 -> question-open\\n\\nContext data:\\n'
-    '{\\n  \\"kind\\": \\"disposition\\",\\n  \\"claim\\": \\"t2.c4\\",\\n'
+    '  "9","Disposition set: t2.s4 -> question-open\\n\\nContext data:\\n'
+    '{\\n  \\"kind\\": \\"disposition\\",\\n  \\"claim\\": \\"t2.s4\\",\\n'
     '  \\"disposition\\": \\"question-open\\"\\n}",'
     '"summary > button",choice,disposition:question-open\n'
     'next_step: "..."\n'
@@ -115,10 +115,10 @@ def test_extract_span_annotation_unescapes_quotes() -> None:
 
 def test_extract_decodes_whitespace_escapes_in_multiline_prompt() -> None:
     (prompt,) = extract_prompts(_TOON_ESCAPED_NEWLINES)
-    assert prompt.prompt.startswith("Disposition set: t2.c4 -> question-open\n\nContext data:\n")
+    assert prompt.prompt.startswith("Disposition set: t2.s4 -> question-open\n\nContext data:\n")
     # The Context data payload must survive as parseable JSON — dispositions depend on it.
     payload = json.loads(prompt.prompt.split("Context data:", 1)[1])
-    assert payload == {"kind": "disposition", "claim": "t2.c4", "disposition": "question-open"}
+    assert payload == {"kind": "disposition", "claim": "t2.s4", "disposition": "question-open"}
 
 
 def test_extract_decodes_tab_cr_backslash_and_unknown_escape() -> None:
@@ -303,23 +303,22 @@ _ANALYSIS = {
             "title": "The thing",
             "summary": "One thread of change.",
             "paths": ["src/a.py"],
-            "claims": [
+            "steps": [
                 {
-                    "id": "t1.c1",
-                    "kind": "risk",
-                    "category": "security",
-                    "level": "high",
+                    "id": "t1.s1",
+                    "impact": "behavior-change",
                     "summary": "R",
                     "confidence": "medium",
-                    "challenge_questions": ["Q1?"],
+                    "why_now": "Read first.",
+                    "review_prompts": ["Q1?"],
                     "evidence": [{"path": "src/a.py"}],
                 },
                 {
-                    "id": "t1.c2",
-                    "kind": "verify",
+                    "id": "t1.s2",
+                    "impact": "test-change",
                     "summary": "run it",
                     "confidence": "high",
-                    "challenge_questions": ["Does it pass?"],
+                    "why_now": "The test that pins it.",
                     "evidence": [{"note": "n"}],
                 },
             ],
@@ -329,13 +328,14 @@ _ANALYSIS = {
             "title": "A rename that rode along",
             "summary": "Unrelated to the goal.",
             "paths": ["src/b.py"],
-            "claims": [
+            "steps": [
                 {
-                    "id": "t2.c1",
-                    "kind": "behavior",
+                    "id": "t2.s1",
+                    "impact": "behavior-change",
                     "summary": "B",
                     "confidence": "high",
-                    "challenge_questions": ["Q2?"],
+                    "why_now": "The drive-by.",
+                    "review_prompts": ["Q2?"],
                     "evidence": [{"path": "src/b.py"}],
                 },
             ],
@@ -351,12 +351,11 @@ def test_markdown_contains_review_and_qa() -> None:
     assert "# My Review" in md
     assert "## Orientation" in md and "Does a thing." in md
     assert "## t1 — The thing" in md and "One thread of change." in md
-    assert "[risk] R (confidence: medium; security; level: high)" in md and "Q1?" in md
-    # Verify claims export as REAL task-list checkboxes: the marker sits at line
-    # start — inside a ### heading GitHub renders "- [ ]" as literal text.
-    assert "\n- [ ] [verify] run it (confidence: high)" in md
-    assert "### - [ ]" not in md
-    assert "\n  - Does it pass?" in md  # its challenge question stays inside the item
+    # Each step is a heading tagged with its Behavior Impact; its review prompts are
+    # bullets. No category/level badges (lens-gated) and no verify checkboxes (ADR-0016).
+    assert "### [behavior-change] R (confidence: medium)" in md and "Q1?" in md
+    assert "### [test-change] run it (confidence: high)" in md
+    assert "- [ ]" not in md and "- [x]" not in md  # the verify checklist is retired
     # Goal alignment (ADR-0010): one orientation line, and drive-bys flagged in headings.
     assert (
         "Goal alignment — serving the stated goal: t1; drive-by (unrelated to the goal): t2." in md
@@ -378,11 +377,11 @@ def test_markdown_null_alignment_has_no_goal_line() -> None:
     assert "(drive-by)" not in md
 
 
-def test_markdown_checklist_unchecked_unless_reviewer_verified() -> None:
-    # Only the reviewer's own "verified" checks a box; any other disposition (or
-    # none) leaves it open — the checklist never reflects mere existence.
-    md = build_markdown(_ANALYSIS, [], dispositions={"t1.c2": "question-open"})
-    assert "\n- [ ] [verify] run it (confidence: high; reviewer: question-open)" in md
+def test_markdown_disposition_renders_as_reviewer_badge() -> None:
+    # A reviewer disposition rides along as a `reviewer: …` badge beside the agent's
+    # confidence on the step heading — attributed to the human, never an agent verdict.
+    md = build_markdown(_ANALYSIS, [], dispositions={"t1.s2": "question-open"})
+    assert "### [test-change] run it (confidence: high; reviewer: question-open)" in md
 
 
 def test_markdown_without_analysis_still_has_qa() -> None:
@@ -423,14 +422,14 @@ def test_markdown_collapses_newlines_in_prompt_heading() -> None:
 
 def test_bake_dispositions_stamps_and_restamps_idempotently() -> None:
     html = (
-        '<details class="claim" id="t1.c1"><summary>s</summary></details>\n'
-        '<details class="claim" id="t1.c2"><summary>s</summary></details>'
+        '<details class="claim" id="t1.s1"><summary>s</summary></details>\n'
+        '<details class="claim" id="t1.s2"><summary>s</summary></details>'
     )
-    once = bake_dispositions_html(html, {"t1.c1": "concern"})
-    assert '<details class="claim" id="t1.c1" data-disposition="concern">' in once
-    assert 'id="t1.c2" data-disposition' not in once  # unreviewed stays unmarked
+    once = bake_dispositions_html(html, {"t1.s1": "concern"})
+    assert '<details class="claim" id="t1.s1" data-disposition="concern">' in once
+    assert 'id="t1.s2" data-disposition' not in once  # unreviewed stays unmarked
     # A later re-bake replaces the stamp in place — never a second attribute.
-    again = bake_dispositions_html(once, {"t1.c1": "verified"})
+    again = bake_dispositions_html(once, {"t1.s1": "verified"})
     assert again.count("data-disposition") == 1
     assert 'data-disposition="verified"' in again
     # Cleared back to unreviewed (absence in the store) strips the attribute.
@@ -440,9 +439,9 @@ def test_bake_dispositions_stamps_and_restamps_idempotently() -> None:
 def test_bake_dispositions_stamps_only_vocabulary_values_on_claim_details() -> None:
     html = (
         '<details id="file-src-a-py" open><summary>a file fold</summary></details>\n'
-        '<details class="claim" id="t1.c1"><summary>s</summary></details>'
+        '<details class="claim" id="t1.s1"><summary>s</summary></details>'
     )
-    out = bake_dispositions_html(html, {"t1.c1": '"><script>', "file-src-a-py": "concern"})
+    out = bake_dispositions_html(html, {"t1.s1": '"><script>', "file-src-a-py": "concern"})
     # A value outside the closed vocabulary is never stamped, and a non-claim
     # <details> (no claim-shaped id) is never touched.
     assert "data-disposition" not in out
@@ -458,11 +457,11 @@ _BASE_COCKPIT = f"""<!doctype html>
 </head><body>
 <main><section id="exec"><h2>Summary</h2><p>prose</p></section>
 <section class="thread" id="t1"><h2>The thing</h2>
-<details class="claim" id="t1.c1"><summary>R</summary></details>
-<details class="claim" id="t1.c2"><summary>run it</summary></details>
+<details class="claim" id="t1.s1"><summary>R</summary></details>
+<details class="claim" id="t1.s2"><summary>run it</summary></details>
 </section>
 <section class="thread" id="t2"><h2>A rename that rode along</h2>
-<details class="claim" id="t2.c1"><summary>B</summary></details>
+<details class="claim" id="t2.s1"><summary>B</summary></details>
 </section></main>
 {QA_SEAM_OPEN}{QA_SEAM_CLOSE}
 <script src="assets/app.js"></script>
@@ -512,7 +511,7 @@ def test_bake_review_contains_every_question_escaped_and_self_contained(tmp_path
 
 _TOON_DISPOSITION = (
     "prompts[1]{uid,prompt,selector,tag,text}:\n"
-    '  "9",Disposition set: t1.c1 -> concern,"summary > button",choice,disposition:concern\n'
+    '  "9",Disposition set: t1.s1 -> concern,"summary > button",choice,disposition:concern\n'
     'next_step: "..."\n'
 )
 
@@ -528,7 +527,7 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
         json.dumps(
             {
                 "schema": "review-dispositions/0.1",
-                "dispositions": {"t1.c1": "concern", "t1.c2": "verified"},
+                "dispositions": {"t1.s1": "concern", "t1.s2": "verified"},
             }
         ),
         encoding="utf-8",
@@ -548,16 +547,16 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
     assert 'id="review-outcome"' in baked
     # The aggregate is the reviewer's; every claim is accounted for, unreviewed listed.
     assert "verified 1 · concern 1 · question-open 0 · unreviewed 1" in baked
-    assert '<span class="disposition concern">concern</span> <code>t1.c1</code>' in baked
-    assert '<span class="disposition unreviewed">unreviewed</span> <code>t2.c1</code>' in baked
+    assert '<span class="disposition concern">concern</span> <code>t1.s1</code>' in baked
+    assert '<span class="disposition unreviewed">unreviewed</span> <code>t2.s1</code>' in baked
     # Per-thread totals in the outcome (issue #44).
     assert "<code>t1</code> The thing — 2/2 reviewed · 1 concern" in baked
     assert "<code>t2</code> A rename that rode along — 0/1 reviewed" in baked
     # Each claim's state is stamped onto its own <details>, so the file:// artifact
     # shows the tints with no script (app.js renders nothing on file://).
-    assert '<details class="claim" id="t1.c1" data-disposition="concern">' in baked
-    assert '<details class="claim" id="t1.c2" data-disposition="verified">' in baked
-    assert 'id="t2.c1" data-disposition' not in baked  # unreviewed = no attribute
+    assert '<details class="claim" id="t1.s1" data-disposition="concern">' in baked
+    assert '<details class="claim" id="t1.s2" data-disposition="verified">' in baked
+    assert 'id="t2.s1" data-disposition' not in baked  # unreviewed = no attribute
     # The disposition exchange is state, not conversation — gone from the Q&A log.
     assert "Disposition set:" not in baked
     assert "Recorded." not in baked
@@ -582,13 +581,13 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
         "Per thread: t1 (The thing) 2/2 reviewed · 1 concern; "
         "t2 (A rename that rode along) 0/1 reviewed."
     ) in md_text
-    assert "- **concern** — t1.c1: R" in md_text
-    assert "- **unreviewed** — t2.c1: B" in md_text
-    # The pasted checklist reflects real verification state (issue #44): the verify
-    # claim the reviewer marked verified is checked, and dispositions ride along as
-    # reviewer badges beside the agent's confidence.
-    assert "\n- [x] [verify] run it (confidence: high; reviewer: verified)" in md_text
-    assert "[risk] R (confidence: medium; security; level: high; reviewer: concern)" in md_text
+    assert "- **concern** — t1.s1: R" in md_text
+    assert "- **unreviewed** — t2.s1: B" in md_text
+    # Dispositions ride along as reviewer badges on each step heading, beside the
+    # agent's confidence — no verify checkboxes (retired with the claim model, ADR-0016).
+    assert "### [test-change] run it (confidence: high; reviewer: verified)" in md_text
+    assert "### [behavior-change] R (confidence: medium; reviewer: concern)" in md_text
+    assert "- [x]" not in md_text and "- [ ]" not in md_text
     assert "Disposition set:" not in md_text
     assert "no overall verdict" in md_text  # the attribution note (verdict line, ADR-0012)
 
