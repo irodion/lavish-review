@@ -92,6 +92,12 @@ _FORBIDDEN_NOTE_KEYS = ("severity", "category", "level")
 _THREAD_ID = re.compile(r"^t\d+$")
 _STEP_ID_SUFFIX = re.compile(r"^s\d+$")
 
+# A step's ``relates_to`` links, deferred for id-integrity checking until every step
+# id is known: ``(location, own step id, [(index, target id), …])`` — the targets are
+# the salvaged strings from :func:`_as_strings`, indices preserved so a bad target
+# still locates correctly.
+_PendingRelates = list[tuple[str, str | None, list[tuple[int, str]]]]
+
 
 @dataclass(frozen=True)
 class AnalysisError:
@@ -121,16 +127,12 @@ def _require_str(value: object, location: str, *, allow_empty: bool = False) -> 
 
 
 def _require_str_list(value: object, location: str, *, min_len: int = 0) -> list[AnalysisError]:
-    """``value`` must be a list of non-empty strings with at least ``min_len`` items."""
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        return [AnalysisError(location, f"expected a list, got {_typename(value)}")]
-    items = list(value)
-    if len(items) < min_len:
-        return [AnalysisError(location, f"expected at least {min_len} item(s), got {len(items)}")]
-    errors: list[AnalysisError] = []
-    for i, item in enumerate(items):
-        errors.extend(_require_str(item, f"{location}[{i}]"))
-    return errors
+    """``value`` must be a list of non-empty strings with at least ``min_len`` items.
+
+    The errors-only view of :func:`_as_strings`, for callers that just want to reject
+    a malformed list and don't need the salvaged strings back.
+    """
+    return _as_strings(value, location, min_len=min_len)[1]
 
 
 def _require_enum(value: object, location: str, allowed: Sequence[str]) -> list[AnalysisError]:
@@ -181,6 +183,34 @@ def _as_objects(
                 AnalysisError(f"{location}[{i}]", f"expected an object, got {_typename(item)}")
             )
     return objects, errors
+
+
+def _as_strings(
+    value: object, location: str, *, min_len: int = 0
+) -> tuple[list[tuple[int, str]], list[AnalysisError]]:
+    """Coerce ``value`` to ``(original_index, non-empty str)`` pairs, reporting bad shapes.
+
+    The string sibling of :func:`_as_objects`: a non-list is reported; a non-string or
+    empty-string item is reported and skipped, but the surviving strings keep their
+    real indices so a later integrity pass (``relates_to`` targets, ``alignment``
+    thread ids) locates an error correctly. Callers that only need the errors use the
+    :func:`_require_str_list` view.
+    """
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        return [], [AnalysisError(location, f"expected a list, got {_typename(value)}")]
+    items = list(value)
+    if len(items) < min_len:
+        return [], [
+            AnalysisError(location, f"expected at least {min_len} item(s), got {len(items)}")
+        ]
+    strings: list[tuple[int, str]] = []
+    errors: list[AnalysisError] = []
+    for i, item in enumerate(items):
+        if isinstance(item, str) and item.strip():
+            strings.append((i, item))
+        else:
+            errors.extend(_require_str(item, f"{location}[{i}]"))
+    return strings, errors
 
 
 # --- Step / thread validators (ADR-0009's L1/L2, ADR-0016's step substrate) ----
@@ -271,7 +301,7 @@ def _validate_step(
     loc: str,
     thread_id: str,
     step_ids_seen: set[str],
-    pending_relates: list[tuple[str, str | None, object]],
+    pending_relates: _PendingRelates,
 ) -> list[AnalysisError]:
     """One L2 Review Step: a guided stop on the walkthrough (ADR-0009/0012/0016).
 
@@ -325,31 +355,31 @@ def _validate_step(
 
     # relates_to: shape-checked now, id-integrity after all steps are collected (a
     # link may point forward into a later thread, so the full id set must exist first).
+    # The salvaged (index, id) pairs carry forward so the integrity pass locates a bad
+    # target without re-checking shapes this pass already reported.
     if "relates_to" in step:
-        errors.extend(_require_str_list(step["relates_to"], f"{loc}.relates_to"))
+        targets, target_errors = _as_strings(step["relates_to"], f"{loc}.relates_to")
+        errors.extend(target_errors)
         own = step_id if isinstance(step_id, str) else None
-        pending_relates.append((f"{loc}.relates_to", own, step["relates_to"]))
+        pending_relates.append((f"{loc}.relates_to", own, targets))
 
     return errors
 
 
 def _validate_relates_to(
-    pending_relates: Sequence[tuple[str, str | None, object]], step_ids_seen: set[str]
+    pending_relates: _PendingRelates, step_ids_seen: set[str]
 ) -> list[AnalysisError]:
     """``relates_to`` id integrity: each target is a real, other step id (ADR-0016).
 
     Runs after every thread is walked, so a step may relate forward to a later
     thread's step. A dangling id (no such step) and a self-reference (a step relating
     to itself) are both rejected — the Stage renders these as one-click jumps, so a
-    bad id would resolve to nothing.
+    bad id would resolve to nothing. Targets arrive as salvaged ``(index, id)`` pairs
+    (:func:`_as_strings`), so this pass only checks membership, not shape.
     """
     errors: list[AnalysisError] = []
-    for loc, own_id, values in pending_relates:
-        if not isinstance(values, Sequence) or isinstance(values, str | bytes):
-            continue  # a non-list was already reported by _require_str_list
-        for i, target in enumerate(values):
-            if not isinstance(target, str):
-                continue  # a non-string item was already reported
+    for loc, own_id, targets in pending_relates:
+        for i, target in targets:
             target_loc = f"{loc}[{i}]"
             if target == own_id:
                 errors.append(
@@ -382,7 +412,7 @@ def _validate_threads(value: object) -> tuple[list[AnalysisError], list[str]]:
     # (``t<N>``) and step ids (``t<N>.s<N>``) can never collide, so the two namespaces
     # stay cleanly separate.
     step_ids_seen: set[str] = set()
-    pending_relates: list[tuple[str, str | None, object]] = []
+    pending_relates: _PendingRelates = []
     thread_ids: list[str] = []
     for i, thread in objects:
         loc = f"threads[{i}]"
@@ -444,16 +474,13 @@ def _validate_alignment(value: object, thread_ids: Sequence[str]) -> list[Analys
     errors: list[AnalysisError] = []
     lists: dict[str, list[str]] = {}
     for key in ("serves_goal", "drive_by"):
-        raw = value.get(key)
         if key not in value:
             errors.append(AnalysisError(f"alignment.{key}", "required key is missing"))
             lists[key] = []
             continue
-        errors.extend(_require_str_list(raw, f"alignment.{key}"))
-        if isinstance(raw, Sequence) and not isinstance(raw, str | bytes):
-            lists[key] = [item for item in raw if isinstance(item, str)]
-        else:
-            lists[key] = []
+        salvaged, key_errors = _as_strings(value.get(key), f"alignment.{key}")
+        errors.extend(key_errors)
+        lists[key] = [tid for _, tid in salvaged]
 
     known = set(thread_ids)
     placed: dict[str, str] = {}
