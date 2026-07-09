@@ -1,73 +1,48 @@
 {
-  "schema": "review-analysis/0.3",
+  "schema": "review-analysis/0.4",
   "title": "Retry backoff becomes exponential; config key renamed",
-  "intent_summary": "Replaces the fixed 1s retry delay with capped exponential backoff so a struggling upstream is not hammered at a constant rate, and renames the RETRY_DELAY config key to RETRY_BASE_DELAY to match the new meaning.",
+  "intent_summary": "Replaces the fixed 1s retry delay with capped exponential backoff so a struggling upstream is not hammered at a constant rate, and renames the RETRY_DELAY config key to RETRY_BASE_DELAY to match the new meaning. A drive-by extracts the delay math into a helper and regenerates the lockfile.",
   "widened_into": ["src/client/pool.py"],
   "alignment": {
-    "serves_goal": ["t1"],
-    "drive_by": ["t2"]
+    "serves_goal": ["t1", "t3"],
+    "drive_by": ["t2", "t4"]
   },
   "threads": [
     {
       "id": "t1",
       "title": "Exponential backoff",
       "summary": "The retry loop's delay policy changes from fixed to exponential with a 60s cap — the behavioral heart of the branch. Read this first: everything else is consequence.",
-      "paths": ["src/retry.py", "src/config.py"],
-      "claims": [
+      "paths": ["src/retry.py"],
+      "steps": [
         {
-          "id": "t1.c1",
-          "kind": "behavior",
+          "id": "t1.s1",
+          "impact": "behavior-change",
           "summary": "Retries now back off exponentially from RETRY_BASE_DELAY, doubling per attempt, capped at 60s.",
-          "detail": "The delay computation moves from a constant to base * 2**attempt with an explicit cap; attempt count semantics are unchanged.",
+          "detail": "Before: every retry waited a constant 1s. After: the wait is base * 2**attempt, clamped to 60s. A caller that used to retry 5 times in 5s now spreads those retries across roughly a minute.",
           "confidence": "high",
-          "challenge_questions": [
-            "Is the cap applied before or after the doubling — can a single delay exceed 60s?"
+          "why_now": "Start here — this is the observable behavior change the whole branch exists to make; every other step is downstream of it.",
+          "review_prompts": [
+            "Compare the old constant-delay line with the new base * 2**attempt computation: is the cap applied before or after the doubling, so a single wait can never exceed 60s?"
           ],
           "evidence": [
             { "path": "src/retry.py", "hunk": 1 }
+          ],
+          "attention_notes": [
+            { "text": "No test in the diff exercises the new timing — the behavior change is unverified by the suite.", "evidence": [{ "note": "tests/test_retry.py exists but is untouched" }] },
+            { "text": "The stated goal asked for 'exponential backoff with jitter'; no thread adds jitter, so the schedule is fully deterministic. Deliberate, or unserved?" }
           ]
         },
         {
-          "id": "t1.c2",
-          "kind": "risk",
-          "category": "concurrency",
-          "level": "medium",
-          "summary": "No jitter: concurrent clients that fail together will retry in lockstep.",
-          "detail": "Every caller computes the same schedule from the same base, so a thundering herd re-forms at each backoff step. The connection pool shares one retry policy across workers.",
+          "id": "t1.s2",
+          "impact": "unknown-impact",
+          "summary": "Whether the 60s cap is observable depends on the caller's own request timeout, which this diff does not show.",
           "confidence": "medium",
-          "challenge_questions": [
-            "How many concurrent callers share this policy in production?",
-            "Would full-jitter change the p99 recovery time here?"
+          "why_now": "Read right after the policy change: if the pool's per-request timeout is under 60s, the cap never bites and the change is smaller than it looks.",
+          "review_prompts": [
+            "Check src/client/pool.py's request timeout: is it shorter than 60s? If so, does the new cap ever actually take effect?"
           ],
           "evidence": [
-            { "path": "src/retry.py", "note": "the schedule is deterministic per attempt" },
-            { "note": "widened: src/client/pool.py — the pool shares one policy instance" }
-          ]
-        },
-        {
-          "id": "t1.c3",
-          "kind": "omission",
-          "omission_kind": "goal",
-          "summary": "The stated goal asked for jitter on the backoff; nothing in the branch adds it.",
-          "detail": "The issue names 'exponential backoff with jitter'; the new schedule is deterministic. Either the omission is deliberate (worth saying where) or the goal is not fully served.",
-          "confidence": "high",
-          "challenge_questions": [
-            "Was jitter deliberately deferred, or missed?"
-          ],
-          "evidence": [
-            { "path": "src/retry.py", "note": "the schedule has no random component" }
-          ]
-        },
-        {
-          "id": "t1.c4",
-          "kind": "verify",
-          "summary": "Run the retry timing tests and check one pins the 60s cap.",
-          "confidence": "high",
-          "challenge_questions": [
-            "Does any test fail if the cap is removed?"
-          ],
-          "evidence": [
-            { "note": "tests/test_retry.py exists but the diff does not touch it" }
+            { "note": "widened: src/client/pool.py sets the per-request timeout but was not changed by this branch" }
           ]
         }
       ]
@@ -75,34 +50,75 @@
     {
       "id": "t2",
       "title": "Config key rename (drive-by)",
-      "summary": "RETRY_DELAY becomes RETRY_BASE_DELAY. Mechanical, but it is a public config surface — compatibility is the question, not the code.",
+      "summary": "RETRY_DELAY becomes RETRY_BASE_DELAY. Mechanical to write, but it is a public config surface — compatibility is the question, not the code.",
       "paths": ["src/config.py"],
-      "claims": [
+      "steps": [
         {
-          "id": "t2.c1",
-          "kind": "risk",
-          "category": "compatibility",
-          "level": "high",
-          "summary": "Deployments setting RETRY_DELAY silently lose their override — the old key is neither read nor warned about.",
+          "id": "t2.s1",
+          "impact": "behavior-change",
+          "summary": "The old RETRY_DELAY key is renamed to RETRY_BASE_DELAY and no longer read; a deployment still setting the old key silently loses its override.",
+          "detail": "The config loader reads only the new name. There is no compatibility shim or deprecation warning, so an existing RETRY_DELAY in the environment is now ignored rather than honored.",
           "confidence": "high",
-          "challenge_questions": [
-            "Should the old key be honored for one release with a deprecation warning?"
+          "why_now": "Read after the backoff change it supports: this is where the change reaches operators, and the compatibility break lives here, not in the retry math.",
+          "review_prompts": [
+            "Confirm no deployment target still sets RETRY_DELAY (env, deploy templates, runbooks); should the old key be honored for one release with a warning?"
           ],
           "evidence": [
             { "path": "src/config.py", "hunk": 1 }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "title": "Extract the delay helper",
+      "summary": "The delay computation moves out of the retry loop into a compute_delay() helper. Pure extraction — the arithmetic is unchanged; read it to confirm that.",
+      "paths": ["src/retry.py"],
+      "steps": [
         {
-          "id": "t2.c2",
-          "kind": "omission",
-          "omission_kind": "docs",
-          "summary": "README still documents RETRY_DELAY; nothing in the diff updates it.",
+          "id": "t3.s1",
+          "impact": "behavior-preserving",
+          "summary": "The doubling-and-cap arithmetic is lifted verbatim into compute_delay(); the retry loop now calls the helper.",
+          "detail": "The extracted body is the same expression, in the same order (double, then clamp). No new branch, no changed constant. The intent is a readability refactor with no behavior change.",
           "confidence": "high",
-          "challenge_questions": [
-            "Is the key documented anywhere else (deploy templates, runbooks)?"
+          "why_now": "Read alongside the backoff change: this is the same math relocated, so confirming it here lets you trust t1.s1 without re-reading the arithmetic twice.",
+          "review_prompts": [
+            "Confirm the extracted compute_delay() preserves the order of operations — cap applied *after* doubling, exactly as the inline version did — so the refactor changes nothing observable."
           ],
           "evidence": [
-            { "note": "README.md is not among the changed files" }
+            { "path": "src/retry.py", "hunk": 2 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "t4",
+      "title": "Test and lockfile (drive-by)",
+      "summary": "A new timing test and a regenerated lockfile ride along. The test documents the backoff; the lockfile is pure churn.",
+      "paths": ["tests/test_retry.py", "poetry.lock"],
+      "steps": [
+        {
+          "id": "t4.s1",
+          "impact": "test-change",
+          "summary": "A new test asserts the delay sequence 1, 2, 4, 8, … and that it never exceeds 60s.",
+          "confidence": "high",
+          "why_now": "Read this once you understand t1.s1: it is the evidence that the new behavior is pinned, and it is the first thing that would fail if the cap regressed.",
+          "review_prompts": [
+            "Does this test fail if the 60s cap is removed, or only if the doubling breaks? A test that passes with the cap gone is not pinning the cap."
+          ],
+          "relates_to": ["t1.s1"],
+          "evidence": [
+            { "path": "tests/test_retry.py", "hunk": 1 }
+          ]
+        },
+        {
+          "id": "t4.s2",
+          "impact": "mechanical-change",
+          "summary": "poetry.lock is regenerated with no dependency version changes — hash churn only.",
+          "confidence": "high",
+          "why_now": "Skim last, or skip: nothing here carries narrative, and no dependency actually moved.",
+          "evidence": [
+            { "note": "poetry.lock is listed as changed but the classifier omitted its body as lockfile churn" }
           ]
         }
       ]

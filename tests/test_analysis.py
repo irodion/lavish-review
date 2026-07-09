@@ -1,9 +1,9 @@
-"""Tests for the Analysis Schema Validator (issues #6, #39).
+"""Tests for the Analysis Schema Validator (issues #6, #39, #84).
 
-The validator's contract: a complete, well-shaped ``review-analysis/0.2`` document
+The validator's contract: a complete, well-shaped ``review-analysis/0.4`` document
 passes with no errors, and every missing or mis-typed piece produces a clear,
-located error. These tables pin both halves — a known-good claim-centric document
-(threads > claims > evidence, ADR-0009), then a battery of single mutations each
+located error. These tables pin both halves — a known-good step-centric document
+(threads > steps > evidence, ADR-0016), then a battery of single mutations each
 expected to trip exactly the rule that owns it.
 """
 
@@ -15,12 +15,12 @@ from typing import Any
 import pytest
 
 from branch_review.analysis import (
-    CLAIM_KINDS,
     CONFIDENCE_LEVELS,
-    OMISSION_KINDS,
-    RISK_CATEGORIES,
+    IMPACTS,
+    PROMPT_REQUIRED_IMPACTS,
     SCHEMA,
     claim_ids,
+    step_ids,
     validate_analysis,
 )
 
@@ -28,70 +28,109 @@ Mutator = Callable[[dict[str, Any]], None]
 
 
 def _valid() -> dict[str, Any]:
-    """A complete, structurally valid claim-centric analysis."""
+    """A complete, structurally valid step-centric analysis exercising every impact."""
     return {
         "schema": SCHEMA,
-        "title": "Retry backoff becomes exponential",
+        "title": "Retry backoff becomes exponential; config key renamed",
         "intent_summary": "Replaces the fixed retry delay with capped exponential backoff.",
-        "widened_into": ["src/retry.py"],
+        "widened_into": ["src/client/pool.py"],
         "alignment": {
-            "serves_goal": ["t1"],
-            "drive_by": ["t2"],
+            "serves_goal": ["t1", "t3"],
+            "drive_by": ["t2", "t4"],
         },
         "threads": [
             {
                 "id": "t1",
                 "title": "Exponential backoff",
                 "summary": "The retry loop's delay policy changes.",
-                "paths": ["src/retry.py", "src/config.py"],
-                "claims": [
+                "paths": ["src/retry.py"],
+                "steps": [
                     {
-                        "id": "t1.c1",
-                        "kind": "behavior",
+                        "id": "t1.s1",
+                        "impact": "behavior-change",
                         "summary": "Retries now back off exponentially, capped at 60s.",
-                        "detail": "Delay doubles per attempt from 1s.",
+                        "detail": "Delay doubles per attempt from the base.",
                         "confidence": "high",
-                        "challenge_questions": ["What bounds the first delay?"],
-                        "evidence": [{"path": "src/retry.py"}],
-                    },
-                    {
-                        "id": "t1.c2",
-                        "kind": "risk",
-                        "category": "correctness",
-                        "level": "medium",
-                        "summary": "No jitter — synchronized clients retry in lockstep.",
-                        "confidence": "medium",
-                        "challenge_questions": ["Do concurrent callers share the schedule?"],
-                        "evidence": [
-                            # A hunk-anchored path ref (schema 0.3): a 1-based hunk index.
-                            {"path": "src/retry.py", "hunk": 2, "note": "the backoff computation"},
+                        "why_now": "Start here — the observable heart of the branch.",
+                        "review_prompts": ["Is the cap applied after the doubling?"],
+                        "evidence": [{"path": "src/retry.py", "hunk": 1}],
+                        "attention_notes": [
+                            {
+                                "text": "No test in the diff exercises the new timing.",
+                                "evidence": [{"note": "tests/test_retry.py untouched"}],
+                            },
+                            {"text": "The goal asked for jitter; no thread adds it."},
                         ],
                     },
                     {
-                        "id": "t1.c3",
-                        "kind": "verify",
-                        "summary": "Run the retry timing tests.",
-                        "confidence": "high",
-                        "challenge_questions": ["Does any test pin the cap?"],
-                        "evidence": [{"note": "tests/test_retry.py exists but was not changed"}],
+                        "id": "t1.s2",
+                        "impact": "unknown-impact",
+                        "summary": "Whether the cap bites depends on the caller's timeout.",
+                        "confidence": "medium",
+                        "why_now": "Read next: the caller's timeout decides if the cap matters.",
+                        "review_prompts": ["Is the pool's request timeout under 60s?"],
+                        "evidence": [{"note": "widened: src/client/pool.py sets the timeout"}],
                     },
                 ],
             },
             {
                 "id": "t2",
-                "title": "Drive-by config rename",
+                "title": "Config key rename (drive-by)",
                 "summary": "RETRY_DELAY becomes RETRY_BASE_DELAY.",
                 "paths": ["src/config.py"],
-                "claims": [
+                "steps": [
                     {
-                        "id": "t2.c1",
-                        "kind": "omission",
-                        "omission_kind": "docs",
-                        "summary": "README still documents RETRY_DELAY.",
+                        "id": "t2.s1",
+                        "impact": "behavior-change",
+                        "summary": "The old key is no longer read; overrides silently lost.",
                         "confidence": "high",
-                        "challenge_questions": ["Is the old name used anywhere else?"],
-                        "evidence": [{"note": "README.md untouched by the diff"}],
-                    }
+                        "why_now": "Where the change reaches operators — the compatibility break.",
+                        "review_prompts": ["Does any deployment still set RETRY_DELAY?"],
+                        "evidence": [{"path": "src/config.py", "hunk": 1}],
+                    },
+                ],
+            },
+            {
+                "id": "t3",
+                "title": "Extract the delay helper",
+                "summary": "The delay math moves into compute_delay().",
+                "paths": ["src/retry.py"],
+                "steps": [
+                    {
+                        "id": "t3.s1",
+                        "impact": "behavior-preserving",
+                        "summary": "The doubling-and-cap arithmetic is lifted verbatim.",
+                        "confidence": "high",
+                        "why_now": "Same math relocated — confirm it to trust t1.s1.",
+                        "review_prompts": ["Does compute_delay() keep cap-after-doubling order?"],
+                        "evidence": [{"path": "src/retry.py", "hunk": 2}],
+                    },
+                ],
+            },
+            {
+                "id": "t4",
+                "title": "Test and lockfile (drive-by)",
+                "summary": "A timing test and a regenerated lockfile ride along.",
+                "paths": ["tests/test_retry.py", "poetry.lock"],
+                "steps": [
+                    {
+                        "id": "t4.s1",
+                        "impact": "test-change",
+                        "summary": "A new test asserts the 1,2,4,8 sequence and the 60s cap.",
+                        "confidence": "high",
+                        "why_now": "The evidence the new behavior is pinned.",
+                        "review_prompts": ["Does it fail if the cap is removed?"],
+                        "relates_to": ["t1.s1"],
+                        "evidence": [{"path": "tests/test_retry.py", "hunk": 1}],
+                    },
+                    {
+                        "id": "t4.s2",
+                        "impact": "mechanical-change",
+                        "summary": "poetry.lock regenerated with no version changes.",
+                        "confidence": "high",
+                        "why_now": "Skim last or skip — nothing moved.",
+                        "evidence": [{"note": "poetry.lock body omitted as lockfile churn"}],
+                    },
                 ],
             },
         ],
@@ -111,7 +150,7 @@ def test_complete_analysis_passes() -> None:
 
 
 def test_reference_example_analysis_is_valid() -> None:
-    # The shipped reference the analyst is told to mirror must itself validate under
+    # The shipped reference the narrator is told to mirror must itself validate under
     # the current schema — otherwise the example teaches a shape the validator rejects.
     import json
     from pathlib import Path
@@ -134,25 +173,46 @@ def test_empty_optional_lists_are_allowed() -> None:
     assert validate_analysis(doc) == []
 
 
+def test_optional_step_fields_may_be_absent() -> None:
+    # detail, review_prompts (on test/mechanical), relates_to, and attention_notes
+    # are all optional — a step carrying none of them still validates.
+    doc = _valid()
+    del doc["threads"][0]["steps"][0]["detail"]
+    del doc["threads"][0]["steps"][0]["attention_notes"]
+    del doc["threads"][3]["steps"][0]["relates_to"]
+    assert validate_analysis(doc) == []
+
+
 def test_non_object_is_rejected() -> None:
     errors = validate_analysis([1, 2, 3])
     assert errors and errors[0].location == "$"
 
 
-# --- claim_ids (the set the Cockpit Linter's structural pass checks, issue #62) --
+# --- step_ids (the set the Cockpit Linter's structural pass checks, issue #62) ---
 
 
-def test_claim_ids_returns_every_id_in_document_order() -> None:
-    assert claim_ids(_valid()) == ["t1.c1", "t1.c2", "t1.c3", "t2.c1"]
+def test_step_ids_returns_every_id_in_document_order() -> None:
+    assert step_ids(_valid()) == ["t1.s1", "t1.s2", "t2.s1", "t3.s1", "t4.s1", "t4.s2"]
 
 
-def test_claim_ids_tolerates_malformed_shapes() -> None:
+def test_step_ids_tolerates_malformed_shapes() -> None:
     # Not a raise: a rough or partial analysis still yields whatever ids are present.
-    assert claim_ids("not a mapping") == []
-    assert claim_ids({}) == []
-    assert claim_ids({"threads": "nope"}) == []
-    mixed = {"threads": [{"claims": [{"id": 7}, {"summary": "no id"}, {"id": "t1.c1"}]}]}
-    assert claim_ids(mixed) == ["t1.c1"]
+    assert step_ids("not a mapping") == []
+    assert step_ids({}) == []
+    assert step_ids({"threads": "nope"}) == []
+    mixed = {"threads": [{"steps": [{"id": 7}, {"summary": "no id"}, {"id": "t1.s1"}]}]}
+    assert step_ids(mixed) == ["t1.s1"]
+
+
+def test_claim_ids_is_the_legacy_claims_walker() -> None:
+    # The clean break splits the id walk: ``step_ids`` reads the new ``steps`` key,
+    # while ``claim_ids`` stays a legacy walk over the retired ``claims`` key for the
+    # deep consumers not yet migrated (#86/#87). A 0.4 doc has no ``claims``, so the
+    # legacy walker yields nothing for it; a legacy shape still yields its ids.
+    assert claim_ids(_valid()) == []
+    legacy = {"threads": [{"claims": [{"id": "t1.c1"}, {"id": "t1.c2"}]}]}
+    assert claim_ids(legacy) == ["t1.c1", "t1.c2"]
+    assert step_ids(legacy) == []  # the new walker ignores the retired key
 
 
 def test_null_alignment_is_valid() -> None:
@@ -163,20 +223,30 @@ def test_null_alignment_is_valid() -> None:
     assert validate_analysis(doc) == []
 
 
-def test_goal_omission_with_alignment_passes() -> None:
-    # A goal-unserved item is a first-class Suspicious Omission (ADR-0010).
+def test_relates_to_may_point_forward_and_across_threads() -> None:
+    # A link may target a step in a later thread; the id set is complete before the
+    # integrity check runs. t2.s1 -> t4.s1 is a forward, cross-thread link.
     doc = _valid()
-    doc["threads"][1]["claims"][0]["omission_kind"] = "goal"
+    doc["threads"][1]["steps"][0]["relates_to"] = ["t4.s1"]
+    assert validate_analysis(doc) == []
+
+
+def test_prompts_optional_on_test_and_mechanical_steps() -> None:
+    # A mechanical step needs no comparison; a test step's prompt is optional. Empty
+    # or absent prompts on these impacts must not be forced.
+    doc = _valid()
+    doc["threads"][3]["steps"][0]["review_prompts"] = []  # test-change: allowed empty
+    del doc["threads"][3]["steps"][1]  # drop the mechanical step's neighbor untouched
     assert validate_analysis(doc) == []
 
 
 def test_hunk_anchored_evidence_is_optional_and_passes() -> None:
-    # Schema 0.3: a {path} ref may carry a 1-based hunk index, or omit it entirely —
-    # a path-only ref keeps file-level anchoring. Both shapes are valid.
+    # A {path} ref may carry a 1-based hunk index, or omit it entirely — a path-only
+    # ref keeps file-level anchoring. Both shapes are valid.
     doc = _valid()
-    doc["threads"][0]["claims"][0]["evidence"] = [{"path": "src/retry.py", "hunk": 1}]
+    doc["threads"][0]["steps"][0]["evidence"] = [{"path": "src/retry.py", "hunk": 1}]
     assert validate_analysis(doc) == []
-    doc["threads"][0]["claims"][0]["evidence"] = [{"path": "src/retry.py"}]  # no hunk
+    doc["threads"][0]["steps"][0]["evidence"] = [{"path": "src/retry.py"}]  # no hunk
     assert validate_analysis(doc) == []
 
 
@@ -208,13 +278,10 @@ def _del(path: list[Any]) -> Mutator:
     return mutate
 
 
-_C = ["threads", 0, "claims"]
-
-
-def _null_alignment_with_goal_omission(doc: dict[str, Any]) -> None:
-    """No stated goal, yet a claim says the goal is unserved — a contradiction."""
-    doc["alignment"] = None
-    doc["threads"][1]["claims"][0]["omission_kind"] = "goal"
+_S = ["threads", 0, "steps"]  # t1's steps: [0]=behavior-change, [1]=unknown-impact
+_PRESERVE = ["threads", 2, "steps", 0]  # t3.s1: behavior-preserving
+_TEST = ["threads", 3, "steps", 0]  # t4.s1: test-change (carries relates_to)
+_MECH = ["threads", 3, "steps", 1]  # t4.s2: mechanical-change
 
 
 _BAD_CASES = [
@@ -222,10 +289,10 @@ _BAD_CASES = [
     ("empty-title", _set(["title"], "   "), "title"),
     ("missing-intent", _drop("intent_summary"), "intent_summary"),
     ("bad-schema", _set(["schema"], "something-else"), "schema"),
-    # An older revision must fail — this validator encodes only 0.3, so a 0.2 (or
-    # 0.1) document is refused with a located error, not revalidated under new rules.
+    # The clean break: a 0.3 (or older) document is refused with a located error, not
+    # revalidated under 0.4 rules. No dual-schema path.
+    ("outdated-schema-0.3", _set(["schema"], "review-analysis/0.3"), "schema"),
     ("outdated-schema-0.2", _set(["schema"], "review-analysis/0.2"), "schema"),
-    ("outdated-schema-0.1", _set(["schema"], "review-analysis/0.1"), "schema"),
     # ADR-0011: widened_into is required (an honest "nothing" is [], not absence).
     ("missing-widened-into", _drop("widened_into"), "widened_into"),
     ("widened-into-not-list", _set(["widened_into"], "src/retry.py"), "widened_into"),
@@ -239,85 +306,130 @@ _BAD_CASES = [
     ("thread-missing-title", _set(["threads", 0, "title"], ""), "threads[0].title"),
     ("thread-missing-summary", _del(["threads", 0, "summary"]), "threads[0].summary"),
     ("thread-paths-not-list", _set(["threads", 0, "paths"], "src"), "threads[0].paths"),
-    ("thread-no-claims", _set(["threads", 0, "claims"], []), "threads[0].claims"),
-    # Claims: the L2 contract (ADR-0009/0012).
-    ("claim-not-object", _set([*_C, 0], "nope"), "threads[0].claims[0]"),
-    ("claim-bad-id-prefix", _set([*_C, 0, "id"], "t9.c1"), "threads[0].claims[0].id"),
-    ("claim-bad-id-shape", _set([*_C, 0, "id"], "t1-c1"), "threads[0].claims[0].id"),
-    ("claim-duplicate-id", _set([*_C, 1, "id"], "t1.c1"), "threads[0].claims[1].id"),
-    ("claim-bad-kind", _set([*_C, 0, "kind"], "opinion"), "threads[0].claims[0].kind"),
-    ("claim-missing-summary", _set([*_C, 0, "summary"], ""), "threads[0].claims[0].summary"),
+    ("thread-no-steps", _set(["threads", 0, "steps"], []), "threads[0].steps"),
+    # A thread's impact is derived, never authored (ADR-0016).
     (
-        "claim-missing-confidence",
-        _del([*_C, 0, "confidence"]),
-        "threads[0].claims[0].confidence",
+        "thread-authored-impact",
+        _set(["threads", 0, "impact"], "behavior-change"),
+        "threads[0].impact",
+    ),
+    # Steps: the L2 contract (ADR-0009/0012/0016).
+    ("step-not-object", _set([*_S, 0], "nope"), "threads[0].steps[0]"),
+    ("step-bad-id-prefix", _set([*_S, 0, "id"], "t9.s1"), "threads[0].steps[0].id"),
+    ("step-bad-id-shape", _set([*_S, 0, "id"], "t1-s1"), "threads[0].steps[0].id"),
+    ("step-bad-id-claim-suffix", _set([*_S, 0, "id"], "t1.c1"), "threads[0].steps[0].id"),
+    ("step-duplicate-id", _set([*_S, 1, "id"], "t1.s1"), "threads[0].steps[1].id"),
+    ("step-bad-impact", _set([*_S, 0, "impact"], "opinion"), "threads[0].steps[0].impact"),
+    ("step-missing-impact", _del([*_S, 0, "impact"]), "threads[0].steps[0].impact"),
+    ("step-missing-summary", _set([*_S, 0, "summary"], ""), "threads[0].steps[0].summary"),
+    ("step-missing-why-now", _del([*_S, 0, "why_now"]), "threads[0].steps[0].why_now"),
+    ("step-empty-why-now", _set([*_S, 0, "why_now"], "  "), "threads[0].steps[0].why_now"),
+    ("step-missing-confidence", _del([*_S, 0, "confidence"]), "threads[0].steps[0].confidence"),
+    (
+        "step-bad-confidence",
+        _set([*_S, 0, "confidence"], "certain"),
+        "threads[0].steps[0].confidence",
+    ),
+    # review_prompts: required where the reviewer has a comparison to make.
+    (
+        "prompts-missing-on-behavior-change",
+        _del([*_S, 0, "review_prompts"]),
+        "threads[0].steps[0].review_prompts",
     ),
     (
-        "claim-bad-confidence",
-        _set([*_C, 0, "confidence"], "certain"),
-        "threads[0].claims[0].confidence",
+        "prompts-empty-on-behavior-change",
+        _set([*_S, 0, "review_prompts"], []),
+        "threads[0].steps[0].review_prompts",
     ),
     (
-        "claim-no-questions",
-        _set([*_C, 0, "challenge_questions"], []),
-        "threads[0].claims[0].challenge_questions",
+        "prompts-missing-on-unknown-impact",
+        _del([*_S, 1, "review_prompts"]),
+        "threads[0].steps[1].review_prompts",
     ),
     (
-        "claim-question-not-str",
-        _set([*_C, 0, "challenge_questions"], [1]),
-        "threads[0].claims[0].challenge_questions[0]",
+        "prompts-missing-on-preserving",
+        _del([*_PRESERVE, "review_prompts"]),
+        "threads[2].steps[0].review_prompts",
     ),
-    ("claim-no-evidence", _set([*_C, 0, "evidence"], []), "threads[0].claims[0].evidence"),
+    # Present-but-malformed prompts on an optional impact are still rejected.
     (
-        "claim-evidence-empty-ref",
-        _set([*_C, 0, "evidence"], [{}]),
-        "threads[0].claims[0].evidence[0]",
+        "prompts-bad-type-on-test",
+        _set([*_TEST, "review_prompts"], [1]),
+        "threads[3].steps[0].review_prompts[0]",
     ),
+    # Evidence: a step must be substantiated.
+    ("step-no-evidence", _set([*_S, 0, "evidence"], []), "threads[0].steps[0].evidence"),
+    ("evidence-empty-ref", _set([*_S, 0, "evidence"], [{}]), "threads[0].steps[0].evidence[0]"),
     (
-        "claim-evidence-bad-path",
-        _set([*_C, 0, "evidence"], [{"path": 5}]),
-        "threads[0].claims[0].evidence[0].path",
+        "evidence-bad-path",
+        _set([*_S, 0, "evidence"], [{"path": 5}]),
+        "threads[0].steps[0].evidence[0].path",
     ),
-    # Hunk-anchored evidence (schema 0.3, ADR-0014): optional, path-only, 1-based int.
+    # A behavior-preserving step with no evidence is rejected — the preservation
+    # claim needs the code whose equivalence is asserted (ADR-0016).
+    ("preserving-no-evidence", _set([*_PRESERVE, "evidence"], []), "threads[2].steps[0].evidence"),
+    # Hunk-anchored evidence (ADR-0014): optional, path-only, 1-based int.
     (
-        # A hunk anchors a diff fragment; a note-only ref has none to anchor to.
         "evidence-hunk-on-note-ref",
-        _set([*_C, 2, "evidence", 0, "hunk"], 1),
-        "threads[0].claims[2].evidence[0].hunk",
+        _set([*_S, 1, "evidence", 0, "hunk"], 1),
+        "threads[0].steps[1].evidence[0].hunk",
     ),
     (
         "evidence-hunk-not-integer",
-        _set([*_C, 0, "evidence", 0, "hunk"], "2"),
-        "threads[0].claims[0].evidence[0].hunk",
+        _set([*_S, 0, "evidence", 0, "hunk"], "2"),
+        "threads[0].steps[0].evidence[0].hunk",
     ),
     (
-        # 1-based: 0 (and any value < 1) is out of the declared range.
         "evidence-hunk-out-of-range",
-        _set([*_C, 0, "evidence", 0, "hunk"], 0),
-        "threads[0].claims[0].evidence[0].hunk",
+        _set([*_S, 0, "evidence", 0, "hunk"], 0),
+        "threads[0].steps[0].evidence[0].hunk",
     ),
     (
-        # bool is an int subclass — True must not read as the hunk index 1.
         "evidence-hunk-boolean",
-        _set([*_C, 0, "evidence", 0, "hunk"], True),
-        "threads[0].claims[0].evidence[0].hunk",
+        _set([*_S, 0, "evidence", 0, "hunk"], True),
+        "threads[0].steps[0].evidence[0].hunk",
     ),
-    # Risk claims: category + level required; level is risk-only.
-    ("risk-missing-category", _del([*_C, 1, "category"]), "threads[0].claims[1].category"),
-    ("risk-bad-category", _set([*_C, 1, "category"], "ux"), "threads[0].claims[1].category"),
-    ("risk-missing-level", _del([*_C, 1, "level"]), "threads[0].claims[1].level"),
-    ("risk-bad-level", _set([*_C, 1, "level"], "critical"), "threads[0].claims[1].level"),
-    ("level-on-non-risk", _set([*_C, 0, "level"], "low"), "threads[0].claims[0].level"),
-    # Omission claims own omission_kind.
+    # relates_to: id integrity across the whole document.
     (
-        "omission-bad-kind",
-        _set(["threads", 1, "claims", 0, "omission_kind"], "whoops"),
-        "threads[1].claims[0].omission_kind",
+        "relates-to-not-list",
+        _set([*_TEST, "relates_to"], "t1.s1"),
+        "threads[3].steps[0].relates_to",
     ),
     (
-        "omission-kind-on-non-omission",
-        _set([*_C, 0, "omission_kind"], "docs"),
-        "threads[0].claims[0].omission_kind",
+        "relates-to-dangling",
+        _set([*_TEST, "relates_to"], ["t9.s9"]),
+        "threads[3].steps[0].relates_to[0]",
+    ),
+    (
+        "relates-to-self",
+        _set([*_TEST, "relates_to"], ["t4.s1"]),
+        "threads[3].steps[0].relates_to[0]",
+    ),
+    # Attention notes: muted asides only — no hunting attributes (ADR-0016).
+    (
+        "note-missing-text",
+        _del([*_S, 0, "attention_notes", 0, "text"]),
+        "threads[0].steps[0].attention_notes[0].text",
+    ),
+    (
+        "note-forbidden-severity",
+        _set([*_S, 0, "attention_notes", 0, "severity"], "high"),
+        "threads[0].steps[0].attention_notes[0].severity",
+    ),
+    (
+        "note-forbidden-category",
+        _set([*_S, 0, "attention_notes", 0, "category"], "security"),
+        "threads[0].steps[0].attention_notes[0].category",
+    ),
+    (
+        "note-forbidden-level",
+        _set([*_S, 0, "attention_notes", 0, "level"], "high"),
+        "threads[0].steps[0].attention_notes[0].level",
+    ),
+    (
+        "note-bad-evidence",
+        _set([*_S, 0, "attention_notes", 0, "evidence"], [{}]),
+        "threads[0].steps[0].attention_notes[0].evidence[0]",
     ),
     # Alignment: the goal↔implementation partition (ADR-0010).
     ("missing-alignment", _drop("alignment"), "alignment"),
@@ -331,22 +443,11 @@ _BAD_CASES = [
         "alignment.serves_goal[1]",
     ),
     (
-        # t1 already sits in serves_goal — a thread is in exactly one list.
         "alignment-thread-listed-twice",
-        _set(["alignment", "drive_by"], ["t2", "t1"]),
-        "alignment.drive_by[1]",
+        _set(["alignment", "drive_by"], ["t2", "t4", "t1"]),
+        "alignment.drive_by[2]",
     ),
-    (
-        # t2 ends up in neither list — the partition must cover every thread.
-        "alignment-uncovered-thread",
-        _set(["alignment", "drive_by"], []),
-        "alignment",
-    ),
-    (
-        "goal-omission-under-null-alignment",
-        _null_alignment_with_goal_omission,
-        "threads[1].claims[0].omission_kind",
-    ),
+    ("alignment-uncovered-thread", _set(["alignment", "drive_by"], ["t2"]), "alignment"),
     # Runner block + diagrams.
     ("missing-test-runner", _drop("test_runner"), "test_runner"),
     ("test-runner-not-object", _set(["test_runner"], []), "test_runner"),
@@ -372,36 +473,26 @@ def test_non_object_entry_does_not_shift_later_error_index() -> None:
     # renumber a genuinely-bad object after it (the validator filters non-objects
     # but preserves original positions).
     doc = _valid()
-    claims = doc["threads"][0]["claims"]
-    bad = dict(claims[2])
+    steps = doc["threads"][0]["steps"]
+    bad = dict(steps[1])
     bad["summary"] = ""
-    bad["id"] = "t1.c4"
-    doc["threads"][0]["claims"] = ["not-an-object", claims[1], bad]  # bad is at index 2
+    bad["id"] = "t1.s3"
+    doc["threads"][0]["steps"] = ["not-an-object", steps[1], bad]  # bad is at index 2
     locations = [e.location for e in validate_analysis(doc)]
-    assert "threads[0].claims[0]" in locations  # the non-object, at its real index
-    assert "threads[0].claims[2].summary" in locations  # located at 2 — not 1
-    assert "threads[0].claims[1].summary" not in locations  # the valid middle entry
+    assert "threads[0].steps[0]" in locations  # the non-object, at its real index
+    assert "threads[0].steps[2].summary" in locations  # located at 2 — not 1
+    assert "threads[0].steps[1].summary" not in locations  # the valid middle entry
 
 
 def test_vocabularies_are_canonical() -> None:
     # The cockpit and SKILL share these vocabularies; pin them so a drift is caught.
-    assert set(RISK_CATEGORIES) == {
-        "correctness",
-        "compatibility",
-        "concurrency",
-        "security",
-        "performance",
-        "maintainability",
-        "test_coverage",
+    assert set(IMPACTS) == {
+        "behavior-change",
+        "behavior-preserving",
+        "test-change",
+        "mechanical-change",
+        "unknown-impact",
     }
-    assert set(CLAIM_KINDS) == {"behavior", "risk", "omission", "verify"}
     assert set(CONFIDENCE_LEVELS) == {"high", "medium", "low"}
-    assert set(OMISSION_KINDS) == {
-        "tests",
-        "callers",
-        "docs",
-        "config",
-        "error_handling",
-        "goal",
-        "other",
-    }
+    # Prompts are required exactly where the reviewer has a comparison to make.
+    assert {"behavior-change", "behavior-preserving", "unknown-impact"} == PROMPT_REQUIRED_IMPACTS
