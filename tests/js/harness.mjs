@@ -60,7 +60,7 @@ function claim(doc, { id, kind, statement, confidence, challenge, evidence }) {
     h(doc, "h4", null, ["Evidence"]),
     evidenceList,
   ]);
-  // The claim id carries a dot (t1.c1) — set it directly, not through the dotted
+  // The claim id carries a dot (t1.s1) — set it directly, not through the dotted
   // `.class` spec syntax of h().
   const panel = h(doc, "details.claim", null, [summary, body]);
   panel.id = id;
@@ -83,8 +83,8 @@ function filePanel(doc, { id, path, added, deleted, hunkId, diffText }) {
 }
 
 // The default fixture: two threads (t1: two claims, t2: one), three changed files.
-// t1.c1 cites a hunk whose diff text carries a <script> string (the DOM-relocation
-// invariant fixture); t1.c2 cites a file-level anchor; t2.c1 cites another hunk.
+// t1.s1 cites a hunk whose diff text carries a <script> string (the DOM-relocation
+// invariant fixture); t1.s2 cites a file-level anchor; t2.s1 cites another hunk.
 export function buildFixtureDocument() {
   const doc = new Document();
   const main = doc.createElement("main");
@@ -94,7 +94,7 @@ export function buildFixtureDocument() {
     h(doc, "h2", null, [h(doc, "span.thread-id", null, ["t1"]), "First thread"]),
     h(doc, "p.thread-summary", null, ["Summary of the first thread."]),
     claim(doc, {
-      id: "t1.c1",
+      id: "t1.s1",
       kind: "behavior",
       statement: "The first claim, substantiated by a hunk.",
       confidence: "high",
@@ -102,7 +102,7 @@ export function buildFixtureDocument() {
       evidence: [{ href: "#hunk-a1", label: "src/one.py", note: "the changed function" }],
     }),
     claim(doc, {
-      id: "t1.c2",
+      id: "t1.s2",
       kind: "risk",
       statement: "The second claim, substantiated at file level.",
       confidence: "medium",
@@ -115,7 +115,7 @@ export function buildFixtureDocument() {
     h(doc, "h2", null, [h(doc, "span.thread-id", null, ["t2"]), "Second thread"]),
     h(doc, "p.thread-summary", null, ["Summary of the second thread."]),
     claim(doc, {
-      id: "t2.c1",
+      id: "t2.s1",
       kind: "verify",
       statement: "A verify claim in the second thread.",
       confidence: "high",

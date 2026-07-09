@@ -187,12 +187,15 @@
 
   // Closed vocabularies: these strings are the ONLY values that ever reach the
   // DOM or the feedback channel — reviewer intent is expressed by choosing one.
-  const CLAIM_ID = /^t\d+\.c\d+$/;
+  // Step ids since review-analysis/0.4 (ADR-0016): `tN.sN`. The L2 panel's DOM hook
+  // is still `class="claim"` (renamed to `step` with the deck reframe, #88), but its
+  // id is a step id — so this filter must accept `tN.sN`, not the old `tN.cN`.
+  const CLAIM_ID = /^t\d+\.s\d+$/;
   const SETTABLE = ["verified", "concern", "question-open"];
   const LABELS = { verified: "✓ verified", concern: "⚠ concern", "question-open": "? question" };
 
-  // Every claim panel under `root` (the document, or one thread) whose id is in the
-  // closed `t\d+.c\d+` vocabulary — the one filter the dispositions, questions, and
+  // Every L2 panel under `root` (the document, or one thread) whose id is in the
+  // closed `t\d+.s\d+` vocabulary — the one filter the dispositions, questions, and
   // deck all share.
   function claimsIn(root) {
     return Array.prototype.filter.call(root.querySelectorAll("details.claim"), function (el) {

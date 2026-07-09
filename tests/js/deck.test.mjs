@@ -30,7 +30,7 @@ test("builds the Map and Stage from the document when served", () => {
 
   // One dot per claim, in Review Route order.
   const dots = document.querySelectorAll(".deck-dot").map((d) => d.dataset.claim);
-  assert.deepEqual(dots, ["t1.c1", "t1.c2", "t2.c1"]);
+  assert.deepEqual(dots, ["t1.s1", "t1.s2", "t2.s1"]);
 
   // Threads in analysis order with their per-thread fractions.
   const titles = document.querySelectorAll(".deck-thread-title").map((t) => t.textContent);
@@ -48,7 +48,7 @@ test("builds the Map and Stage from the document when served", () => {
 
   // The first claim is staged, whole, with its challenge questions and the exact
   // hunk that substantiates it rendered inline (line-numbered — the annotated table).
-  assert.equal(stagedClaimId(document), "t1.c1");
+  assert.equal(stagedClaimId(document), "t1.s1");
   const stage = document.querySelector(".deck-stage");
   assert.ok(stage.querySelector("details.claim .challenge-questions"), "challenge questions on Stage");
   assert.ok(stage.querySelector(".deck-hunk .diff-table"), "the evidence hunk is inline");
@@ -57,10 +57,10 @@ test("builds the Map and Stage from the document when served", () => {
 test("clicking a dot or a thread stages that claim", () => {
   const { document } = loadCockpit();
 
-  click(dot(document, "t1.c2"));
-  assert.equal(stagedClaimId(document), "t1.c2");
-  assert.ok(dot(document, "t1.c2").classList.contains("current"), "the staged dot is marked current");
-  assert.ok(!dot(document, "t1.c1").classList.contains("current"));
+  click(dot(document, "t1.s2"));
+  assert.equal(stagedClaimId(document), "t1.s2");
+  assert.ok(dot(document, "t1.s2").classList.contains("current"), "the staged dot is marked current");
+  assert.ok(!dot(document, "t1.s1").classList.contains("current"));
 
   // A file-level evidence ref (#file-f2) stages with the file's body inline.
   const stage = document.querySelector(".deck-stage");
@@ -69,13 +69,13 @@ test("clicking a dot or a thread stages that claim", () => {
   // The thread button stages the thread's first claim.
   const secondThread = document.querySelectorAll(".deck-thread")[1];
   click(secondThread);
-  assert.equal(stagedClaimId(document), "t2.c1");
+  assert.equal(stagedClaimId(document), "t2.s1");
 });
 
 test("the staged claim is relocated (not duplicated) out of the document", () => {
   const { document } = loadCockpit();
-  // t1.c1 is staged on load. It must live in exactly one place: the Stage.
-  const matches = document.querySelectorAll("details.claim").filter((c) => c.id === "t1.c1");
+  // t1.s1 is staged on load. It must live in exactly one place: the Stage.
+  const matches = document.querySelectorAll("details.claim").filter((c) => c.id === "t1.s1");
   assert.equal(matches.length, 1, "the claim exists once");
   assert.ok(matches[0].closest(".deck-stage"), "and it is on the Stage");
 });
@@ -84,15 +84,15 @@ test("the mode toggle round-trips content, open state, and disposition tints", (
   const { document, window } = loadCockpit();
   window.lavish = { queuePrompt() {}, sendQueuedPrompts() {} };
 
-  // Give t2.c1 a disposition from the Stage, then read its Map dot tint.
-  click(dot(document, "t2.c1"));
-  const claim = document.getElementById("t2.c1");
+  // Give t2.s1 a disposition from the Stage, then read its Map dot tint.
+  click(dot(document, "t2.s1"));
+  const claim = document.getElementById("t2.s1");
   const concern = claim
     .querySelectorAll(".disposition-controls button")
     .find((b) => b.dataset.disposition === "concern");
   click(concern);
   assert.equal(claim.getAttribute("data-disposition"), "concern");
-  assert.equal(dot(document, "t2.c1").getAttribute("data-disposition"), "concern");
+  assert.equal(dot(document, "t2.s1").getAttribute("data-disposition"), "concern");
   assert.match(document.querySelector(".deck-progress").textContent, /1\/3 reviewed/);
 
   // Authored claims are closed; the staged one is forced open on the Stage.
@@ -121,7 +121,7 @@ test("the mode toggle round-trips content, open state, and disposition tints", (
   // Toggle back: the deck returns to the last-staged claim.
   click(document.querySelector(".deck-toggle"));
   assert.ok(document.body.classList.contains("deck-active"));
-  assert.equal(stagedClaimId(document), "t2.c1");
+  assert.equal(stagedClaimId(document), "t2.s1");
 
   // The static file rail is cached and re-appended across every re-render, not lost.
   assert.equal(document.querySelectorAll(".deck-file-name").length, 3);
@@ -150,7 +150,7 @@ test("DOM-relocation-only: a <script> in a diff renders as text, never executes"
   globalThis.__pwned = undefined;
   const { document } = loadCockpit();
 
-  // t1.c1 (staged on load) cites a hunk whose diff line embeds a <script> string.
+  // t1.s1 (staged on load) cites a hunk whose diff line embeds a <script> string.
   const stage = document.querySelector(".deck-stage");
   const inlineHunk = stage.querySelector(".deck-hunk");
   assert.ok(
