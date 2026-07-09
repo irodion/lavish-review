@@ -50,6 +50,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from branch_review.analysis import STEP_ID_PATTERN
 from branch_review.dispositions import (
     DISPOSITIONS_NAME,
     load_dispositions,
@@ -183,10 +184,12 @@ def _without_disposition_prompts(exchanges: Sequence[Exchange]) -> list[Exchange
 def _claims_by_disposition(
     analysis: Mapping[str, object], dispositions: Mapping[str, str]
 ) -> list[tuple[str, str, str]]:
-    """Every claim as ``(disposition, claim_id, summary)``, grouped concern-first.
+    """Every step as ``(disposition, step_id, summary)``, grouped concern-first.
 
     Groups follow :data:`_OUTCOME_ORDER`; within a group, analysis order (the Review
-    Route). A claim absent from the store is ``unreviewed`` — listed, never dropped.
+    Route). A step absent from the store is ``unreviewed`` — listed, never dropped.
+    (Reads the review-analysis/0.4 step substrate; the disposition state vocabulary
+    and the outcome ordering are reframed to the five-state model in #87.)
     """
     groups: dict[str, list[tuple[str, str]]] = {d: [] for d in _OUTCOME_ORDER}
     threads = analysis.get("threads")
@@ -195,7 +198,7 @@ def _claims_by_disposition(
     for thread in threads:
         if not isinstance(thread, Mapping):
             continue
-        claims = thread.get("claims")
+        claims = thread.get("steps")
         if not isinstance(claims, list):
             continue
         for claim in claims:
@@ -234,10 +237,10 @@ def _thread_titles(analysis: Mapping[str, object]) -> dict[str, str]:
     }
 
 
-# The open tag of any ``<details>`` element, and within it a claim-shaped id and any
+# The open tag of any ``<details>`` element, and within it a step-shaped id and any
 # previously baked disposition attribute (stripped first, so re-baking replaces).
 _DETAILS_TAG = re.compile(r"<details\b[^>]*>", re.IGNORECASE)
-_CLAIM_DETAILS_ID = re.compile(r'\bid\s*=\s*"(t\d+\.c\d+)"')
+_CLAIM_DETAILS_ID = re.compile(rf'\bid\s*=\s*"({STEP_ID_PATTERN})"')
 _DISPOSITION_ATTR = re.compile(r'\s+data-disposition\s*=\s*"[^"]*"')
 
 
@@ -483,46 +486,29 @@ def _inline(text: str) -> str:
 
 
 def _format_claim_block(claim: Mapping[str, object], disposition: str | None = None) -> str:
-    """One claim as a ``### [kind] summary`` heading with its badges and questions.
+    """One step as a ``### [impact] summary`` heading with its badges and prompts.
 
     A reviewer disposition, when set, joins the badges as ``reviewer: …`` — the
-    per-claim state stays attributed to the human, beside the agent's confidence.
-    ``verify`` claims are the export's checklist (they replaced the old
-    ``test_checklist.items``), so they render as **real task-list items** — the
-    ``- [ ]`` marker must sit at list level; inside a ``###`` heading GitHub
-    renders it as literal heading text, not a checkbox — and the box is checked
-    exactly when the reviewer set ``verified``, so the pasted checklist reflects
-    real verification state, never the claim's mere existence.
+    per-step state stays attributed to the human, beside the agent's confidence.
+    The old ``verify``-claim checklist is retired with the claim model (ADR-0016);
+    every step is a heading now, with its Behavior Impact and review prompts.
     """
-    kind = str(claim.get("kind", ""))
+    impact = str(claim.get("impact", ""))
     badges = [f"confidence: {claim.get('confidence', '')}"]
-    if claim.get("category"):
-        badges.append(str(claim["category"]))
-    if claim.get("level"):
-        badges.append(f"level: {claim['level']}")
     if disposition:
         badges.append(f"reviewer: {disposition}")
-    label = f"[{kind}] {claim.get('summary', '')} ({'; '.join(badges)})"
+    label = f"[{impact}] {claim.get('summary', '')} ({'; '.join(badges)})"
     detail = str(claim.get("detail", ""))
-    questions = claim.get("challenge_questions")
+    prompts = claim.get("review_prompts")
 
-    if kind == "verify":
-        box = "x" if disposition == "verified" else " "
-        lines = [f"- [{box}] {label}"]
-        if detail:
-            lines.append(f"  {detail}")  # indented: stays inside the task item
-        if isinstance(questions, list):
-            lines.extend(f"  - {q}" for q in questions)
-        return "\n".join(lines)
-
-    bullets = "\n".join(f"- {q}" for q in questions) if isinstance(questions, list) else ""
+    bullets = "\n".join(f"- {q}" for q in prompts) if isinstance(prompts, list) else ""
     return "\n".join((f"### {label}", "", detail, "", bullets)).rstrip()
 
 
 def _format_thread(thread: Mapping[str, object], dispositions: Mapping[str, str]) -> str:
-    """One thread: its summary then every claim block (ADR-0009's L1/L2 in Markdown)."""
+    """One thread: its summary then every step block (ADR-0009's L1/L2 in Markdown)."""
     parts = [str(thread.get("summary", ""))]
-    claims = thread.get("claims")
+    claims = thread.get("steps")
     if isinstance(claims, list):
         parts += [
             _format_claim_block(c, dispositions.get(str(c.get("id", ""))))

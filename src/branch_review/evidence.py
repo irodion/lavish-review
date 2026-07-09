@@ -46,7 +46,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from branch_review.analysis import claim_ids as analysis_claim_ids
+from branch_review.analysis import STEP_ID_PATTERN
+from branch_review.analysis import step_ids as analysis_step_ids
 from branch_review.escape import diff_fragment, escape_text, evidence_seam_markers
 from branch_review.feedback import DEFAULT_COCKPIT
 from branch_review.lint import lint_cockpit
@@ -61,21 +62,22 @@ _ANALYSIS_NAME = "analysis.json"
 
 _SCHEMA = "review-live-evidence/0.1"
 
-# A claim id as the analysis mints them (ADR-0012) — validated before any seam
-# string is built, so a hostile id can never smuggle markup or marker syntax.
-_CLAIM_ID = re.compile(r"^t\d+\.c\d+$")
+# A step id as the analysis mints them (review-analysis/0.4, ADR-0016) — validated
+# before any seam string is built, so a hostile id can never smuggle markup or
+# marker syntax. (The L2 panel's DOM hook stays ``class="claim"`` until #88.)
+_CLAIM_ID = re.compile(rf"^{STEP_ID_PATTERN}$")
 
 
 def evidence_seam(claim_id: str) -> tuple[str, str]:
-    """The seam marker pair for one claim's live evidence.
+    """The seam marker pair for one step's live evidence.
 
-    Planted empty by the cockpit author under the claim's evidence list (SKILL
+    Planted empty by the cockpit author under the step's evidence list (SKILL
     step 5), exactly like the Q&A seam: HTML comments, invisible, and distinct
     from the Escape Boundary's ``brc:untrusted`` markers so the linter's balance
     count is unperturbed.
     """
     if not _CLAIM_ID.match(claim_id):
-        raise ValueError(f"not a claim id: {claim_id!r}")
+        raise ValueError(f"not a step id: {claim_id!r}")
     return evidence_seam_markers(claim_id)
 
 
@@ -144,7 +146,7 @@ def _load_claim_ids(path: Path) -> list[str] | None:
         analysis = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return analysis_claim_ids(analysis)
+    return analysis_step_ids(analysis)
 
 
 def load_fragments(path: Path) -> list[EvidenceFragment]:
@@ -317,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as exc:
             print(f"error: {args.analysis} is not valid JSON: {exc}", file=sys.stderr)
             return 2
-        claim_ids: list[str] | None = analysis_claim_ids(analysis)
+        claim_ids: list[str] | None = analysis_step_ids(analysis)
     else:
         claim_ids = _load_claim_ids(args.cockpit.parent / _ANALYSIS_NAME)
 

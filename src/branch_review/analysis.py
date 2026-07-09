@@ -87,10 +87,22 @@ CONFIDENCE_LEVELS = ("high", "medium", "low")
 # default surface. Rejecting them keeps hunting from creeping back into the spine.
 _FORBIDDEN_NOTE_KEYS = ("severity", "category", "level")
 
-# Id shapes: threads are ``t<N>``; steps are ``<thread-id>.s<N>`` (the stable ids a
-# disposition attaches to and the cockpit element ids — ADR-0012/0016).
-_THREAD_ID = re.compile(r"^t\d+$")
+# Id shapes: a thread is ``t<N>``; a step is ``<thread-id>.s<N>`` (the stable ids a
+# disposition attaches to and the cockpit element ids — ADR-0012/0016). The lexical
+# shape is owned *here*, the module that mints ids: consumers that match a step id in
+# their own context (the live-evidence seam, the disposition bridge, the bake stamp)
+# import :data:`STEP_ID_PATTERN` instead of re-spelling ``t\d+\.s\d+``, so those regexes
+# can never drift from the validator.
+_THREAD_ID_BODY = r"t\d+"
+_THREAD_ID = re.compile(rf"^{_THREAD_ID_BODY}$")
 _STEP_ID_SUFFIX = re.compile(r"^s\d+$")
+
+#: The lexical shape of a step id (``t<N>.s<N>``), unanchored so a consumer can anchor
+#: it or embed it in a larger regex. The validator itself checks the stricter
+#: per-thread scoping (a step's prefix must equal its owning thread's id) by
+#: composition in :func:`_validate_step`; this flat shape is what a consumer needs when
+#: it only asks "is this a well-formed step id".
+STEP_ID_PATTERN = rf"{_THREAD_ID_BODY}\.s\d+"
 
 # A step's ``relates_to`` links, deferred for id-integrity checking until every step
 # id is known: ``(location, own step id, [(index, target id), …])`` — the targets are
@@ -606,14 +618,16 @@ def validate_analysis(obj: object) -> list[AnalysisError]:
     return errors
 
 
-def _walk_ids(analysis: object, container_key: str) -> list[str]:
-    """Every ``threads[].<container_key>[].id`` in document order (duplicates kept).
+def step_ids(analysis: object) -> list[str]:
+    """Every step id declared in an analysis, in document order (duplicates kept).
 
-    The tolerant walk behind :func:`step_ids` and :func:`claim_ids`: it guards each
-    level and skips anything malformed rather than raising, so a caller that lints an
-    already-validated analysis gets its ids and one that passes a rough draft still
-    gets whatever ids are present. Order and duplicates are preserved so the linter
-    can report a repeated id itself.
+    The set the Cockpit Linter (:mod:`branch_review.lint`) checks the authored DOM
+    against — the L2 panels that must each carry a live-evidence seam, and no others.
+    Deliberately **tolerant**: it walks the same ``threads[].steps[].id`` path
+    :func:`validate_analysis` guards but skips anything malformed rather than raising,
+    so a caller that lints an already-validated analysis gets its ids and one that
+    passes a rough draft still gets whatever ids are present. Order and duplicates are
+    preserved so the linter can report a repeated id itself.
     """
     ids: list[str] = []
     threads = analysis.get("threads") if isinstance(analysis, Mapping) else None
@@ -622,40 +636,13 @@ def _walk_ids(analysis: object, container_key: str) -> list[str]:
     for thread in threads:
         if not isinstance(thread, Mapping):
             continue
-        items = thread.get(container_key)
-        if not isinstance(items, list):
+        steps = thread.get("steps")
+        if not isinstance(steps, list):
             continue
-        for item in items:
-            if isinstance(item, Mapping) and isinstance(item.get("id"), str):
-                ids.append(item["id"])
+        for step in steps:
+            if isinstance(step, Mapping) and isinstance(step.get("id"), str):
+                ids.append(step["id"])
     return ids
-
-
-def step_ids(analysis: object) -> list[str]:
-    """Every step id declared in an analysis, in document order (duplicates kept).
-
-    The set the Cockpit Linter (:mod:`branch_review.lint`) checks the authored DOM
-    against — the steps that must each have a ``<details class="step">`` element and a
-    live-evidence seam, and no others.
-    """
-    return _walk_ids(analysis, "steps")
-
-
-def claim_ids(analysis: object) -> list[str]:
-    """Legacy id walk over the retired ``threads[].claims[]`` path — **transitional**.
-
-    The deep consumers of the id set — the Cockpit Linter (:mod:`branch_review.lint`),
-    Reviewer Dispositions (:mod:`branch_review.dispositions`), and live-evidence
-    injection (:mod:`branch_review.evidence`) — still speak the 0.3 claim vocabulary
-    end to end (DOM ``class="claim"``, ``brc:evidence:<claim id>`` seams, the
-    ``verified | concern | question-open`` states). They are reframed onto Review
-    Steps in their own slices (#86/#87); until then they import *this* walker, so the
-    0.4 schema break lands in the validator without churning modules it doesn't own.
-    A 0.4 analysis has no ``claims`` key, so this returns ``[]`` for one — those
-    consumers are dormant against real runs until their slices wire the step-shaped
-    cockpit. Remove this once all three import :func:`step_ids`.
-    """
-    return _walk_ids(analysis, "claims")
 
 
 def main(argv: list[str] | None = None) -> int:

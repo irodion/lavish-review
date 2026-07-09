@@ -73,6 +73,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
+from branch_review.analysis import STEP_ID_PATTERN
 from branch_review.escape import (
     LAVISH_CDN,
     QA_SEAM_CLOSE,
@@ -153,10 +154,12 @@ _UNTRUSTED_RE = re.compile(
     re.DOTALL,
 )
 
-# The content of a live-evidence seam comment — ``brc:evidence:<claim id>`` for an
-# open marker, ``/brc:evidence:<claim id>`` for a close — as HTMLParser hands it to
-# handle_comment (the ``<!--``/``-->`` stripped). Captures the claim id from either.
-_EVIDENCE_COMMENT = re.compile(r"^\s*/?brc:evidence:(t\d+\.c\d+)\s*$")
+# The content of a live-evidence seam comment — ``brc:evidence:<step id>`` for an
+# open marker, ``/brc:evidence:<step id>`` for a close — as HTMLParser hands it to
+# handle_comment (the ``<!--``/``-->`` stripped). Captures the step id from either.
+# Step ids are ``t<N>.s<N>`` since review-analysis/0.4 (ADR-0016); the L2 panel's DOM
+# hook is still ``class="claim"`` (renamed with the deck reframe, #88).
+_EVIDENCE_COMMENT = re.compile(rf"^\s*/?brc:evidence:({STEP_ID_PATTERN})\s*$")
 
 
 @dataclass(frozen=True)
@@ -616,12 +619,15 @@ def lint_cockpit(
     by either: the cockpit we author never contains inline JS, even in
     ``interactive`` mode (Lavish injects its own at serve time).
 
-    ``claim_ids`` is the run's analysis claim id set (from
-    :func:`branch_review.analysis.claim_ids`). When given, the structural pass
-    (:func:`_check_structure`) also runs — claim id correspondence, anchor
-    resolution, and seam presence. When ``None`` (a caller with no analysis to hand,
-    e.g. a bare security re-lint) only the escape/CSP rules run. Either way the two
-    families are independent: a structural failure never suppresses an escape/CSP one.
+    ``claim_ids`` is the run's analysis id set — the Review Step ids
+    (:func:`branch_review.analysis.step_ids`, review-analysis/0.4) each L2 panel
+    must carry. (The panels' DOM hook is still ``class="claim"``; the parameter name
+    follows it, and both are renamed to "step" with the deck reframe, #88.) When
+    given, the structural pass (:func:`_check_structure`) also runs — id
+    correspondence, anchor resolution, and seam presence. When ``None`` (a caller
+    with no analysis to hand, e.g. a bare security re-lint) only the escape/CSP rules
+    run. Either way the two families are independent: a structural failure never
+    suppresses an escape/CSP one.
     """
     errors: list[LintError] = []
     errors.extend(_check_untrusted_regions(html))
@@ -674,7 +680,9 @@ def main(argv: list[str] | None = None) -> int:
 
     claim_ids: list[str] | None = None
     if args.analysis is not None:
-        from branch_review.analysis import claim_ids as analysis_claim_ids
+        # The expected L2-panel id set is the analysis's Review Step ids
+        # (review-analysis/0.4, ADR-0016); the panels' DOM hook stays class="claim".
+        from branch_review.analysis import step_ids
 
         try:
             analysis = json.loads(args.analysis.read_text(encoding="utf-8"))
@@ -684,7 +692,7 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as exc:
             print(f"error: {args.analysis} is not valid JSON: {exc}", file=sys.stderr)
             return 2
-        claim_ids = analysis_claim_ids(analysis)
+        claim_ids = step_ids(analysis)
 
     errors = lint_cockpit(html, styling=args.styling, csp_mode=args.csp_mode, claim_ids=claim_ids)
     if errors:
