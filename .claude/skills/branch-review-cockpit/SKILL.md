@@ -4,9 +4,10 @@ description: >-
   Turn the current Git branch's diff into an interactive HTML Review Cockpit and
   open it in the browser via Lavish-AXI for a human to audit. Use when the user
   asks to review a branch, review the diff, or run /review-branch. Authors a
-  layered claim→evidence cockpit (L0 orientation, L1 narrative threads, L2
-  claims with confidence and challenge questions, L3 per-file evidence) from a
-  validated analysis.json formed blind by an isolated analyst subagent, behind
+  layered step→evidence cockpit (L0 orientation, L1 narrative threads, L2 guided
+  Review Steps with Behavior Impact, confidence, and review prompts, L3 per-file
+  evidence) from a validated analysis.json formed blind by an isolated
+  change-narrator subagent, behind
   a hardened Escape Boundary + strict CSP + post-write lint, with a blocking
   conversational feedback loop.
 license: MIT (bundled LICENSE file has the complete terms)
@@ -29,9 +30,11 @@ feedback loop.
 
 The cockpit is **layered** (ADR-0009): it rolls the change out before the reviewer
 gradually — L0 answers *what is this branch for*, L1 decomposes it into a few
-narrative **Threads**, L2 states the **Claims** the reviewer must judge (each with
-the analyst's confidence and challenge questions), and L3 holds the **evidence**: the diffs
-themselves, demoted to leaf level. The reviewer descends at their own pace; every
+narrative **Threads** (thread order is the Review Route), L2 walks the **Review
+Steps** — each a guided stop with its Behavior Impact, the narrator's confidence,
+`why_now`, and review prompts (comparisons to make, not "what could be wrong") — and
+L3 holds the **evidence**: the diffs themselves, demoted to leaf level. The reviewer
+descends at their own pace; every
 layer must justify the one above it. It is authored from a structured **Analysis**
 (`analysis.json`) written first (ADR-0001) — the substrate both the HTML *and*
 your feedback-loop answers come from.
@@ -80,13 +83,13 @@ step fails with "cannot find the branch_review package", re-install the skill.
 
 - **Never auto-apply code and never commit.** This skill only reads the diff and
   renders an analysis of it; it changes no source and runs no git write commands.
-- **The Analysis is authored blind (ADR-0011).** All claim formation happens in
-  the isolated `review-analyst` subagent (step 3). Never author or edit
-  `analysis.json` in this context, and never leak this conversation into the
-  analyst's prompt. If you disagree with a claim, or notice a discrepancy while
+- **The Analysis is authored blind (ADR-0011).** All step formation happens in
+  the isolated `review-analyst` change-narrator subagent (step 3). Never author or
+  edit `analysis.json` in this context, and never leak this conversation into the
+  narrator's prompt. If you disagree with a step, or notice a discrepancy while
   authoring the cockpit or answering the loop: **render and answer it
   faithfully, and surface your disagreement to the reviewer as a question** —
-  never edit the claim. The isolated pass's integrity is worth more than your
+  never edit the step. The isolated pass's integrity is worth more than your
   correction.
 - **Only the reviewer moves a disposition (ADR-0012).** Per-claim dispositions
   (`unreviewed | verified | concern | question-open`) are set by the human via
@@ -260,8 +263,8 @@ checklist's suggestion (verbatim) and `evidence` to say *why* it was suggested.
 
 ### 3. Spawn the isolated analyst to author `.review-agent/analysis.json`
 
-The Analysis — threads, claims, confidences (`review-analysis/0.3`, ADR-0009/0014) —
-is formed **blind, by construction** (ADR-0011): spawn the **`review-analyst`**
+The Analysis — threads, guided Review Steps, confidences (`review-analysis/0.4`,
+ADR-0016) — is formed **blind, by construction** (ADR-0011): spawn the **`review-analyst`**
 subagent (its definition, `.claude/agents/review-analyst.md`, carries the full
 authoring contract and *is* the inspectable isolation boundary). Use the Agent
 tool with `subagent_type: "review-analyst"` — **never a fork** (a fork inherits
@@ -295,12 +298,12 @@ Detected test runner (verbatim from step 2): <the JSON, or null>
 ```
 
 The analyst writes `.review-agent/analysis.json` and replies with a short
-structural report (threads, claim counts, widening) — treat that report as a
-receipt, not as analysis to embellish.
+structural report (threads, step counts by impact, widening) — treat that report as
+a receipt, not as analysis to embellish.
 
-A mid-review re-analysis that mints **new** claims (e.g. a future Lens Pass)
+A mid-review re-analysis that mints **new** steps (e.g. a future Lens Pass)
 repeats this step with a **fresh** analyst. Ordinary loop answers (step 8) stay
-with you, grounded in the artifacts — the claims were formed blind; answering
+with you, grounded in the artifacts — the steps were formed blind; answering
 questions about them afterward is presentation, not analysis.
 
 ### 4. Validate the Analysis
