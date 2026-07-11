@@ -118,9 +118,11 @@ Route policy below, not by copying the example's particular sequence. Structure:
   `"alignment": null`.
 - `widened_into` — every file you read **beyond the diff** (ADR-0011: the
   evidence basis must be accountable). Honest empty list if you never widened.
-- `threads` — the changeset decomposed into **2–5 narrative threads** (the
-  feature, the drive-by refactor, the config churn…), **in descent order: the
-  order you'd have the reviewer read them — thread order IS the Review Route.**
+- `threads` — the changeset decomposed into **narrative threads** — usually 2–5
+  (the feature, the drive-by refactor, the config churn…), but let the change decide:
+  a single focused branch is one honest thread, and the validator only requires ≥1.
+  List them **in descent order: the order you'd have the reviewer read them — thread
+  order IS the Review Route.**
   Decompose by *meaning*, not by file; a tangled branch reads as separable
   stories. Each: `{id, title, summary, paths[], steps[]}` — `id` is `t1`, `t2`, …;
   `paths` are the changed files the thread covers (every changed file should
