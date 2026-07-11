@@ -469,12 +469,13 @@ def test_repo_config_disables_remote_goal_fetch(repo: Path) -> None:
 def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None:
     """End-to-end: a layered cockpit assembled the way the SKILL instructs is lint-clean.
 
-    Proves the Escape Boundary holds through the ADR-0009 layers — a hostile path,
-    an HTML-in-hunk, and a hostile stated goal (ADR-0010) are injected only via
+    Proves the Escape Boundary holds through the ADR-0009/0016 layers — a hostile
+    path, an HTML-in-hunk, and a hostile stated goal (ADR-0010) are injected only via
     ``path_html``, the per-file fragment, and the pre-escaped goal block in
     ``fragments.html``, wrapped in the L0/L1/L2/L3 structure (goal + orientation,
-    thread section, claim <details> with an evidence link, file <details> anchor,
-    qa seam) — and the Cockpit Linter (issue #4) finds nothing to complain about.
+    thread section, Review Step <details> with an evidence link, file <details>
+    anchor, qa seam) — and the Cockpit Linter (issues #4/#86), run with the step id
+    set, finds nothing to complain about.
     """
     from branch_review.escape import STRICT_CSP
     from branch_review.lint import lint_cockpit
@@ -508,18 +509,18 @@ def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None
         "<h2><span class='thread-id'>t1</span> Hostile file</h2>"
         "<p class='thread-summary'>One file designed to break escaping.</p>"
         f"<p class='thread-paths'>{entry['path_html']}</p>"
-        "<details class='claim' id='t1.c1'><summary>"
-        "<span class='chip kind-risk'>risk</span> The payload could execute "
-        "<span class='chip confidence-high'>confidence: high</span>"
-        "<span class='risk-category'>security</span>"
-        "<span class='chip risk-level medium'>medium</span></summary>"
-        "<div class='claim-body'>"
+        "<details class='step' id='t1.s1' data-impact='behavior-change'><summary>"
+        "<span class='chip impact-behavior-change'>behavior-change</span> "
+        "The payload could execute "
+        "<span class='chip confidence-high'>confidence: high</span></summary>"
+        "<div class='step-body'>"
         "<p class='detail'>The hunk hides an onerror payload in a string literal.</p>"
-        "<h4>Challenge</h4>"
-        "<ul class='challenge-questions'><li>Does the hunk render inert?</li></ul>"
+        "<p class='why-now'>Read first — this is where the untrusted string lands.</p>"
+        "<h4>Review prompts</h4>"
+        "<ul class='review-prompts'><li>Confirm the hunk renders inert as text.</li></ul>"
         "<h4>Evidence</h4><ul class='evidence-list'>"
         f"<li><a href='#{file_anchor}'>{entry['path_html']}</a></li></ul>"
-        "<!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1-->"
+        "<!--brc:evidence:t1.s1--><!--/brc:evidence:t1.s1-->"
         "</div></details></section>"
         "<section><h2>Evidence</h2>"
         f"<details class='file' id='{file_anchor}'>"
@@ -531,7 +532,7 @@ def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None
         "<script src='assets/app.js'></script></body></html>"
     )
 
-    errors = lint_cockpit(cockpit, styling="vendored")
+    errors = lint_cockpit(cockpit, styling="vendored", step_ids=["t1.s1"])
     assert errors == [], errors
     # And the payloads really are neutralised, not merely tolerated: every hostile
     # angle bracket became an entity, so neither the path, the hunk, nor the goal

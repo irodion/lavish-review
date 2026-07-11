@@ -38,7 +38,7 @@ UNTRUSTED_OPEN = "<!--brc:untrusted-->"
 UNTRUSTED_CLOSE = "<!--/brc:untrusted-->"
 
 # Structural seams the cockpit author pre-plants empty for a later mechanical fill:
-# the Q&A log the bake folds in (issue #9) and each claim's live evidence (issue #43).
+# the Q&A log the bake folds in (issue #9) and each step's live evidence (issue #43).
 # Same ``brc:`` HTML-comment family as the untrusted markers above — invisible in the
 # browser and, being comments, they never perturb the linter's untrusted-marker
 # balance count. They live here in the escape leaf so their producers (:mod:`bake`,
@@ -48,14 +48,14 @@ QA_SEAM_OPEN = "<!--brc:qa-log-->"
 QA_SEAM_CLOSE = "<!--/brc:qa-log-->"
 
 
-def evidence_seam_markers(claim_id: str) -> tuple[str, str]:
-    """The raw open/close markers of one claim's live-evidence seam.
+def evidence_seam_markers(step_id: str) -> tuple[str, str]:
+    """The raw open/close markers of one Review Step's live-evidence seam.
 
-    Just the string format — callers that write a seam validate the claim id first
+    Just the string format — callers that write a seam validate the step id first
     (:func:`branch_review.evidence.evidence_seam`); the linter only checks presence,
-    so it builds the markers straight from the analysis's claim ids.
+    so it builds the markers straight from the analysis's step ids (ADR-0016).
     """
-    return f"<!--brc:evidence:{claim_id}-->", f"<!--/brc:evidence:{claim_id}-->"
+    return f"<!--brc:evidence:{step_id}-->", f"<!--/brc:evidence:{step_id}-->"
 
 
 # The strict Content-Security-Policy the vendored cockpit must ship — the
@@ -275,13 +275,13 @@ def file_fragment_id(path: str) -> str:
 # --- Hunk anchors (Deck Mode, ADR-0014, issue #63) ----------------------------
 #
 # A per-file fragment used to be one big ``<pre class="diff">``; the Deck Mode Stage
-# wants to land a claim's evidence on the *exact hunk* that substantiates it, not the
+# wants to land a step's evidence on the *exact hunk* that substantiates it, not the
 # whole file. So the boundary now emits a deterministic per-hunk id inside each
 # fragment and records a hunk index in the fragments manifest — the **Hunk Anchorer**.
 # The split happens on our side of the boundary (each hunk's body still crosses
 # :func:`fragment`), so ADR-0002 holds per hunk exactly as it held per file, and a
 # ``<script>`` hidden in a hunk still renders as text. Evidence refs may address a hunk
-# (``{path, hunk}``, analysis schema 0.3); the anchor is read from the manifest and
+# (``{path, hunk}``, analysis schema 0.4); the anchor is read from the manifest and
 # never hand-typed, and the browser's native ``#anchor`` scroll completes the deep link.
 
 # A unified-diff hunk header — a line beginning ``@@`` (multiline ``^`` matches at

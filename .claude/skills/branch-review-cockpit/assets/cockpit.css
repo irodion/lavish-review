@@ -20,9 +20,12 @@
   --add: #3fb950;
   --del: #f85149;
 
-  /* Judgment palette — the ONLY colours in the cockpit (ADR-0014 judgment-color
-     discipline): risk level, analyst confidence, reviewer disposition. Claim kinds
-     and every other chip stay neutral (--muted). */
+  /* Judgment palette — the judgment colours in the cockpit (ADR-0014/0016
+     judgment-color discipline): analyst confidence, reviewer disposition, and the
+     one attention signal on Behavior Impact (unknown-impact is warn — attention-
+     worthy, never dumped at the end). Skimmable impacts and every other chip stay
+     neutral (--muted); behavior-preserving is neutral by design — no green, no
+     checkmark — so it reads as *verify-then-skim*, never "safe" (ADR-0016). */
   --warn: #d29922;
   --level-low: #3fb950;
   --level-medium: #d29922;
@@ -232,11 +235,11 @@ pre.diff {
 /* Preamble (diff --git / index / --- / +++ / rename) and no-newline markers. */
 .diff-table tr.dl-meta td { color: var(--muted); }
 
-/* --- Layered claim→evidence cockpit (ADR-0009, issue #39) -------------------
-   Styling for the agent-authored layers driven by review-analysis/0.3:
-   L0 orientation, L1 threads, L2 claims (native <details> progressive
-   disclosure), L3 per-file evidence. Self-contained — no remote assets
-   (strict CSP / linter). The judgment palette these layers use lives in the
+/* --- Layered step→evidence cockpit (ADR-0009/0016, issues #39/#86) ----------
+   Styling for the agent-authored layers driven by review-analysis/0.4:
+   L0 orientation, L1 threads, L2 guided Review Steps (native <details>
+   progressive disclosure), L3 per-file evidence. Self-contained — no remote
+   assets (strict CSP / linter). The judgment palette these layers use lives in the
    `:root` token block at the top of the file, beside the light-theme override. */
 
 /* L0 — orientation: the goal, the intent read, and the change's shape at a glance. */
@@ -283,7 +286,7 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
 .orientation a { color: var(--accent); text-decoration: none; }
 .orientation a:hover { text-decoration: underline; }
 
-/* Shared chips: claim kind, agent confidence, risk level. */
+/* Shared chips: Behavior Impact, agent confidence. */
 .chip {
   display: inline-block;
   font-family: var(--mono);
@@ -295,38 +298,48 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
   border: 1px solid currentcolor;
   white-space: nowrap;
 }
-/* Judgment-color discipline (ADR-0014): claim *kinds* are neutral chips — colour
-   is reserved for the judgment signals below. Each kind reads by its word alone. */
-.kind-behavior,
-.kind-risk,
-.kind-omission,
-.kind-verify { color: var(--muted); }
+
+/* Behavior Impact chips (ADR-0016): the L2 vocabulary a step carries. Colour is
+   spent sparingly and only where it earns attention (judgment-color discipline):
+   `behavior-change` is prominent (full-strength foreground — the spine of the
+   change), `unknown-impact` is the one warn tint (attention-worthy, so it is read
+   where its subject belongs, never dumped at the end), and the skimmable impacts —
+   `behavior-preserving`, `test-change`, `mechanical-change` — stay neutral. Crucially
+   `behavior-preserving` gets NO green and NO checkmark, so it reads as verify-then-
+   skim rather than "safe". Each chip still carries a distinct glyph, so it never
+   reads by colour alone (CVD-safe), and `looks-right`-style approval marks are
+   deliberately avoided. */
+.impact-behavior-change { color: var(--fg); font-weight: 600; }
+.impact-unknown-impact { color: var(--warn); }
+.impact-behavior-preserving,
+.impact-test-change,
+.impact-mechanical-change { color: var(--muted); }
 
 .confidence-high { color: var(--level-low); }
 .confidence-medium { color: var(--level-medium); }
 .confidence-low { color: var(--level-high); }
-.risk-level.low { color: var(--level-low); }
-.risk-level.medium { color: var(--level-medium); }
-.risk-level.high { color: var(--level-high); }
-.risk-category { font-weight: 600; text-transform: capitalize; }
 
-/* Every judgment-coloured chip carries a glyph as well as its word, so nothing is
-   distinguishable by colour alone (ADR-0014; CVD-safe). The glyph is injected from
-   the chip's own class, so the authored markup is unchanged and existing cockpits
-   gain it for free. Confidence is a fill gauge (● full → ◐ half → ○ empty); risk
-   level is a severity mark (▲ high, ◆ medium, ▽ low). */
+/* Every chip carries a glyph as well as its word, so nothing is distinguishable by
+   colour alone (ADR-0014; CVD-safe). The glyph is injected from the chip's own
+   class, so the authored markup is unchanged. Confidence is a fill gauge (● full →
+   ◐ half → ○ empty); each impact has its own mark — never a checkmark, so no impact
+   ever reads as an approval stamp. */
+.impact-behavior-change::before,
+.impact-behavior-preserving::before,
+.impact-test-change::before,
+.impact-mechanical-change::before,
+.impact-unknown-impact::before,
 .confidence-high::before,
 .confidence-medium::before,
-.confidence-low::before,
-.risk-level.low::before,
-.risk-level.medium::before,
-.risk-level.high::before { margin-right: 0.3em; }
+.confidence-low::before { margin-right: 0.3em; }
 .confidence-high::before { content: "\25CF"; }   /* ● */
 .confidence-medium::before { content: "\25D0"; }  /* ◐ */
 .confidence-low::before { content: "\25CB"; }     /* ○ */
-.risk-level.high::before { content: "\25B2"; }    /* ▲ */
-.risk-level.medium::before { content: "\25C6"; }  /* ◆ */
-.risk-level.low::before { content: "\25BD"; }     /* ▽ */
+.impact-behavior-change::before { content: "\25C9"; }       /* ◉ */
+.impact-behavior-preserving::before { content: "="; }       /* = (preserved) */
+.impact-test-change::before { content: "\25C7"; }           /* ◇ */
+.impact-mechanical-change::before { content: "\00B7"; }     /* · */
+.impact-unknown-impact::before { content: "?"; }
 
 /* Goal alignment (ADR-0010): a thread the analysis flags as unrelated to the goal.
    Neutral like every non-judgment chip — the ⚑ glyph and the word carry it, not
@@ -357,6 +370,21 @@ section.thread > h2 .thread-id {
   color: var(--muted);
   margin-right: 0.5rem;
 }
+/* Derived thread character (ADR-0016): the impact counts computed from this
+   thread's steps (e.g. "3 behavior-change · 1 test · 5 preserving"), tinted by the
+   most attention-worthy step present. No authored thread badge exists — the pipeline
+   never reads a thread impact; this is rendered from the steps. Neutral by default;
+   an `attention-*` modifier lifts the tint when the thread holds an attention-worthy
+   step (unknown-impact → warn, behavior-change → foreground). */
+.thread-impacts {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 0.6rem;
+}
+.thread-impacts.attention-unknown-impact { color: var(--warn); }
+.thread-impacts.attention-behavior-change { color: var(--fg); }
 .thread-summary { margin: 0 0 0.5rem; }
 .thread-paths {
   margin: 0 0 0.75rem;
@@ -366,14 +394,14 @@ section.thread > h2 .thread-id {
 }
 .thread-paths code { color: var(--accent); background: none; border: none; padding: 0; }
 
-/* L2 — claims: native <details>, closed by default (progressive disclosure). */
-details.claim {
+/* L2 — Review Steps: native <details>, closed by default (progressive disclosure). */
+details.step {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   margin: 0.6rem 0;
 }
-details.claim > summary {
+details.step > summary {
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -383,24 +411,48 @@ details.claim > summary {
   font-weight: 600;
   list-style-position: outside;
 }
-details.claim > summary:hover { background: var(--panel); }
-details.claim[open] > summary { border-bottom: 1px solid var(--border); }
-details.claim > .claim-body { padding: 0.75rem 1rem; }
-.claim-body .detail { margin: 0 0 0.6rem; }
-.claim-body h4 {
+details.step > summary:hover { background: var(--panel); }
+details.step[open] > summary { border-bottom: 1px solid var(--border); }
+details.step > .step-body { padding: 0.75rem 1rem; }
+.step-body .detail { margin: 0 0 0.6rem; }
+.step-body h4 {
   margin: 0.6rem 0 0.25rem;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
 }
-.challenge-questions {
+/* why_now (ADR-0016): why this step sits here on the Review Route. A quiet lead-in
+   above the detail, so the reviewer knows why they are being stopped here. */
+.why-now {
+  margin: 0 0 0.6rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+/* review_prompts (ADR-0016): the comparisons/confirmations to make — not "what could
+   be wrong here". A quiet list under the step's detail. */
+.review-prompts {
   margin: 0;
   padding-left: 1.1rem;
   color: var(--muted);
   font-size: 0.92rem;
 }
-.challenge-questions li { margin: 0.2rem 0; }
+.review-prompts li { margin: 0.2rem 0; }
+/* Attention Notes (ADR-0016): muted asides on the step — an untested behavior change,
+   a goal gap. Never in the Map, never counted in progress, no judgment control of
+   their own. A note is narration from the negative side, not an adjudicated finding,
+   so it is styled as an aside, not a chip or a badge. */
+.attention-note {
+  margin: 0.6rem 0 0;
+  padding: 0.4rem 0.6rem 0.4rem 0.7rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.attention-note::before { content: "\26A0"; margin-right: 0.4em; } /* ⚠ muted, an aside */
+.attention-note .evidence-list { margin-top: 0.25rem; }
 .evidence-list { margin: 0; padding-left: 1.1rem; font-size: 0.92rem; }
 .evidence-list li { margin: 0.2rem 0; }
 .evidence-list a {
@@ -440,16 +492,20 @@ details.file > .file-body { padding: 0.5rem 0.9rem 0.9rem; }
   font-size: 0.9rem;
 }
 
-/* Reviewer dispositions (ADR-0012) — JS-injected controls on each claim summary,
-   per-claim state tint, and per-thread progress. Absent entirely on file://. */
+/* Reviewer dispositions (ADR-0012/0016) — JS-injected controls on each step summary,
+   per-step state tint, and per-thread progress. The five-state vocabulary
+   (`looks-right | concern | follow-up | skipped`, plus `unreviewed` as absence): one
+   axis, four active states, one colour each. `looks-right` keeps a colour but never a
+   checkmark (an attest of comprehension, not an approval — ADR-0016). Absent entirely
+   on file://. */
 .disposition-controls {
   display: inline-flex;
   gap: 0.3rem;
   margin-left: auto; /* pushes the controls to the summary's right edge */
 }
-/* The pill button, shared by the disposition controls and the claim-ask send. */
+/* The pill button, shared by the disposition controls and the step-ask send. */
 .disposition-controls button,
-.claim-ask-send {
+.step-ask-send {
   font-family: var(--mono);
   font-size: 0.7rem;
   color: var(--muted);
@@ -461,28 +517,48 @@ details.file > .file-body { padding: 0.5rem 0.9rem 0.9rem; }
   white-space: nowrap;
 }
 .disposition-controls button:hover,
-.claim-ask-send:hover { border-color: var(--accent); color: var(--fg); }
+.step-ask-send:hover { border-color: var(--accent); color: var(--fg); }
 .disposition-controls button[aria-pressed="true"] {
   border-color: currentcolor;
   font-weight: 600;
 }
-/* The pressed-state judgment tint, shared by the in-claim pill controls and the
+/* The pressed-state judgment tint, shared by the in-step pill controls and the
    oversized Stage control (issue #68) — one disposition→token mapping for both. */
-.disposition-controls button[aria-pressed="true"][data-disposition="verified"],
-.deck-control-btn[aria-pressed="true"][data-disposition="verified"] {
+.disposition-controls button[aria-pressed="true"][data-disposition="looks-right"],
+.deck-control-btn[aria-pressed="true"][data-disposition="looks-right"] {
   color: var(--level-low);
 }
 .disposition-controls button[aria-pressed="true"][data-disposition="concern"],
 .deck-control-btn[aria-pressed="true"][data-disposition="concern"] {
   color: var(--level-high);
 }
-.disposition-controls button[aria-pressed="true"][data-disposition="question-open"],
-.deck-control-btn[aria-pressed="true"][data-disposition="question-open"] {
+.disposition-controls button[aria-pressed="true"][data-disposition="follow-up"],
+.deck-control-btn[aria-pressed="true"][data-disposition="follow-up"] {
   color: var(--warn);
 }
-details.claim[data-disposition="verified"] { border-left: 3px solid var(--level-low); }
-details.claim[data-disposition="concern"] { border-left: 3px solid var(--level-high); }
-details.claim[data-disposition="question-open"] { border-left: 3px solid var(--warn); }
+.disposition-controls button[aria-pressed="true"][data-disposition="skipped"],
+.deck-control-btn[aria-pressed="true"][data-disposition="skipped"] {
+  color: var(--muted);
+}
+/* Behavior Impact edge (ADR-0016): an unreviewed `unknown-impact` step carries a warn
+   edge so it reads attention-worthy in the layered document too, not just the Map. The
+   `:not([data-disposition])` guard encodes "impact hint only until the reviewer acts"
+   in the selector itself (same discipline as the Map dot below), so a set disposition
+   always wins the left border regardless of rule order. */
+details.step[data-impact="unknown-impact"]:not([data-disposition]) { border-left: 3px solid var(--warn); }
+details.step[data-disposition="looks-right"] { border-left: 3px solid var(--level-low); }
+details.step[data-disposition="concern"] { border-left: 3px solid var(--level-high); }
+details.step[data-disposition="follow-up"] { border-left: 3px solid var(--warn); }
+details.step[data-disposition="skipped"] { border-left: 3px solid var(--muted); }
+/* Verify-then-skim (ADR-0016): a `behavior-preserving` step shows the analyst's
+   confidence prominently, because "trust me, this is a refactor" is exactly the claim
+   the reviewer is being asked to spot-check. */
+details.step[data-impact="behavior-preserving"] > summary .confidence-high,
+details.step[data-impact="behavior-preserving"] > summary .confidence-medium,
+details.step[data-impact="behavior-preserving"] > summary .confidence-low {
+  font-weight: 700;
+  border-width: 2px;
+}
 .thread-progress {
   font-family: var(--mono);
   font-size: 0.72rem;
@@ -492,10 +568,10 @@ details.claim[data-disposition="question-open"] { border-left: 3px solid var(--w
 }
 .thread-progress.has-concern { color: var(--warn); }
 
-/* Claim-scoped questions (ADR-0015) — JS-injected ask affordance in each claim
-   body: a text box that queues the reviewer's question anchored to the claim.
+/* Step-scoped questions (ADR-0015/0016) — JS-injected ask affordance in each step
+   body: a text box that queues the reviewer's question anchored to the step.
    Absent entirely on file://. */
-.claim-ask {
+.step-ask {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -504,7 +580,7 @@ details.claim[data-disposition="question-open"] { border-left: 3px solid var(--w
   padding-top: 0.6rem;
   border-top: 1px solid var(--border);
 }
-.claim-ask-input {
+.step-ask-input {
   flex: 1 1 16rem;
   min-width: 0;
   resize: vertical;
@@ -516,9 +592,9 @@ details.claim[data-disposition="question-open"] { border-left: 3px solid var(--w
   border-radius: 6px;
   padding: 0.35rem 0.5rem;
 }
-.claim-ask-input:focus { outline: none; border-color: var(--accent); }
-.claim-ask-send { padding: 0.05rem 0.7rem; } /* pill base above; only the padding differs */
-.claim-ask-status {
+.step-ask-input:focus { outline: none; border-color: var(--accent); }
+.step-ask-send { padding: 0.05rem 0.7rem; } /* pill base above; only the padding differs */
+.step-ask-status {
   flex-basis: 100%;
   font-size: 0.78rem;
   color: var(--muted);
@@ -557,21 +633,24 @@ details.claim[data-disposition="question-open"] { border-left: 3px solid var(--w
   border: 1px solid currentcolor;
   white-space: nowrap;
 }
-#review-outcome .disposition.verified { color: var(--level-low); }
+#review-outcome .disposition.looks-right { color: var(--level-low); }
 #review-outcome .disposition.concern { color: var(--level-high); }
-#review-outcome .disposition.question-open { color: var(--warn); }
+#review-outcome .disposition.follow-up { color: var(--warn); }
+#review-outcome .disposition.skipped { color: var(--muted); }
 #review-outcome .disposition.unreviewed { color: var(--muted); }
 /* Glyph + word on the baked outcome chips, matching the live control labels
-   (app.js `✓ verified` / `⚠ concern` / `? question`) so the disposition never
-   reads by colour alone (ADR-0014). */
+   (app.js `● looks right` / `⚠ concern` / `? follow-up` / `↷ skip`) so the
+   disposition never reads by colour alone (ADR-0014) — and `looks-right` carries no
+   checkmark (an attest, not an approval — ADR-0016). */
 #review-outcome .disposition::before { margin-right: 0.3em; }
-#review-outcome .disposition.verified::before { content: "\2713"; }       /* ✓ */
+#review-outcome .disposition.looks-right::before { content: "\25CF"; }    /* ● */
 #review-outcome .disposition.concern::before { content: "\26A0"; }        /* ⚠ */
-#review-outcome .disposition.question-open::before { content: "?"; }
+#review-outcome .disposition.follow-up::before { content: "?"; }
+#review-outcome .disposition.skipped::before { content: "\21B7"; }        /* ↷ */
 #review-outcome .disposition.unreviewed::before { content: "\00B7"; }     /* · */
 #review-outcome .outcome-note { color: var(--muted); font-size: 0.85rem; font-style: italic; }
 
-/* Live-injected evidence (issue #43) — a fragment added mid-review at a claim's
+/* Live-injected evidence (issue #43) — a fragment added mid-review at a step's
    evidence seam. Visually distinct from pre-authored evidence so the reviewer can
    tell what the page gained during the conversation. */
 figure.live-evidence {
@@ -599,17 +678,17 @@ figure.live-evidence .live-evidence-meta {
 figure.live-evidence pre.diff { margin: 0; }
 
 /* Hunk-anchored diffs (Deck Mode, ADR-0014): one file's diff is split into per-hunk
-   <section class="hunk" id="hunk-…"> blocks so a claim's evidence can land on the
+   <section class="hunk" id="hunk-…"> blocks so a step's evidence can land on the
    exact hunk. The preamble (diff --git / --- / +++ / rename headers) leads separately. */
 .file-diff > pre.diff + .hunk,
 .file-diff > .hunk + .hunk { margin-top: 0.5rem; }
 .file-diff > .hunk > pre.diff { margin: 0; }
 
-/* Deep-link feedback: the element navigated to from a claim's evidence link. */
+/* Deep-link feedback: the element navigated to from a step's evidence link. */
 :target { scroll-margin-top: 1rem; }
 details.file:target > summary,
-details.claim:target > summary { outline: 2px solid var(--accent); border-radius: 6px; }
-/* A hunk navigated to directly (a claim's evidence link, #63) highlights its
+details.step:target > summary { outline: 2px solid var(--accent); border-radius: 6px; }
+/* A hunk navigated to directly (a step's evidence link, #63) highlights its
    annotated header row (#64) — the row the reviewer was sent to. */
 .hunk:target { scroll-margin-top: 1rem; }
 .hunk:target > pre.diff { outline: 2px solid var(--accent); border-radius: 8px; }
@@ -700,9 +779,10 @@ body.deck-active .deck {
 }
 .deck-tally { font-weight: 600; }
 .deck-count { font-variant-numeric: tabular-nums; }
-.deck-count.verified { color: var(--level-low); }
+.deck-count.looks-right { color: var(--level-low); }
 .deck-count.concern { color: var(--level-high); }
-.deck-count.question-open { color: var(--warn); }
+.deck-count.follow-up { color: var(--warn); }
+.deck-count.skipped { color: var(--muted); }
 
 .deck-map-label {
   margin: 0.85rem 0 0.35rem;
@@ -748,9 +828,15 @@ body.deck-active .deck {
   background: var(--bg);
   cursor: pointer;
 }
-.deck-dot[data-disposition="verified"] { background: var(--level-low); border-color: var(--level-low); }
+/* An unreviewed dot hints its step's Behavior Impact (ADR-0016): the attention-worthy
+   impacts get a tinted border so the Map reads by change-character before any
+   disposition is set. A set disposition (below) fills the dot and wins. */
+.deck-dot[data-impact="unknown-impact"]:not([data-disposition]) { border-color: var(--warn); }
+.deck-dot[data-impact="behavior-change"]:not([data-disposition]) { border-color: var(--fg); }
+.deck-dot[data-disposition="looks-right"] { background: var(--level-low); border-color: var(--level-low); }
 .deck-dot[data-disposition="concern"] { background: var(--level-high); border-color: var(--level-high); }
-.deck-dot[data-disposition="question-open"] { background: var(--warn); border-color: var(--warn); }
+.deck-dot[data-disposition="follow-up"] { background: var(--warn); border-color: var(--warn); }
+.deck-dot[data-disposition="skipped"] { background: var(--muted); border-color: var(--muted); }
 .deck-dot.current { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .deck-file {
@@ -770,7 +856,7 @@ body.deck-active .deck {
 .deck-file:hover { color: var(--fg); }
 .deck-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* --- Stage: one claim at a time, its evidence hunk inline --- */
+/* --- Stage: one step at a time, its evidence hunk inline --- */
 .deck-stage { min-width: 0; max-width: 900px; }
 .deck-crumb {
   display: flex;
@@ -782,13 +868,13 @@ body.deck-active .deck {
   color: var(--muted);
 }
 .deck-crumb-title { color: var(--fg); }
-.deck-crumb-claim { font-family: var(--mono); font-size: 0.78rem; margin-left: auto; }
-.deck-claim-host > details.claim { margin: 0; } /* forced open on the Stage */
+.deck-crumb-step { font-family: var(--mono); font-size: 0.78rem; margin-left: auto; }
+.deck-step-host > details.step { margin: 0; } /* forced open on the Stage */
 
-/* --- The oversized V/C/Q disposition control (issue #68) ---
-   No mouse travel: three big targets below the claim (the challenge questions stay
-   above them), each carrying a key cap + glyph + word so the state never rides on
-   colour alone (ADR-0014). The tint appears only once a state is chosen. */
+/* --- The oversized L/C/F/S disposition control (issue #68) ---
+   No mouse travel: four big targets below the step (the review prompts stay above
+   them), each carrying a key cap + glyph + word so the state never rides on colour
+   alone (ADR-0014). The tint appears only once a state is chosen. */
 .deck-control { margin-top: 1rem; }
 .deck-control-label {
   margin: 0 0 0.4rem;
@@ -850,13 +936,13 @@ body.deck-active .deck {
   word-break: break-all;
 }
 /* Bounded height: a long hunk scrolls within its card instead of pushing the
-   claim's disposition control off-screen. */
+   step's disposition control off-screen. */
 .deck-hunk > .hunk,
 .deck-hunk > .file-body,
 .deck-hunk > pre.diff { max-height: 22rem; overflow: auto; margin: 0; }
 .deck-evidence-none { color: var(--muted); font-size: 0.85rem; }
 
-.deck-home { display: none; } /* marks a staged claim's home in the document flow */
+.deck-home { display: none; } /* marks a staged step's home in the document flow */
 
 /* Narrow viewports: the Map stops being a sticky side rail and stacks above the
    Stage, so Deck Mode collapses gracefully rather than crushing two columns. */
