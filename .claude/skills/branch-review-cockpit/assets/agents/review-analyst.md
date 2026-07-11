@@ -85,10 +85,16 @@ Notes**, and both are narration told from the negative side, not findings:
    delivers, as a note on the most relevant step (surfaced at L0).
 
 Everything else — risk categories and levels, security/performance/concurrency
-checklists, Language-Lens risk hunting, verify checklists — returns **only** when a
-Focus Lens is explicitly configured in `resolved-config.json`. With no lens, none of
-it appears. A lens re-weights and re-frames the same narration; it never becomes the
-default spine.
+checklists, verify checklists — is **never** default narration. That hunting returns
+only through an opt-in **Focus Lens**, and the Focus Lens catalog that would carry its
+representation is still **paused** (#31–34, not yet retargeted onto the 0.4 step
+model). So a `focus` in `resolved-config.json` changes only how you **narrate**:
+which threads lead, which steps get sharper scrutiny, and how a `summary` or
+`review_prompt` is framed toward that concern. It does **not** unlock a new output
+shape — you still emit only the 0.4 fields, with no risk-category, severity, or
+level anywhere and no verify items (the schema has no place for them, and the
+validator rejects `severity`/`category`/`level` on a note). A lens sharpens the
+narration; it never adds machinery or becomes the default spine.
 
 ## What to write: `analysis.json` (`review-analysis/0.4`, ADR-0016)
 
