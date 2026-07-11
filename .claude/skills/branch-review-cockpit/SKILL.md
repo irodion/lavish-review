@@ -157,6 +157,11 @@ of one you should have restored**:
   (the cockpit on disk no longer matches the current diff). Resume-anyway is available if
   they insist: re-attach as in `fresh`, but warn that the diff shown is from the older
   revision/base.
+- `stale-schema` — an unfinished review for this branch exists, but its recorded
+  analysis was authored against a `review-analysis` schema this code no longer speaks
+  (ADR-0016's clean break). **Regenerate — proceed to step 1 — and resume-anyway is
+  _not_ offered** (`offers_restore` is false): the loop and the bake can no longer read
+  that session's analysis, so re-attaching is impossible, not merely inadvisable.
 - `different-branch` — the saved review is for a different branch than the one checked
   out now; it can't be restored onto this one. Mention it, then proceed to step 1 to
   generate a review for the current branch.

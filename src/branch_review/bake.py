@@ -51,6 +51,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from branch_review.dispositions import (
+    DISPOSITIONS,
     DISPOSITIONS_NAME,
     load_dispositions,
     parse_disposition_prompt,
@@ -152,11 +153,17 @@ def load_exchanges(qa_path: Path) -> list[Exchange]:
     return exchanges
 
 
-# --- Reviewer dispositions at close (ADR-0012) --------------------------------
+# --- Reviewer dispositions at close (ADR-0012, reframed by ADR-0016) -----------
 
-# List order for the outcome: what needs attention first, what was cleared, what
-# was never examined. The unreviewed tail is deliberate — nothing hidden.
-_OUTCOME_ORDER = ("concern", "question-open", "verified", "unreviewed")
+# List order for the outcome: concerns first (the review's payload), then follow-ups,
+# then coverage — looks-right, then the deliberately skipped, then what was never
+# examined. The unreviewed tail is deliberate — nothing hidden. This is a *reordering*
+# of the closed vocabulary, so it must stay a permutation of it: the same tuple gates
+# which states are counted, listed, and stamped (a value outside it is coerced to
+# ``unreviewed``), so a state added to ``DISPOSITIONS`` but forgotten here would silently
+# vanish from the record. The assert makes that drift a startup error, not a lost state.
+_OUTCOME_ORDER = ("concern", "follow-up", "looks-right", "skipped", "unreviewed")
+assert set(_OUTCOME_ORDER) == set(DISPOSITIONS), "outcome order drifted from the vocabulary"
 
 
 def _without_disposition_prompts(exchanges: Sequence[Exchange]) -> list[Exchange]:
@@ -180,39 +187,43 @@ def _without_disposition_prompts(exchanges: Sequence[Exchange]) -> list[Exchange
     return filtered
 
 
-def _claims_by_disposition(
+def _steps_by_disposition(
     analysis: Mapping[str, object], dispositions: Mapping[str, str]
-) -> list[tuple[str, str, str]]:
-    """Every claim as ``(disposition, claim_id, summary)``, grouped concern-first.
+) -> list[tuple[str, str, str, str]]:
+    """Every step as ``(disposition, step_id, summary, impact)``, grouped concern-first.
 
     Groups follow :data:`_OUTCOME_ORDER`; within a group, analysis order (the Review
-    Route). A claim absent from the store is ``unreviewed`` — listed, never dropped.
+    Route). A step absent from the store is ``unreviewed`` — listed, never dropped. The
+    step's Behavior Impact rides along so the outcome can render deliberately ``skipped``
+    coverage *with its impact* — "chose not to read the lockfile churn" rather than a bare
+    unfinished-review gap (ADR-0016).
     """
-    groups: dict[str, list[tuple[str, str]]] = {d: [] for d in _OUTCOME_ORDER}
+    groups: dict[str, list[tuple[str, str, str]]] = {d: [] for d in _OUTCOME_ORDER}
     threads = analysis.get("threads")
     if not isinstance(threads, list):
         return []
     for thread in threads:
         if not isinstance(thread, Mapping):
             continue
-        claims = thread.get("claims")
-        if not isinstance(claims, list):
+        steps = thread.get("steps")
+        if not isinstance(steps, list):
             continue
-        for claim in claims:
-            if not isinstance(claim, Mapping) or not isinstance(claim.get("id"), str):
+        for step in steps:
+            if not isinstance(step, Mapping) or not isinstance(step.get("id"), str):
                 continue
-            disposition = dispositions.get(claim["id"], "unreviewed")
+            disposition = dispositions.get(step["id"], "unreviewed")
             if disposition not in _OUTCOME_ORDER:
                 disposition = "unreviewed"
-            groups[disposition].append((claim["id"], str(claim.get("summary", ""))))
-    return [(d, cid, summary) for d in _OUTCOME_ORDER for cid, summary in groups[d]]
+            groups[disposition].append(
+                (step["id"], str(step.get("summary", "")), str(step.get("impact", "")))
+            )
+    return [(d, sid, summary, impact) for d in _OUTCOME_ORDER for sid, summary, impact in groups[d]]
 
 
-def _outcome_counts_line(rows: Sequence[tuple[str, str, str]]) -> str:
-    """The one-line aggregate, in the ADR's reading order (verified first)."""
-    counts = Counter(disposition for disposition, _cid, _summary in rows)
-    ordered = ("verified", "concern", "question-open", "unreviewed")
-    return " · ".join(f"{d} {counts.get(d, 0)}" for d in ordered)
+def _outcome_counts_line(rows: Sequence[tuple[str, str, str, str]]) -> str:
+    """The one-line aggregate, in the outcome's reading order (concerns first)."""
+    counts = Counter(disposition for disposition, _sid, _summary, _impact in rows)
+    return " · ".join(f"{d} {counts.get(d, 0)}" for d in _OUTCOME_ORDER)
 
 
 def _progress_text(reviewed: int, total: int, concerns: int) -> str:
@@ -234,28 +245,29 @@ def _thread_titles(analysis: Mapping[str, object]) -> dict[str, str]:
     }
 
 
-# The open tag of any ``<details>`` element, and within it a claim-shaped id and any
+# The open tag of any ``<details>`` element, and within it a step-shaped id and any
 # previously baked disposition attribute (stripped first, so re-baking replaces).
 _DETAILS_TAG = re.compile(r"<details\b[^>]*>", re.IGNORECASE)
-_CLAIM_DETAILS_ID = re.compile(r'\bid\s*=\s*"(t\d+\.c\d+)"')
+_STEP_DETAILS_ID = re.compile(r'\bid\s*=\s*"(t\d+\.s\d+)"')
 _DISPOSITION_ATTR = re.compile(r'\s+data-disposition\s*=\s*"[^"]*"')
 
 
 def bake_dispositions_html(html: str, dispositions: Mapping[str, str]) -> str:
-    """Stamp each claim's reviewer disposition onto its ``<details>`` open tag.
+    """Stamp each step's reviewer disposition onto its ``<details>`` open tag.
 
     On the live page the tint comes from ``app.js`` setting ``data-disposition``;
     the baked ``file://`` artifact runs no disposition code (a record, not a review
-    surface), so the bake writes the same attribute statically and the stylesheet's
-    existing ``details.claim[data-disposition=…]`` rules light up under the strict
-    CSP with no script at all. Only values in the closed vocabulary are ever
-    stamped — anything else (including ``unreviewed``, which is absence) strips the
-    attribute, which also makes re-baking idempotent.
+    surface), so the bake writes the same attribute statically for the stylesheet's
+    ``details.step[data-disposition=…]`` tint rules to light up under the strict CSP
+    with no script at all (those step-scoped rules land with the step-shaped cockpit
+    rendering — #86; this side writes the attribute either way). Only values in the
+    closed vocabulary are ever stamped — anything else (including ``unreviewed``,
+    which is absence) strips the attribute, which also makes re-baking idempotent.
     """
 
     def stamp(match: re.Match[str]) -> str:
         tag = match.group(0)
-        id_match = _CLAIM_DETAILS_ID.search(tag)
+        id_match = _STEP_DETAILS_ID.search(tag)
         if not id_match:
             return tag
         tag = _DISPOSITION_ATTR.sub("", tag)
@@ -267,11 +279,11 @@ def bake_dispositions_html(html: str, dispositions: Mapping[str, str]) -> str:
     return _DETAILS_TAG.sub(stamp, html)
 
 
-# The attribution the ADR draws the verdict line with: the aggregate is the
-# reviewer's, and the tool never prints a bottom line it authored.
+# The attribution the ADR draws the outcome with: the aggregate is the reviewer's, and
+# the tool never prints a bottom line it authored.
 _OUTCOME_NOTE = (
-    "Dispositions were set by the reviewer in the cockpit; unreviewed claims are "
-    "listed, never hidden. The review tool states per-claim confidence only and "
+    "Dispositions were set by the reviewer in the cockpit; unreviewed steps are "
+    "listed, never hidden. The review tool states per-step confidence only and "
     "issues no overall verdict."
 )
 
@@ -279,18 +291,20 @@ _OUTCOME_NOTE = (
 def render_outcome_html(
     analysis: Mapping[str, object] | None, dispositions: Mapping[str, str]
 ) -> str:
-    """The close-time Review outcome section — the reviewer's dispositions (ADR-0012).
+    """The close-time Review outcome section — the reviewer's dispositions (ADR-0012/0016).
 
-    States what the reviewer verified, what raised concerns, what has a question
-    still open, and what was never examined — with per-thread totals so attention
-    coverage is visible at a glance. The claim ids and summaries are the
-    analysis's trusted prose and the disposition values a validated closed
-    vocabulary, but everything renders through ``escape_text`` anyway — the boundary
-    is unconditional. Returns ``""`` when the analysis has no claims (missing or
-    old-schema analysis): the bake degrades, never crashes (ADR-0007).
+    Leads with concerns (the review's payload), then follow-ups, then coverage —
+    what looked right, what was deliberately skipped (with each skipped step's
+    Behavior Impact, so a skip reads as an informed choice), and what was never
+    examined — with per-thread totals so attention coverage is visible at a glance.
+    The step ids and summaries are the analysis's trusted prose and the disposition
+    values a validated closed vocabulary, but everything renders through
+    ``escape_text`` anyway — the boundary is unconditional. Returns ``""`` when the
+    analysis has no steps (missing or old-schema analysis): the bake degrades, never
+    crashes (ADR-0007).
     """
     analysis = analysis or {}
-    rows = _claims_by_disposition(analysis, dispositions)
+    rows = _steps_by_disposition(analysis, dispositions)
     if not rows:
         return ""
     parts = [
@@ -311,11 +325,16 @@ def render_outcome_html(
             )
         parts.append("  </ul>")
     parts.append('  <ul class="outcome-list">')
-    for disposition, cid, summary in rows:
+    for disposition, sid, summary, impact in rows:
+        # Impact rides only on the deliberately skipped rows — the ADR pairs impacts
+        # with skipped coverage ("skipped-with-impacts"), so a skip reads as an informed
+        # choice; a concern or follow-up leads with its own summary, not its impact.
+        show_impact = impact and disposition == "skipped"
+        impact_tag = f' <span class="impact">{escape_text(impact)}</span>' if show_impact else ""
         parts.append(
             f'    <li><span class="disposition {escape_text(disposition)}">'
-            f"{escape_text(disposition)}</span> <code>{escape_text(cid)}</code>"
-            f" — {escape_text(summary)}</li>"
+            f"{escape_text(disposition)}</span> <code>{escape_text(sid)}</code>"
+            f"{impact_tag} — {escape_text(summary)}</li>"
         )
     parts.append("  </ul>")
     parts.append(f'  <p class="outcome-note">{escape_text(_OUTCOME_NOTE)}</p>')
@@ -437,7 +456,7 @@ def bake_html(
 
     The record is the Review outcome (``outcome_html``, may be empty) followed by the
     Q&A log, injected together at the seam so re-baking stays idempotent. When
-    ``dispositions`` is given, each claim's state is also stamped onto its own
+    ``dispositions`` is given, each step's state is also stamped onto its own
     ``<details>`` tag (:func:`bake_dispositions_html`) so the saved page shows the
     tints without script. Pure string→string: the I/O lives in :func:`bake_review`.
     Returns the baked HTML and whether the CSP was swapped.
@@ -482,52 +501,51 @@ def _inline(text: str) -> str:
     return " ".join(text.split())
 
 
-def _format_claim_block(claim: Mapping[str, object], disposition: str | None = None) -> str:
-    """One claim as a ``### [kind] summary`` heading with its badges and questions.
+def _format_step_block(step: Mapping[str, object], disposition: str | None = None) -> str:
+    """One Review Step as a ``### [impact] summary`` heading with its narration (ADR-0016).
 
-    A reviewer disposition, when set, joins the badges as ``reviewer: …`` — the
-    per-claim state stays attributed to the human, beside the agent's confidence.
-    ``verify`` claims are the export's checklist (they replaced the old
-    ``test_checklist.items``), so they render as **real task-list items** — the
-    ``- [ ]`` marker must sit at list level; inside a ``###`` heading GitHub
-    renders it as literal heading text, not a checkbox — and the box is checked
-    exactly when the reviewer set ``verified``, so the pasted checklist reflects
-    real verification state, never the claim's mere existence.
+    A Review Step is a guided stop, not a finding, so it renders as a heading block:
+    the Behavior Impact and analyst confidence as badges, the ``detail`` narration,
+    a ``why_now`` line (why the step sits here on the route), its ``review_prompts``
+    (what the reviewer should compare) as bullets, and any ``attention_notes`` as
+    muted asides. A reviewer disposition, when set, joins the badges as ``reviewer:
+    …`` — the per-step judgment stays attributed to the human, beside the agent's
+    confidence. The retired verify-checklist (checkboxes checked by ``verified``) is
+    gone: test steps are ordinary ``test-change`` steps now, never a run-this task.
     """
-    kind = str(claim.get("kind", ""))
-    badges = [f"confidence: {claim.get('confidence', '')}"]
-    if claim.get("category"):
-        badges.append(str(claim["category"]))
-    if claim.get("level"):
-        badges.append(f"level: {claim['level']}")
+    impact = str(step.get("impact", ""))
+    badges = [f"confidence: {step.get('confidence', '')}"]
     if disposition:
         badges.append(f"reviewer: {disposition}")
-    label = f"[{kind}] {claim.get('summary', '')} ({'; '.join(badges)})"
-    detail = str(claim.get("detail", ""))
-    questions = claim.get("challenge_questions")
+    label = f"[{impact}] {step.get('summary', '')} ({'; '.join(badges)})"
 
-    if kind == "verify":
-        box = "x" if disposition == "verified" else " "
-        lines = [f"- [{box}] {label}"]
-        if detail:
-            lines.append(f"  {detail}")  # indented: stays inside the task item
-        if isinstance(questions, list):
-            lines.extend(f"  - {q}" for q in questions)
-        return "\n".join(lines)
-
-    bullets = "\n".join(f"- {q}" for q in questions) if isinstance(questions, list) else ""
-    return "\n".join((f"### {label}", "", detail, "", bullets)).rstrip()
+    lines = [f"### {label}", ""]
+    detail = str(step.get("detail", ""))
+    if detail:
+        lines += [detail, ""]
+    why_now = str(step.get("why_now", ""))
+    if why_now:
+        lines += [f"_Why here:_ {_inline(why_now)}", ""]
+    prompts = step.get("review_prompts")
+    if isinstance(prompts, list) and prompts:
+        lines += [f"- {p}" for p in prompts] + [""]
+    notes = step.get("attention_notes")
+    if isinstance(notes, list):
+        for note in notes:
+            if isinstance(note, Mapping) and note.get("text"):
+                lines.append(f"> ⚠ {_inline(str(note['text']))}")
+    return "\n".join(lines).rstrip()
 
 
 def _format_thread(thread: Mapping[str, object], dispositions: Mapping[str, str]) -> str:
-    """One thread: its summary then every claim block (ADR-0009's L1/L2 in Markdown)."""
+    """One thread: its summary then every step block (ADR-0009/0016's L1/L2 in Markdown)."""
     parts = [str(thread.get("summary", ""))]
-    claims = thread.get("claims")
-    if isinstance(claims, list):
+    steps = thread.get("steps")
+    if isinstance(steps, list):
         parts += [
-            _format_claim_block(c, dispositions.get(str(c.get("id", ""))))
-            for c in claims
-            if isinstance(c, Mapping)
+            _format_step_block(s, dispositions.get(str(s.get("id", ""))))
+            for s in steps
+            if isinstance(s, Mapping)
         ]
     return "\n\n".join(part for part in parts if part.strip())
 
@@ -575,8 +593,9 @@ def _alignment_line(analysis: Mapping[str, object]) -> str:
     """One goal-alignment sentence for the Orientation (ADR-0010), or ``""``.
 
     Rendered only when ``alignment`` is an object — a stated goal existed and the
-    threads were measured against it. Goal-unserved work needs no line here: it is
-    ``omission`` claims (kind ``goal``) that render with their threads.
+    threads were measured against it. Goal-unserved work needs no line here: under
+    ADR-0016 it surfaces as a goal-unserved ``attention_note`` on its step, not as a
+    separate claim kind.
     """
     alignment = analysis.get("alignment")
     if not isinstance(alignment, Mapping):
@@ -596,9 +615,13 @@ def _alignment_line(analysis: Mapping[str, object]) -> str:
 def _outcome_markdown(
     analysis: Mapping[str, object] | None, dispositions: Mapping[str, str]
 ) -> str:
-    """The Review outcome as Markdown — the reviewer's account, for a PR paste."""
+    """The Review outcome as Markdown — the reviewer's account, for a PR paste.
+
+    Concerns lead, then follow-ups, then coverage; a deliberately ``skipped`` step
+    carries its Behavior Impact so the skip reads as an informed choice (ADR-0016).
+    """
     analysis = analysis or {}
-    rows = _claims_by_disposition(analysis, dispositions)
+    rows = _steps_by_disposition(analysis, dispositions)
     if not rows:
         return ""
     lines = [f"Reviewer dispositions — {_outcome_counts_line(rows)}.", ""]
@@ -611,7 +634,10 @@ def _outcome_markdown(
             bits.append(f"{name} {_progress_text(reviewed, total, concerns)}")
         lines += [f"Per thread: {'; '.join(bits)}.", ""]
     lines += [
-        f"- **{disposition}** — {cid}: {_inline(summary)}" for disposition, cid, summary in rows
+        f"- **{disposition}** — {sid}"
+        + (f" ({impact})" if impact and disposition == "skipped" else "")
+        + f": {_inline(summary)}"
+        for disposition, sid, summary, impact in rows
     ]
     lines += ["", f"_{_OUTCOME_NOTE}_"]
     return "\n".join(lines)
@@ -625,17 +651,17 @@ def build_markdown(
     """Build ``review.md`` from the Analysis, the dispositions, and the Q&A.
 
     Renders the reviewer-facing Analysis (the L0 orientation with its goal-alignment
-    line, then each thread with its claims — verify claims as checkboxes checked by
-    the reviewer's ``verified``, per-claim dispositions as ``reviewer:`` badges,
-    drive-by threads flagged in their headings), the Review outcome (the
-    **reviewer's** dispositions with per-thread totals, ADR-0012 — omitted when
-    ``dispositions`` is ``None``), and the Q&A Log. ``analysis`` may be ``None``
-    (no ``analysis.json``) — the export then carries the Q&A alone rather than
-    failing. The Analysis is the agent's own trusted prose; reviewer-originated
+    line, then each thread with its Review Steps — impact and confidence badges,
+    ``why_now`` and ``review_prompts`` narration, per-step dispositions as
+    ``reviewer:`` badges, drive-by threads flagged in their headings), the Review
+    outcome (the **reviewer's** dispositions with per-thread totals, ADR-0012/0016 —
+    omitted when ``dispositions`` is ``None``), and the Q&A Log. ``analysis`` may be
+    ``None`` (no ``analysis.json``) — the export then carries the Q&A alone rather
+    than failing. The Analysis is the agent's own trusted prose; reviewer-originated
     text in the Q&A goes through :func:`_fenced` so it cannot break the Markdown.
     """
     analysis = analysis or {}
-    claim_dispositions = dispositions or {}
+    step_dispositions = dispositions or {}
     title = str(analysis.get("title") or "Branch Review")
     out: list[str] = [f"# {title}", ""]
 
@@ -654,7 +680,7 @@ def build_markdown(
             heading = f"{thread.get('id', '')} — {thread.get('title', '')}".strip(" —")
             if thread.get("id") in drive_by:
                 heading += " (drive-by)"
-            out += _md_section(heading, _format_thread(thread, claim_dispositions))
+            out += _md_section(heading, _format_thread(thread, step_dispositions))
 
     runner_block = analysis.get("test_runner")
     if isinstance(runner_block, Mapping):

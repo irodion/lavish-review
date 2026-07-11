@@ -27,6 +27,7 @@ from branch_review.bake import (
     extract_prompts,
     inject_qa,
     load_exchanges,
+    render_outcome_html,
     render_qa_html,
     render_qa_markdown,
     swap_csp,
@@ -75,10 +76,10 @@ _TOON_MULTI = (
 # corrupting the JSON and the ``Disposition set:`` line — the regression pinned here.
 _TOON_ESCAPED_NEWLINES = (
     "prompts[1]{uid,prompt,selector,tag,text}:\n"
-    '  "9","Disposition set: t2.c4 -> question-open\\n\\nContext data:\\n'
-    '{\\n  \\"kind\\": \\"disposition\\",\\n  \\"claim\\": \\"t2.c4\\",\\n'
-    '  \\"disposition\\": \\"question-open\\"\\n}",'
-    '"summary > button",choice,disposition:question-open\n'
+    '  "9","Disposition set: t2.s4 -> follow-up\\n\\nContext data:\\n'
+    '{\\n  \\"kind\\": \\"disposition\\",\\n  \\"step\\": \\"t2.s4\\",\\n'
+    '  \\"disposition\\": \\"follow-up\\"\\n}",'
+    '"summary > button",choice,disposition:follow-up\n'
     'next_step: "..."\n'
 )
 
@@ -115,10 +116,10 @@ def test_extract_span_annotation_unescapes_quotes() -> None:
 
 def test_extract_decodes_whitespace_escapes_in_multiline_prompt() -> None:
     (prompt,) = extract_prompts(_TOON_ESCAPED_NEWLINES)
-    assert prompt.prompt.startswith("Disposition set: t2.c4 -> question-open\n\nContext data:\n")
+    assert prompt.prompt.startswith("Disposition set: t2.s4 -> follow-up\n\nContext data:\n")
     # The Context data payload must survive as parseable JSON — dispositions depend on it.
     payload = json.loads(prompt.prompt.split("Context data:", 1)[1])
-    assert payload == {"kind": "disposition", "claim": "t2.c4", "disposition": "question-open"}
+    assert payload == {"kind": "disposition", "step": "t2.s4", "disposition": "follow-up"}
 
 
 def test_extract_decodes_tab_cr_backslash_and_unknown_escape() -> None:
@@ -303,23 +304,24 @@ _ANALYSIS = {
             "title": "The thing",
             "summary": "One thread of change.",
             "paths": ["src/a.py"],
-            "claims": [
+            "steps": [
                 {
-                    "id": "t1.c1",
-                    "kind": "risk",
-                    "category": "security",
-                    "level": "high",
+                    "id": "t1.s1",
+                    "impact": "behavior-change",
                     "summary": "R",
+                    "detail": "the retry timing moved",
                     "confidence": "medium",
-                    "challenge_questions": ["Q1?"],
+                    "why_now": "start here",
+                    "review_prompts": ["Q1?"],
                     "evidence": [{"path": "src/a.py"}],
                 },
                 {
-                    "id": "t1.c2",
-                    "kind": "verify",
+                    "id": "t1.s2",
+                    "impact": "test-change",
                     "summary": "run it",
                     "confidence": "high",
-                    "challenge_questions": ["Does it pass?"],
+                    "why_now": "then confirm",
+                    "review_prompts": ["Does it pass?"],
                     "evidence": [{"note": "n"}],
                 },
             ],
@@ -329,13 +331,14 @@ _ANALYSIS = {
             "title": "A rename that rode along",
             "summary": "Unrelated to the goal.",
             "paths": ["src/b.py"],
-            "claims": [
+            "steps": [
                 {
-                    "id": "t2.c1",
-                    "kind": "behavior",
+                    "id": "t2.s1",
+                    "impact": "behavior-preserving",
                     "summary": "B",
                     "confidence": "high",
-                    "challenge_questions": ["Q2?"],
+                    "why_now": "last",
+                    "review_prompts": ["Q2?"],
                     "evidence": [{"path": "src/b.py"}],
                 },
             ],
@@ -351,12 +354,14 @@ def test_markdown_contains_review_and_qa() -> None:
     assert "# My Review" in md
     assert "## Orientation" in md and "Does a thing." in md
     assert "## t1 — The thing" in md and "One thread of change." in md
-    assert "[risk] R (confidence: medium; security; level: high)" in md and "Q1?" in md
-    # Verify claims export as REAL task-list checkboxes: the marker sits at line
-    # start — inside a ### heading GitHub renders "- [ ]" as literal text.
-    assert "\n- [ ] [verify] run it (confidence: high)" in md
-    assert "### - [ ]" not in md
-    assert "\n  - Does it pass?" in md  # its challenge question stays inside the item
+    # A Review Step renders as a heading block: impact + confidence badges, the
+    # why_now narration, and its review_prompts as bullets (ADR-0016). No verify
+    # checkbox — the Test Checklist is retired; a test step is an ordinary step.
+    assert "### [behavior-change] R (confidence: medium)" in md and "Q1?" in md
+    assert "_Why here:_ start here" in md
+    assert "### [test-change] run it (confidence: high)" in md
+    assert "Does it pass?" in md
+    assert "- [ ]" not in md  # no task-list checkboxes anywhere
     # Goal alignment (ADR-0010): one orientation line, and drive-bys flagged in headings.
     assert (
         "Goal alignment — serving the stated goal: t1; drive-by (unrelated to the goal): t2." in md
@@ -378,11 +383,11 @@ def test_markdown_null_alignment_has_no_goal_line() -> None:
     assert "(drive-by)" not in md
 
 
-def test_markdown_checklist_unchecked_unless_reviewer_verified() -> None:
-    # Only the reviewer's own "verified" checks a box; any other disposition (or
-    # none) leaves it open — the checklist never reflects mere existence.
-    md = build_markdown(_ANALYSIS, [], dispositions={"t1.c2": "question-open"})
-    assert "\n- [ ] [verify] run it (confidence: high; reviewer: question-open)" in md
+def test_markdown_step_disposition_rides_along_as_a_reviewer_badge() -> None:
+    # A per-step judgment (set only by the human) renders beside the agent's
+    # confidence as a ``reviewer:`` badge — attributed, never the tool's verdict.
+    md = build_markdown(_ANALYSIS, [], dispositions={"t1.s2": "follow-up"})
+    assert "### [test-change] run it (confidence: high; reviewer: follow-up)" in md
 
 
 def test_markdown_without_analysis_still_has_qa() -> None:
@@ -418,33 +423,35 @@ def test_markdown_collapses_newlines_in_prompt_heading() -> None:
     assert "### Q1. real q? ## Injected" in md  # collapsed inline into the heading
 
 
-# --- Baking dispositions onto the claims themselves (issue #44) --------------
+# --- Baking dispositions onto the steps themselves (issue #44, #87) ----------
 
 
 def test_bake_dispositions_stamps_and_restamps_idempotently() -> None:
     html = (
-        '<details class="claim" id="t1.c1"><summary>s</summary></details>\n'
-        '<details class="claim" id="t1.c2"><summary>s</summary></details>'
+        '<details class="step" id="t1.s1"><summary>s</summary></details>\n'
+        '<details class="step" id="t1.s2"><summary>s</summary></details>'
     )
-    once = bake_dispositions_html(html, {"t1.c1": "concern"})
-    assert '<details class="claim" id="t1.c1" data-disposition="concern">' in once
-    assert 'id="t1.c2" data-disposition' not in once  # unreviewed stays unmarked
+    once = bake_dispositions_html(html, {"t1.s1": "concern"})
+    assert '<details class="step" id="t1.s1" data-disposition="concern">' in once
+    assert 'id="t1.s2" data-disposition' not in once  # unreviewed stays unmarked
     # A later re-bake replaces the stamp in place — never a second attribute.
-    again = bake_dispositions_html(once, {"t1.c1": "verified"})
+    again = bake_dispositions_html(once, {"t1.s1": "looks-right"})
     assert again.count("data-disposition") == 1
-    assert 'data-disposition="verified"' in again
+    assert 'data-disposition="looks-right"' in again
+    # A deliberate skip is a stored state, so it stamps like any other.
+    assert 'data-disposition="skipped"' in bake_dispositions_html(html, {"t1.s1": "skipped"})
     # Cleared back to unreviewed (absence in the store) strips the attribute.
     assert "data-disposition" not in bake_dispositions_html(again, {})
 
 
-def test_bake_dispositions_stamps_only_vocabulary_values_on_claim_details() -> None:
+def test_bake_dispositions_stamps_only_vocabulary_values_on_step_details() -> None:
     html = (
         '<details id="file-src-a-py" open><summary>a file fold</summary></details>\n'
-        '<details class="claim" id="t1.c1"><summary>s</summary></details>'
+        '<details class="step" id="t1.s1"><summary>s</summary></details>'
     )
-    out = bake_dispositions_html(html, {"t1.c1": '"><script>', "file-src-a-py": "concern"})
-    # A value outside the closed vocabulary is never stamped, and a non-claim
-    # <details> (no claim-shaped id) is never touched.
+    out = bake_dispositions_html(html, {"t1.s1": '"><script>', "file-src-a-py": "concern"})
+    # A value outside the closed vocabulary is never stamped, and a non-step
+    # <details> (no step-shaped id) is never touched.
     assert "data-disposition" not in out
     assert out == html
 
@@ -458,11 +465,11 @@ _BASE_COCKPIT = f"""<!doctype html>
 </head><body>
 <main><section id="exec"><h2>Summary</h2><p>prose</p></section>
 <section class="thread" id="t1"><h2>The thing</h2>
-<details class="claim" id="t1.c1"><summary>R</summary></details>
-<details class="claim" id="t1.c2"><summary>run it</summary></details>
+<details class="step" id="t1.s1"><summary>R</summary></details>
+<details class="step" id="t1.s2"><summary>run it</summary></details>
 </section>
 <section class="thread" id="t2"><h2>A rename that rode along</h2>
-<details class="claim" id="t2.c1"><summary>B</summary></details>
+<details class="step" id="t2.s1"><summary>B</summary></details>
 </section></main>
 {QA_SEAM_OPEN}{QA_SEAM_CLOSE}
 <script src="assets/app.js"></script>
@@ -512,14 +519,15 @@ def test_bake_review_contains_every_question_escaped_and_self_contained(tmp_path
 
 _TOON_DISPOSITION = (
     "prompts[1]{uid,prompt,selector,tag,text}:\n"
-    '  "9",Disposition set: t1.c1 -> concern,"summary > button",choice,disposition:concern\n'
+    '  "9",Disposition set: t1.s1 -> concern,"summary > button",choice,disposition:concern\n'
     'next_step: "..."\n'
 )
 
 
 def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -> None:
-    """ADR-0012 at close: the outcome states the reviewer's dispositions; disposition
-    updates are review state, not conversation, so they vanish from the Q&A log."""
+    """ADR-0012/0016 at close: the outcome leads with concerns, then follow-ups, then
+    coverage (looks-right / skipped-with-impacts / unreviewed); disposition updates are
+    review state, not conversation, so they vanish from the Q&A log."""
     cockpit = tmp_path / "review.html"
     cockpit.write_text(_BASE_COCKPIT, encoding="utf-8")
     analysis = tmp_path / "analysis.json"
@@ -527,8 +535,9 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
     (tmp_path / "dispositions.json").write_text(
         json.dumps(
             {
-                "schema": "review-dispositions/0.1",
-                "dispositions": {"t1.c1": "concern", "t1.c2": "verified"},
+                "schema": "review-dispositions/0.2",
+                # t1.s1 concern, t1.s2 looks-right, t2.s1 deliberately skipped.
+                "dispositions": {"t1.s1": "concern", "t1.s2": "looks-right", "t2.s1": "skipped"},
             }
         ),
         encoding="utf-8",
@@ -546,18 +555,27 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
 
     baked = cockpit.read_text(encoding="utf-8")
     assert 'id="review-outcome"' in baked
-    # The aggregate is the reviewer's; every claim is accounted for, unreviewed listed.
-    assert "verified 1 · concern 1 · question-open 0 · unreviewed 1" in baked
-    assert '<span class="disposition concern">concern</span> <code>t1.c1</code>' in baked
-    assert '<span class="disposition unreviewed">unreviewed</span> <code>t2.c1</code>' in baked
-    # Per-thread totals in the outcome (issue #44).
+    # The aggregate is the reviewer's, in the concerns-first order; every step is
+    # accounted for, skipped and unreviewed listed never hidden.
+    assert "concern 1 · follow-up 0 · looks-right 1 · skipped 1 · unreviewed 0" in baked
+    assert '<span class="disposition concern">concern</span> <code>t1.s1</code>' in baked
+    # A deliberately skipped step carries its Behavior Impact, so the skip reads as
+    # an informed choice — not an unfinished-review gap.
+    assert (
+        '<span class="disposition skipped">skipped</span> <code>t2.s1</code>'
+        ' <span class="impact">behavior-preserving</span>'
+    ) in baked
+    # Impact rides only on the skipped row — the concern step's behavior-change impact
+    # is not rendered in the outcome (its summary is the payload, ADR-0016).
+    assert '<span class="impact">behavior-change</span>' not in baked
+    # Per-thread totals in the outcome (skipped counts as covered, not a gap).
     assert "<code>t1</code> The thing — 2/2 reviewed · 1 concern" in baked
-    assert "<code>t2</code> A rename that rode along — 0/1 reviewed" in baked
-    # Each claim's state is stamped onto its own <details>, so the file:// artifact
+    assert "<code>t2</code> A rename that rode along — 1/1 reviewed" in baked
+    # Each step's state is stamped onto its own <details>, so the file:// artifact
     # shows the tints with no script (app.js renders nothing on file://).
-    assert '<details class="claim" id="t1.c1" data-disposition="concern">' in baked
-    assert '<details class="claim" id="t1.c2" data-disposition="verified">' in baked
-    assert 'id="t2.c1" data-disposition' not in baked  # unreviewed = no attribute
+    assert '<details class="step" id="t1.s1" data-disposition="concern">' in baked
+    assert '<details class="step" id="t1.s2" data-disposition="looks-right">' in baked
+    assert '<details class="step" id="t2.s1" data-disposition="skipped">' in baked
     # The disposition exchange is state, not conversation — gone from the Q&A log.
     assert "Disposition set:" not in baked
     assert "Recorded." not in baked
@@ -575,26 +593,62 @@ def test_bake_review_outcome_section_and_disposition_filtering(tmp_path: Path) -
 
     md_text = md.read_text(encoding="utf-8")
     assert md_text.count("## Review outcome") == 1
-    assert "Reviewer dispositions — verified 1 · concern 1 · question-open 0 · unreviewed 1." in (
-        md_text
-    )
+    assert (
+        "Reviewer dispositions — "
+        "concern 1 · follow-up 0 · looks-right 1 · skipped 1 · unreviewed 0."
+    ) in md_text
     assert (
         "Per thread: t1 (The thing) 2/2 reviewed · 1 concern; "
-        "t2 (A rename that rode along) 0/1 reviewed."
+        "t2 (A rename that rode along) 1/1 reviewed."
     ) in md_text
-    assert "- **concern** — t1.c1: R" in md_text
-    assert "- **unreviewed** — t2.c1: B" in md_text
-    # The pasted checklist reflects real verification state (issue #44): the verify
-    # claim the reviewer marked verified is checked, and dispositions ride along as
-    # reviewer badges beside the agent's confidence.
-    assert "\n- [x] [verify] run it (confidence: high; reviewer: verified)" in md_text
-    assert "[risk] R (confidence: medium; security; level: high; reviewer: concern)" in md_text
+    assert "- **concern** — t1.s1: R" in md_text  # concern row carries no impact tag
+    # A skipped step in the outcome carries its impact — the skip is an informed choice.
+    assert "- **skipped** — t2.s1 (behavior-preserving): B" in md_text
+    # Dispositions ride along as reviewer badges beside the agent's confidence.
+    assert "[behavior-change] R (confidence: medium; reviewer: concern)" in md_text
+    assert "[test-change] run it (confidence: high; reviewer: looks-right)" in md_text
     assert "Disposition set:" not in md_text
-    assert "no overall verdict" in md_text  # the attribution note (verdict line, ADR-0012)
+    assert "no overall verdict" in md_text  # the attribution note (no agent verdict, ADR-0012)
+
+
+def test_render_outcome_orders_concerns_first_and_hides_nothing() -> None:
+    # The full outcome shape (ADR-0016): concerns → follow-ups → coverage
+    # (looks-right / skipped-with-impacts / unreviewed), nothing hidden, ordered by
+    # group not just present. One step per group, plus one left unreviewed (absent
+    # from the store) to prove absence is still listed.
+    analysis = {
+        "threads": [
+            {
+                "id": "t1",
+                "title": "T",
+                "steps": [
+                    {"id": "t1.s1", "impact": "behavior-change", "summary": "A"},
+                    {"id": "t1.s2", "impact": "mechanical-change", "summary": "B"},
+                    {"id": "t1.s3", "impact": "behavior-preserving", "summary": "C"},
+                    {"id": "t1.s4", "impact": "test-change", "summary": "D"},
+                    {"id": "t1.s5", "impact": "unknown-impact", "summary": "E"},
+                ],
+            }
+        ]
+    }
+    html = render_outcome_html(
+        analysis,
+        {"t1.s1": "concern", "t1.s5": "follow-up", "t1.s3": "looks-right", "t1.s2": "skipped"},
+    )
+    # Nothing hidden: t1.s4 was never touched, yet it is listed as unreviewed.
+    assert '<span class="disposition unreviewed">unreviewed</span> <code>t1.s4</code>' in html
+    # Order is pinned by position (not mere presence): concern → follow-up →
+    # looks-right → skipped → unreviewed.
+    positions = [html.index(f"<code>t1.s{n}</code>") for n in (1, 5, 3, 2, 4)]
+    assert positions == sorted(positions)
+    # Impact rides only on the skipped row.
+    assert '<code>t1.s2</code> <span class="impact">mechanical-change</span>' in html
+    assert '<span class="impact">behavior-change</span>' not in html
+    assert "concern 1 · follow-up 1 · looks-right 1 · skipped 1 · unreviewed 1" in html
 
 
 def test_outcome_absent_without_analysis(tmp_path: Path) -> None:
-    # No analysis → no claims to account for: the bake degrades to Q&A only.
+    # No analysis → no steps to account for: the bake degrades to Q&A only.
     cockpit = tmp_path / "review.html"
     cockpit.write_text(_BASE_COCKPIT, encoding="utf-8")
     bake_review(cockpit, qa_path=tmp_path / "absent.jsonl")
