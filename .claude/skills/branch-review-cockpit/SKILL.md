@@ -106,15 +106,27 @@ step fails with "cannot find the branch_review package", re-install the skill.
   `LAVISH_AXI_HOST` to a wildcard — that exposes an unauthenticated local-file
   server.
 - **The agent authors `review.html`** (ADR-0001) but injects untrusted data only
-  through the pre-escaped fragments the collector produces (ADR-0002). **Untrusted
-  data = file paths, diff bodies, commit messages, branch/base names, and any code
-  token quoted out of the diff.** Never hand-type any of those into the HTML:
+  through the Escape Boundary (ADR-0002). **Untrusted data = file paths, diff bodies,
+  commit messages, branch/base names, any code token quoted out of the diff — and the
+  narrator's own free-text prose** (`intent_summary`, each step's `summary`, `detail`,
+  `why_now`, and `review_prompts`, and every attention-note `text`). The prose is
+  untrusted **by construction** (ADR-0016): the isolated narrator reads the diff,
+  commits, and goal, so it can quote — or be prompt-injected into emitting —
+  attacker-controlled markup, and the served **interactive** CSP permits inline script,
+  so a raw `<script>` in a summary would execute. Never hand-type any untrusted value
+  into the HTML raw:
   - diff bodies → `fragments/<id>.html` (per file) or `diff.fragment.html` (whole),
   - paths → the `path_html` / `old_path_html` values in `fragments.json`,
-  - title / meta / goal / changed-files / commits → the blocks in `fragments.html`.
-  The *analysis prose* (summaries, `detail`, `why_now`, `review_prompts`, attention
-  notes) is agent-authored — the narrator's, relayed by you — and trusted: write it
-  into the HTML directly. The post-write lint (step 6) is a
+  - title / meta / goal / changed-files / commits → the blocks in `fragments.html`,
+  - **narrator prose → cross the boundary yourself**: escape every `<`, `>`, `&`, `"`,
+    and `'` to its entity **and** wrap the value in
+    `<!--brc:untrusted-->…<!--/brc:untrusted-->` markers (exactly as the collector wraps
+    the goal text), so the post-write lint's untrusted-region check (step 6) fails the
+    build if any raw `<`/`>` survived in a narration region.
+
+  Only the **closed-vocabulary chip words** (the validator-pinned `impact` / `confidence`
+  enums) and the fixed structural labels/headings are trusted frame — everything the
+  narrator wrote as free text crosses the boundary. The post-write lint (step 6) is a
   tripwire, not your safety net: author it safe.
 - **No inline JS; context-aware CSP.** All behavior stays in the vendored
   `assets/app.js` — never write an inline `<script>…</script>`, an inline `on*=`
@@ -346,7 +358,15 @@ HTML's own directory):
 and `<script src="assets/app.js"></script>` before `</body>`. Then build the
 **layers in this order** (ADR-0009). Disclosure is native `<details>` — L2 Review
 Steps and L3 files ship **closed** so the reviewer descends deliberately; `app.js`
-opens the ancestors of any `#anchor` they follow:
+opens the ancestors of any `#anchor` they follow.
+
+> **Every narrator free-text field below crosses the Escape Boundary.** The
+> `intent_summary`, and each step's `summary`, `detail`, `why_now`, `review_prompts`,
+> and attention-note `text`, are **untrusted** (Hard rules / ADR-0016): render each by
+> escaping `<`/`>`/`&`/`"`/`'` to entities and wrapping the value in
+> `<!--brc:untrusted-->…<!--/brc:untrusted-->`, so the lint (step 6) polices it. Only
+> the closed-vocabulary chip words and fixed labels are trusted frame. The field
+> instructions below name the elements; the boundary wrap is assumed on every one.
 
 1. **Header** — paste the **title** and **meta** blocks from `fragments.html`
    verbatim.
@@ -355,8 +375,9 @@ opens the ancestors of any `#anchor` they follow:
    stated goal (escaped) with its provenance, or the degraded "no stated goal
    found" notice. Never author a stated goal yourself and never present your
    inferred intent as one. Then the analysis's `intent_summary` as
-   `<p class="intent-read">` (the narrator's trusted prose, which frames the change
-   with its Goal Evidence attribution), then a `<ul class="orientation">` of the
+   `<p class="intent-read">` (the narrator's prose framing the change with its Goal
+   Evidence attribution — **boundary-wrapped**, like all narration), then a
+   `<ul class="orientation">` of the
    change's shape at a glance — thread count and titles (each an `<a href="#t1">`
    link, flagging drive-bys), changed-file count, and the **step counts by Behavior
    Impact** (e.g. "4 behavior-change · 2 preserving · 1 test"). With a stated goal,
@@ -454,11 +475,13 @@ and render steps you disagree with **faithfully** (ADR-0011: note the
 discrepancy for the reviewer in step 7's summary as a question; never soften,
 reword, or omit the step).
 When you must show a literal path or code token from the diff inside your prose,
-use the escaped fragment/`path_html`, never a hand-typed copy. And your **own
-trusted prose must still be valid HTML**: a literal `<` in it (writing `t<N>` or
-naming a `<details>` tag) parses as markup and silently swallows text — the lint
-does not police trusted regions. Write `&lt;` or rephrase (`t1, t2, …`; "details
-panel").
+use the escaped fragment/`path_html`, never a hand-typed copy. The narration prose
+itself is boundary-wrapped (above), so a literal `<` the narrator wrote (a `<script>`
+quoted from a hostile hunk, or an innocent `t<N>`) becomes `&lt;` inside its
+`<!--brc:untrusted-->` region and the lint fails the build on any raw `<`/`>` that
+slips through — it can never restructure the page or swallow text. The only text you
+still type raw is the **trusted frame**: fixed labels/headings and the closed-vocabulary
+chip words; keep those valid HTML on your own.
 
 ### 6. Lint the cockpit (post-write tripwire)
 

@@ -477,7 +477,7 @@ def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None
     anchor, qa seam) — and the Cockpit Linter (issues #4/#86), run with the step id
     set, finds nothing to complain about.
     """
-    from branch_review.escape import STRICT_CSP
+    from branch_review.escape import STRICT_CSP, fragment
     from branch_review.lint import lint_cockpit
 
     _git(repo, "checkout", "feature")
@@ -496,28 +496,33 @@ def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None
     file_anchor = f"file-{entry['id']}"
 
     # Build the layers exactly as the SKILL prescribes: paths from `path_html`
-    # (escaped), diff bodies from the per-file fragments (escaped), prose ours.
+    # (escaped), diff bodies from the per-file fragments (escaped), and every narrator
+    # free-text field crossed through the Escape Boundary via `fragment()` (escaped +
+    # marker-wrapped, ADR-0016) — including a hostile <script> the narrator could have
+    # echoed out of the diff, which must render inert exactly like the diff body does.
     cockpit = (
         "<!doctype html><html><head><meta charset='utf-8'>"
         f"<meta http-equiv='Content-Security-Policy' content=\"{STRICT_CSP}\">"
         "<link rel='stylesheet' href='assets/cockpit.css'></head><body><main>"
         f"<header class='cockpit-head'>{header}</header>"
         "<section class='l0'><h2>Orientation</h2>"
-        "<p class='intent-read'>A test branch that adds a hostile file.</p>"
+        f"<p class='intent-read'>{fragment('A branch adding a hostile file.')}</p>"
         "<ul class='orientation'><li><a href='#t1'>t1 Hostile file</a></li></ul></section>"
         "<section class='thread' id='t1'>"
         "<h2><span class='thread-id'>t1</span> Hostile file</h2>"
-        "<p class='thread-summary'>One file designed to break escaping.</p>"
+        f"<p class='thread-summary'>{fragment('One file designed to break escaping.')}</p>"
         f"<p class='thread-paths'>{entry['path_html']}</p>"
         "<details class='step' id='t1.s1' data-impact='behavior-change'><summary>"
         "<span class='chip impact-behavior-change'>behavior-change</span> "
-        "The payload could execute "
+        f"{fragment('The payload could execute')} "
         "<span class='chip confidence-high'>confidence: high</span></summary>"
         "<div class='step-body'>"
-        "<p class='detail'>The hunk hides an onerror payload in a string literal.</p>"
-        "<p class='why-now'>Read first — this is where the untrusted string lands.</p>"
+        # A <script> the narrator could have quoted from the hostile hunk into its own
+        # prose: escaped + marker-wrapped, so the lint passes and it renders as text.
+        f"<p class='detail'>{fragment('The hunk hides <script>steal()</script> in a literal.')}</p>"
+        f"<p class='why-now'>{fragment('Read first — the untrusted string lands here.')}</p>"
         "<h4>Review prompts</h4>"
-        "<ul class='review-prompts'><li>Confirm the hunk renders inert as text.</li></ul>"
+        f"<ul class='review-prompts'><li>{fragment('Confirm the hunk renders inert.')}</li></ul>"
         "<h4>Evidence</h4><ul class='evidence-list'>"
         f"<li><a href='#{file_anchor}'>{entry['path_html']}</a></li></ul>"
         "<!--brc:evidence:t1.s1--><!--/brc:evidence:t1.s1-->"
@@ -535,11 +540,15 @@ def test_authored_layered_cockpit_from_fragments_passes_lint(repo: Path) -> None
     errors = lint_cockpit(cockpit, styling="vendored", step_ids=["t1.s1"])
     assert errors == [], errors
     # And the payloads really are neutralised, not merely tolerated: every hostile
-    # angle bracket became an entity, so neither the path, the hunk, nor the goal
-    # can form a tag.
+    # angle bracket became an entity, so neither the path, the hunk, the goal, nor the
+    # narrator's own prose can form a tag.
     assert "inj<x>" not in cockpit  # the angle brackets in the path are escaped
     assert "<img" not in cockpit  # the hunk's and goal's tags are escaped (inert)
     assert "&lt;img" in cockpit
+    # The <script> the narrator wrote into its `detail` prose is inert — escaped, not
+    # a live element (the only real <script> is the trusted app.js loader).
+    assert "<script>steal" not in cockpit
+    assert "&lt;script&gt;steal()&lt;/script&gt;" in cockpit
     # The goal block rode in with the pasted fragments.html header, inert.
     assert 'class="goal-text"' in cockpit
     assert "onerror=alert(2)&gt;" in cockpit  # visible text, not an attribute
