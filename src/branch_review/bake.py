@@ -161,9 +161,11 @@ def load_exchanges(qa_path: Path) -> list[Exchange]:
 # of the closed vocabulary, so it must stay a permutation of it: the same tuple gates
 # which states are counted, listed, and stamped (a value outside it is coerced to
 # ``unreviewed``), so a state added to ``DISPOSITIONS`` but forgotten here would silently
-# vanish from the record. The assert makes that drift a startup error, not a lost state.
+# vanish from the record. An explicit ``raise`` (not ``assert``, which ``python -O`` strips)
+# makes that drift a hard import error, not a lost state.
 _OUTCOME_ORDER = ("concern", "follow-up", "looks-right", "skipped", "unreviewed")
-assert set(_OUTCOME_ORDER) == set(DISPOSITIONS), "outcome order drifted from the vocabulary"
+if set(_OUTCOME_ORDER) != set(DISPOSITIONS):  # pragma: no cover - startup drift guard
+    raise RuntimeError("outcome order drifted from the disposition vocabulary")
 
 
 def _without_disposition_prompts(exchanges: Sequence[Exchange]) -> list[Exchange]:
@@ -224,6 +226,17 @@ def _outcome_counts_line(rows: Sequence[tuple[str, str, str, str]]) -> str:
     """The one-line aggregate, in the outcome's reading order (concerns first)."""
     counts = Counter(disposition for disposition, _sid, _summary, _impact in rows)
     return " · ".join(f"{d} {counts.get(d, 0)}" for d in _OUTCOME_ORDER)
+
+
+def _outcome_impact(disposition: str, impact: str) -> str:
+    """The Behavior Impact to surface for one outcome row, or ``""`` — the ADR-0016 rule
+    in one place, so the HTML and Markdown outcomes can't drift on which state shows it.
+
+    Impact rides only on the deliberately ``skipped`` rows (so a skip reads as an informed
+    choice — "chose not to read the lockfile churn"); a concern or follow-up leads with its
+    own summary, not its impact.
+    """
+    return impact if impact and disposition == "skipped" else ""
 
 
 def _progress_text(reviewed: int, total: int, concerns: int) -> str:
@@ -326,11 +339,8 @@ def render_outcome_html(
         parts.append("  </ul>")
     parts.append('  <ul class="outcome-list">')
     for disposition, sid, summary, impact in rows:
-        # Impact rides only on the deliberately skipped rows — the ADR pairs impacts
-        # with skipped coverage ("skipped-with-impacts"), so a skip reads as an informed
-        # choice; a concern or follow-up leads with its own summary, not its impact.
-        show_impact = impact and disposition == "skipped"
-        impact_tag = f' <span class="impact">{escape_text(impact)}</span>' if show_impact else ""
+        shown = _outcome_impact(disposition, impact)
+        impact_tag = f' <span class="impact">{escape_text(shown)}</span>' if shown else ""
         parts.append(
             f'    <li><span class="disposition {escape_text(disposition)}">'
             f"{escape_text(disposition)}</span> <code>{escape_text(sid)}</code>"
@@ -633,12 +643,10 @@ def _outcome_markdown(
             name = f"{tid} ({_inline(titles[tid])})" if titles.get(tid) else tid
             bits.append(f"{name} {_progress_text(reviewed, total, concerns)}")
         lines += [f"Per thread: {'; '.join(bits)}.", ""]
-    lines += [
-        f"- **{disposition}** — {sid}"
-        + (f" ({impact})" if impact and disposition == "skipped" else "")
-        + f": {_inline(summary)}"
-        for disposition, sid, summary, impact in rows
-    ]
+    for disposition, sid, summary, impact in rows:
+        shown = _outcome_impact(disposition, impact)
+        suffix = f" ({shown})" if shown else ""
+        lines.append(f"- **{disposition}** — {sid}{suffix}: {_inline(summary)}")
     lines += ["", f"_{_OUTCOME_NOTE}_"]
     return "\n".join(lines)
 
