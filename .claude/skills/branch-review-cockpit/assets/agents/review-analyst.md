@@ -94,7 +94,8 @@ default spine.
 
 A complete, annotated example lives at
 `.claude/skills/branch-review-cockpit/reference/analysis.example.json` — read it
-first and mirror its shape. Structure:
+first and mirror its **shape** (structure and field usage); order the threads by the
+Route policy below, not by copying the example's particular sequence. Structure:
 
 - `title`, `intent_summary` — L0's source: one honest read of what the branch
   does and why. Don't over-claim. **Write it for the reviewer, not the
@@ -106,8 +107,8 @@ first and mirror its shape. Structure:
   "drive_by": [thread ids]}` — a **partition** (each thread in exactly one list;
   the validator enforces it). A drive-by thread earns a step that narrates what
   rode along and why it matters. What the goal asked for that **no thread
-  delivers** is **goal-unserved work**: an Attention Note on the most relevant
-  step (see above), never a schema kind. When `goal` is `null`:
+  delivers** is **goal-unserved work** — an Attention Note (defined under "Narrate
+  by default" above), never a schema kind. When `goal` is `null`:
   `"alignment": null`.
 - `widened_into` — every file you read **beyond the diff** (ADR-0011: the
   evidence basis must be accountable). Honest empty list if you never widened.
@@ -122,11 +123,14 @@ first and mirror its shape. Structure:
   thread-level impact** — a thread's character is *derived* from its steps at
   render time, so a mixed thread reads as mixed; the validator rejects an authored
   thread impact.
-  - **Route policy.** Order threads so behavior-changing threads lead, then
-    test-change, then behavior-preserving, with mechanical churn last; an
-    `unknown-impact` thread slots where its subject belongs (right beside the
-    change it qualifies). Within a thread, order steps the same way. Every step's
-    `why_now` states, in one sentence, why it sits at this position on the route.
+  - **Route policy.** Judge each thread by its **leading step impact** — a reasoning
+    step over the thread's steps, never an authored field (there is no thread impact
+    to author). Behavior-changing threads lead — they are the payload — then
+    `test-change`, then `behavior-preserving`, with mechanical churn last; an
+    `unknown-impact` thread slots beside the change it qualifies. A **mixed** thread
+    (behavior-change steps alongside refactor or churn) sits by its most
+    behavior-changing step. Order steps within a thread the same way. (The impact
+    labels are defined under the step's `impact` field below.)
 - **steps** — one guided stop on the walkthrough each; **not a finding.** A step
   says what changed here, its Behavior Impact, why it sits at this point on the
   route, what the human should compare, and the exact evidence it lands on:
@@ -167,8 +171,9 @@ first and mirror its shape. Structure:
     confirmations, never "what could be wrong here."** Required (≥1) on
     `behavior-change`, `behavior-preserving`, and `unknown-impact` steps (where the
     reviewer has a concrete comparison to make — for preserving, the preservation
-    check; for unknown, the check that resolves it); optional on `test-change` and
-    `mechanical-change`, where a forced prompt only breeds boilerplate.
+    check; for unknown, the specific file, caller, or config to open to resolve the
+    impact); optional on `test-change` and `mechanical-change`, where a forced
+    prompt only breeds boilerplate.
   - `evidence` — ≥1 refs the step lands on: `{path}` (**a changed file — a
     `fragments.json` entry**; the cockpit links it to that file's L3 fragment)
     and/or `{note}` ("no test touches this"). A **widened-into** file has no diff
@@ -186,10 +191,12 @@ first and mirror its shape. Structure:
       file level — reach for a hunk when a step is about one specific region of a
       multi-hunk file.
   - `attention_notes` — optional muted asides, `[{text, evidence?}]`. These are the
-    only default flags (untested behavior change; goal-unserved work — see above).
-    A note is plain narration: **no `severity`, no `category`, no `level`**, no
-    prompt and no disposition of its own — those issue-finder attributes return only
-    through a Focus Lens, and the validator rejects them on a note.
+    only default flags (untested behavior change; goal-unserved work — see "Narrate
+    by default" above). A note is plain narration, not a finding: it carries no
+    prompt and no disposition of its own, and **never `severity`, `category`, or
+    `level`** — the validator rejects those three keys on a note, keeping the
+    issue-finder attributes (which return only through a Focus Lens) out of the
+    default spine.
   - `relates_to` — optional `[step ids]` linking steps that belong together. Use it
     especially to link a **`test-change` step to the behavior it documents** (e.g.
     `"relates_to": ["t1.s1"]` on the test that pins t1.s1's new timing). Ids are
