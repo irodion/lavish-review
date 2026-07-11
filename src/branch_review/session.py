@@ -2,21 +2,25 @@
 
 A reviewer can step away mid-review and come back. To make that safe the skill
 persists one ``session.json`` per Review — ``{status, base, branch, head_sha,
-started_at}`` — when it opens a cockpit, and consults it the next time
+merge_base, analysis_schema, started_at}`` — when it opens a cockpit, and consults it the next time
 ``/review-branch`` runs. At the centre of that lifecycle is a **deep core of pure
 policy**: given the persisted :class:`Session` and the *current* git HEAD and branch,
 :func:`evaluate` decides how the new run relates to the old one. A thin shell around
 it persists the session and a small CLI (``evaluate``/``start``/``end``) gathers the
 git state — git and file I/O live only in that shell, never in :func:`evaluate`.
 
-Four dispositions (the stable vocabulary the issue and SKILL speak):
+Five dispositions (the stable vocabulary the issue and SKILL speak):
 
 - ``none``              — nothing to resume: no session, or a finished one. Generate.
 - ``fresh``             — an unfinished review for **this** branch at **this** HEAD;
   re-attach without regenerating. Restore is the default.
-- ``stale``             — an unfinished review for this branch whose HEAD has since
+- ``stale``            — an unfinished review for this branch whose HEAD has since
   advanced. **Regenerate by default** (resume-anyway stays available) — the cockpit
   on disk no longer describes what the branch now is.
+- ``stale-schema``     — an unfinished review for this branch whose recorded analysis
+  schema predates the one this code speaks (ADR-0016 clean break). **Regenerate, with
+  no resume-anyway** — the loop and the bake can no longer read that session's
+  analysis, so re-attaching is not offered at all.
 - ``different-branch``  — the persisted review belongs to a different branch than the
   one checked out now; it cannot be restored onto this branch. Generate.
 
@@ -39,6 +43,7 @@ from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
 
+from branch_review.analysis import SCHEMA as ANALYSIS_SCHEMA
 from branch_review.collect import (
     BaseResolutionError,
     GitError,
@@ -51,8 +56,12 @@ from branch_review.config import ConfigError, resolve_config
 
 # The persisted session lives beside the cockpit, under the gitignored state dir.
 SESSION_NAME = "session.json"
+ANALYSIS_NAME = "analysis.json"  # the analyst's testimony, beside the context/session
 
-_SCHEMA = "review-session/0.2"
+# ``0.3`` adds ``analysis_schema`` — the ``review-analysis`` version the cockpit was
+# generated against, so the evaluator can catch a session whose analysis this code can
+# no longer read (ADR-0016's clean break) and refuse to resume it.
+_SCHEMA = "review-session/0.3"
 
 
 class SessionError(RuntimeError):
@@ -87,14 +96,15 @@ class SessionDisposition(Enum):
     """The Session Evaluator's verdict on how a new run relates to the saved one.
 
     The string values are the vocabulary the issue and SKILL speak (``none``,
-    ``fresh``, ``stale``, ``different-branch``). The two properties encode the
-    **policy** the cockpit acts on, so it lives here (and is table-tested) rather than
-    being re-derived by every caller.
+    ``fresh``, ``stale``, ``stale-schema``, ``different-branch``). The two properties
+    encode the **policy** the cockpit acts on, so it lives here (and is table-tested)
+    rather than being re-derived by every caller.
     """
 
     NONE = "none"
     FRESH = "fresh"
     STALE = "stale"
+    STALE_SCHEMA = "stale-schema"
     DIFFERENT_BRANCH = "different-branch"
 
     @property
@@ -102,8 +112,10 @@ class SessionDisposition(Enum):
         """True when a resumable review for *this* branch exists, so restore is offered.
 
         Both ``fresh`` and ``stale`` have a matching unfinished review to re-attach to;
-        ``none`` (nothing to resume) and ``different-branch`` (the review is for another
-        branch) do not, so the run just generates.
+        ``none`` (nothing to resume), ``different-branch`` (the review is for another
+        branch), and ``stale-schema`` (the saved analysis is a language this code no
+        longer reads, so re-attaching is impossible, not merely inadvisable) do not, so
+        the run just generates.
         """
         return self in (SessionDisposition.FRESH, SessionDisposition.STALE)
 
@@ -115,7 +127,8 @@ class SessionDisposition(Enum):
         cockpit was generated, so **regenerate is the default** (resume-anyway remains a
         choice). This is the issue's "regenerate-by-default on stale" invariant, encoded
         once. The negation — ``offers_restore and not restore_is_default`` — is exactly
-        "regenerate by default, resume available".
+        "regenerate by default, resume available". ``stale-schema`` sits beyond even that:
+        it offers no restore at all, so it can never be the default.
         """
         return self is SessionDisposition.FRESH
 
@@ -127,10 +140,12 @@ class Session:
     ``base``/``branch``/``head_sha`` mirror the :class:`~branch_review.collect.ReviewContext`
     the cockpit was generated from; ``merge_base`` is ``merge-base(base, HEAD)`` — together
     with ``head_sha`` it pins the exact ``base...HEAD`` diff, so the evaluator can tell when
-    a switched or advanced base changed the diff under a fixed branch HEAD. ``started_at``
-    is the ISO-8601 timestamp the review began; ``status`` tracks open → ended. ``schema``
-    versions the on-disk shape so a future field change is detectable rather than silently
-    misread.
+    a switched or advanced base changed the diff under a fixed branch HEAD. ``analysis_schema``
+    is the ``review-analysis`` version the cockpit was authored against, so a session whose
+    analysis this code can no longer read (ADR-0016's clean break) is caught and refused for
+    resume. ``started_at`` is the ISO-8601 timestamp the review began; ``status`` tracks
+    open → ended. ``schema`` versions the on-disk shape so a future field change is detectable
+    rather than silently misread.
     """
 
     schema: str
@@ -139,6 +154,7 @@ class Session:
     branch: str
     head_sha: str
     merge_base: str
+    analysis_schema: str
     started_at: str
 
     def to_dict(self) -> dict[str, object]:
@@ -164,6 +180,9 @@ class Session:
         unexpected, so callers have a single, intentional failure mode for a corrupt
         file. An unknown ``schema`` is tolerated forward-compatibly only insofar as the
         required fields are present and well-typed; the ``status`` must be a known value.
+        ``analysis_schema`` is read leniently — a session written before ADR-0016's clean
+        break has no such field, so its absence resolves to ``""`` (an empty schema that
+        can never match the current one), which the evaluator reads as ``stale-schema``.
         """
         if not isinstance(data, dict):
             raise SessionError(f"session.json must be a JSON object, got {type(data).__name__}")
@@ -174,6 +193,9 @@ class Session:
         for key in required:
             if not isinstance(data[key], str):
                 raise SessionError(f"session.json field {key!r} must be a string")
+        analysis_schema = data.get("analysis_schema", "")
+        if not isinstance(analysis_schema, str):
+            raise SessionError("session.json field 'analysis_schema' must be a string")
         try:
             status = SessionStatus(data["status"])
         except ValueError as exc:
@@ -185,6 +207,7 @@ class Session:
             branch=data["branch"],
             head_sha=data["head_sha"],
             merge_base=data["merge_base"],
+            analysis_schema=analysis_schema,
             started_at=data["started_at"],
         )
 
@@ -196,6 +219,7 @@ def evaluate(
     current_branch: str,
     current_base: str,
     current_merge_base: str,
+    current_analysis_schema: str = ANALYSIS_SCHEMA,
 ) -> SessionDisposition:
     """Decide how a new ``/review-branch`` run relates to the persisted ``session``.
 
@@ -208,24 +232,35 @@ def evaluate(
        checked out now. Checked *before* the diff comparison: a different branch almost
        always has a different HEAD too, and reporting that as "stale" would wrongly
        imply the *same* review merely advanced.
-    3. **stale** — same branch, but the diff the cockpit was generated for is no longer
-       what ``/review-branch`` would produce now: ``HEAD`` advanced, **or** the requested
-       base differs from the saved one, **or** the base's ``merge-base`` with HEAD moved
-       (a base switched or advanced under a fixed HEAD silently changes ``base...HEAD``).
-       The artifact no longer matches, so **regenerate by default**.
-    4. **fresh** — same branch, same HEAD, same base, same merge-base: the cockpit still
-       describes the exact diff a fresh run would, so re-attach without regenerating.
+    3. **stale-schema** — same branch, but the saved analysis was authored against a
+       ``review-analysis`` schema this code no longer speaks (ADR-0016's clean break).
+       Checked *before* the diff comparison and it suppresses resume entirely: even at
+       the identical HEAD there is nothing to re-attach to, because the loop and the
+       bake cannot read that session's analysis. Regenerate, no resume-anyway.
+    4. **stale** — same branch and schema, but the diff the cockpit was generated for is
+       no longer what ``/review-branch`` would produce now: ``HEAD`` advanced, **or** the
+       requested base differs from the saved one, **or** the base's ``merge-base`` with
+       HEAD moved (a base switched or advanced under a fixed HEAD silently changes
+       ``base...HEAD``). The artifact no longer matches, so **regenerate by default**
+       (resume-anyway available).
+    5. **fresh** — same branch, same schema, same HEAD, same base, same merge-base: the
+       cockpit still describes the exact diff a fresh run would, so re-attach without
+       regenerating.
 
     Pure: it inspects only its arguments. ``current_*`` come from the live working tree —
     ``current_base`` is the resolved base ``/review-branch`` would diff against (explicit
     arg or auto-detect) and ``current_merge_base`` is :func:`branch_review.collect.merge_base`
-    of it with HEAD. The collector reports a detached HEAD as its short SHA, so a detached
-    review compares consistently here without a special case.
+    of it with HEAD; ``current_analysis_schema`` is the schema this code authors
+    (:data:`branch_review.analysis.SCHEMA`, the default). The collector reports a detached
+    HEAD as its short SHA, so a detached review compares consistently here without a
+    special case.
     """
     if session is None or not session.status.is_resumable:
         return SessionDisposition.NONE
     if session.branch != current_branch:
         return SessionDisposition.DIFFERENT_BRANCH
+    if session.analysis_schema != current_analysis_schema:
+        return SessionDisposition.STALE_SCHEMA
     if (
         session.head_sha != current_head
         or session.base != current_base
@@ -294,6 +329,24 @@ def save_session(state_dir: Path, session: Session) -> Path:
     return path
 
 
+def _recorded_analysis_schema(state_dir: Path) -> str:
+    """The schema of the ``analysis.json`` the cockpit was authored from, for staleness.
+
+    Reads the analysis's own ``schema`` string so the session records the *artifact's*
+    fact, not merely the running code's belief about it — an on-disk analysis authored by
+    an older code version is then correctly caught as ``stale-schema`` on a later resume,
+    even if the current code's constant would have matched. Degrades to this code's
+    :data:`branch_review.analysis.SCHEMA` when the file is absent or unreadable: a run that
+    authored a cockpit did so with this code, so that is the honest fallback.
+    """
+    try:
+        data = json.loads((state_dir / ANALYSIS_NAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ANALYSIS_SCHEMA
+    schema = data.get("schema") if isinstance(data, dict) else None
+    return schema if isinstance(schema, str) and schema else ANALYSIS_SCHEMA
+
+
 def session_from_context(context_path: Path) -> Session:
     """Build the ``open`` :class:`Session` from a collected ``context.json``.
 
@@ -301,9 +354,12 @@ def session_from_context(context_path: Path) -> Session:
     ``generated_at`` for the exact revision the cockpit was authored from, so the session
     mirrors that rather than re-running git — guaranteeing the saved session and the
     cockpit describe the same ``base...HEAD`` diff. ``started_at`` is the context's
-    ``generated_at`` (the review began when the diff was collected). Each consumed field
-    is validated to be a string, so a malformed context fails with a :class:`SessionError`
-    rather than constructing a nonsense session.
+    ``generated_at`` (the review began when the diff was collected). ``analysis_schema``
+    is read from the ``analysis.json`` beside the context (:func:`_recorded_analysis_schema`,
+    degrading to this code's :data:`branch_review.analysis.SCHEMA`) so the session records
+    the analysis's *own* schema — letting a later run detect a code upgrade that retired
+    that language. Each consumed context field is validated to be a string, so a malformed
+    context fails with a :class:`SessionError` rather than constructing a nonsense session.
     """
     data = _read_json_object(context_path)
     fields: dict[str, str] = {}
@@ -319,6 +375,7 @@ def session_from_context(context_path: Path) -> Session:
         branch=fields["branch"],
         head_sha=fields["head_sha"],
         merge_base=fields["merge_base"],
+        analysis_schema=_recorded_analysis_schema(context_path.parent),
         started_at=fields["generated_at"],
     )
 
