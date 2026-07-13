@@ -1,7 +1,7 @@
-"""Tests for live evidence fragment injection (issue #43).
+"""Tests for live evidence fragment injection (issue #43, step-shaped by #86).
 
 The acceptance criteria are pinned directly: an escaped, linted fragment lands at
-the right claim's seam; a lint failure blocks the write entirely (nothing on disk
+the right step's seam; a lint failure blocks the write entirely (nothing on disk
 changes); injection is idempotent per seam and never touches content outside the
 markers; and an injected fragment survives the close-time bake in the
 self-contained artifact. Pure seam rendering/injection is exercised in memory; the
@@ -25,11 +25,11 @@ from branch_review.evidence import (
     inject_evidence_html,
     load_fragments,
     main,
-    render_claim_evidence,
+    render_step_evidence,
 )
 from branch_review.lint import lint_cockpit
 
-_SEAM = "<!--brc:evidence:t1.c1--><!--/brc:evidence:t1.c1-->"
+_SEAM = "<!--brc:evidence:t1.s1--><!--/brc:evidence:t1.s1-->"
 
 _COCKPIT = f"""<!doctype html>
 <html><head>
@@ -37,8 +37,8 @@ _COCKPIT = f"""<!doctype html>
 <link rel="stylesheet" href="assets/cockpit.css">
 </head><body><main>
 <section class="thread" id="t1"><h2><span class="thread-id">t1</span> Thread</h2>
-<details class="claim" id="t1.c1"><summary>the claim</summary>
-<div class="claim-body"><p class="detail">detail</p>
+<details class="step" id="t1.s1"><summary>the step</summary>
+<div class="step-body"><p class="detail">detail</p>
 {_SEAM}
 </div></details></section></main>
 <!--brc:qa-log--><!--/brc:qa-log-->
@@ -47,15 +47,15 @@ _COCKPIT = f"""<!doctype html>
 """
 
 
-def _fragment(body: str, *, title: str = "Callers", claim: str = "t1.c1") -> EvidenceFragment:
+def _fragment(body: str, *, title: str = "Callers", step: str = "t1.s1") -> EvidenceFragment:
     return EvidenceFragment(
-        claim=claim, seq=1, ts="2026-07-03T00:00:00+00:00", title=title, body=body
+        step=step, seq=1, ts="2026-07-03T00:00:00+00:00", title=title, body=body
     )
 
 
 @pytest.fixture
 def cockpit(tmp_path: Path) -> Path:
-    """A minimal, lint-clean interactive cockpit with the t1.c1 seam planted."""
+    """A minimal, lint-clean interactive cockpit with the t1.s1 seam planted."""
     path = tmp_path / "review.html"
     path.write_text(_COCKPIT, encoding="utf-8")
     return path
@@ -65,30 +65,30 @@ def cockpit(tmp_path: Path) -> Path:
 
 
 def test_render_escapes_hostile_body_and_title() -> None:
-    out = render_claim_evidence([_fragment("<script>alert(1)</script>", title="a <b> title")])
+    out = render_step_evidence([_fragment("<script>alert(1)</script>", title="a <b> title")])
     assert "<script>" not in out and "<b>" not in out
     assert "&lt;script&gt;" in out and "a &lt;b&gt; title" in out
     assert UNTRUSTED_OPEN in out  # the body crossed the boundary, marker-wrapped
 
 
 def test_render_empty_is_empty() -> None:
-    assert render_claim_evidence([]) == ""
+    assert render_step_evidence([]) == ""
 
 
-def test_evidence_seam_rejects_non_claim_ids() -> None:
+def test_evidence_seam_rejects_non_step_ids() -> None:
     with pytest.raises(ValueError):
         evidence_seam("--><script>")
 
 
 def test_injection_touches_only_the_seam_and_is_idempotent() -> None:
-    content = render_claim_evidence([_fragment("+ new line")])
-    once, found = inject_evidence_html(_COCKPIT, "t1.c1", content)
+    content = render_step_evidence([_fragment("+ new line")])
+    once, found = inject_evidence_html(_COCKPIT, "t1.s1", content)
     assert found
-    twice, found_again = inject_evidence_html(once, "t1.c1", content)
+    twice, found_again = inject_evidence_html(once, "t1.s1", content)
     assert found_again
     assert once == twice  # wholesale seam rewrite: re-injection never duplicates
     # Nothing outside the seam moved: strip both seam regions and compare.
-    open_marker, close_marker = evidence_seam("t1.c1")
+    open_marker, close_marker = evidence_seam("t1.s1")
     before = _COCKPIT.split(open_marker)[0] + _COCKPIT.split(close_marker)[1]
     after = once.split(open_marker)[0] + once.split(close_marker)[1]
     assert before == after
@@ -96,7 +96,7 @@ def test_injection_touches_only_the_seam_and_is_idempotent() -> None:
 
 def test_injection_without_seam_reports_not_found() -> None:
     html = _COCKPIT.replace(_SEAM, "")
-    out, found = inject_evidence_html(html, "t1.c1", "anything")
+    out, found = inject_evidence_html(html, "t1.s1", "anything")
     assert not found and out == html
 
 
@@ -104,7 +104,7 @@ def test_injection_without_seam_reports_not_found() -> None:
 
 
 def test_add_evidence_injects_escaped_and_lint_clean(cockpit: Path) -> None:
-    errors = add_evidence(cockpit, "t1.c1", "Callers of retry()", '+ x = "<img src=x>"\n')
+    errors = add_evidence(cockpit, "t1.s1", "Callers of retry()", '+ x = "<img src=x>"\n')
     assert errors == []
     html = cockpit.read_text(encoding="utf-8")
     assert "Callers of retry()" in html
@@ -112,20 +112,20 @@ def test_add_evidence_injects_escaped_and_lint_clean(cockpit: Path) -> None:
     assert lint_cockpit(html, csp_mode="interactive") == []
     # The record persisted beside the cockpit.
     fragments = load_fragments(cockpit.parent / EVIDENCE_NAME)
-    assert len(fragments) == 1 and fragments[0].claim == "t1.c1"
+    assert len(fragments) == 1 and fragments[0].step == "t1.s1"
 
 
-def test_injection_runs_structural_lint_with_claim_ids(cockpit: Path) -> None:
-    # Passing the analysis claim set turns on the structural pass (issue #62); the
-    # fixture's claim set (t1.c1) matches, so injection still succeeds.
-    assert add_evidence(cockpit, "t1.c1", "Callers", "+ x\n", claim_ids=["t1.c1"]) == []
+def test_injection_runs_structural_lint_with_step_ids(cockpit: Path) -> None:
+    # Passing the analysis step set turns on the structural pass (issue #62); the
+    # fixture's step set (t1.s1) matches, so injection still succeeds.
+    assert add_evidence(cockpit, "t1.s1", "Callers", "+ x\n", step_ids=["t1.s1"]) == []
 
 
 def test_injection_blocked_when_structural_pass_fails(cockpit: Path) -> None:
-    # A claim set declaring t1.c2 (which the fixture never authored): the structural
+    # A step set declaring t1.s2 (which the fixture never authored): the structural
     # pass fails (missing element + seam), so nothing is written — the chat-only floor.
-    errors = add_evidence(cockpit, "t1.c1", "Callers", "+ x\n", claim_ids=["t1.c1", "t1.c2"])
-    assert errors and any("claim-id-missing" in e or "seam-missing" in e for e in errors)
+    errors = add_evidence(cockpit, "t1.s1", "Callers", "+ x\n", step_ids=["t1.s1", "t1.s2"])
+    assert errors and any("step-id-missing" in e or "seam-missing" in e for e in errors)
     assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched
     assert not (cockpit.parent / EVIDENCE_NAME).exists()
 
@@ -138,25 +138,25 @@ def test_cli_loads_sibling_analysis_for_the_structural_pass(
     cockpit = tmp_path / "review.html"
     cockpit.write_text(_COCKPIT, encoding="utf-8")
     (tmp_path / "analysis.json").write_text(
-        json.dumps({"threads": [{"claims": [{"id": "t1.c1"}, {"id": "t1.c2"}]}]}),
+        json.dumps({"threads": [{"steps": [{"id": "t1.s1"}, {"id": "t1.s2"}]}]}),
         encoding="utf-8",
     )
     body = tmp_path / "body.txt"
     body.write_text("+ x\n", encoding="utf-8")
-    rc = main(["t1.c1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
-    assert rc == 1  # t1.c2 is in the analysis but not the page → structural failure
-    assert "claim-id-missing" in capsys.readouterr().err
+    rc = main(["t1.s1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
+    assert rc == 1  # t1.s2 is in the analysis but not the page → structural failure
+    assert "step-id-missing" in capsys.readouterr().err
     assert cockpit.read_text(encoding="utf-8") == _COCKPIT  # untouched
 
 
 def test_cli_degrades_when_default_sibling_analysis_is_corrupt(cockpit: Path) -> None:
     # A malformed DEFAULT sibling analysis.json must not crash or block injection:
-    # _load_claim_ids returns None (its JSONDecodeError branch), the structural pass is
+    # _load_step_ids returns None (its JSONDecodeError branch), the structural pass is
     # skipped, and only the escape/CSP rules gate the write — so injection still succeeds.
     (cockpit.parent / "analysis.json").write_text("{not json", encoding="utf-8")
     body = cockpit.parent / "body.txt"
     body.write_text("+ x\n", encoding="utf-8")
-    rc = main(["t1.c1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
+    rc = main(["t1.s1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
     assert rc == 0  # injected — structural pass skipped, not a hard fail
     assert "Callers" in cockpit.read_text(encoding="utf-8")
 
@@ -176,7 +176,7 @@ def test_cli_hard_fails_on_explicit_bad_analysis(
     # "missing" leaves the file absent.
     rc = main(
         [
-            "t1.c1",
+            "t1.s1",
             "--title",
             "Callers",
             "--input",
@@ -193,8 +193,8 @@ def test_cli_hard_fails_on_explicit_bad_analysis(
 
 
 def test_add_evidence_accumulates_without_duplicating(cockpit: Path) -> None:
-    assert add_evidence(cockpit, "t1.c1", "First", "+ one\n") == []
-    assert add_evidence(cockpit, "t1.c1", "Second", "+ two\n") == []
+    assert add_evidence(cockpit, "t1.s1", "First", "+ one\n") == []
+    assert add_evidence(cockpit, "t1.s1", "Second", "+ two\n") == []
     html = cockpit.read_text(encoding="utf-8")
     assert html.count("First") == 1 and html.count("Second") == 1
     assert html.count('<figure class="live-evidence">') == 2
@@ -202,18 +202,18 @@ def test_add_evidence_accumulates_without_duplicating(cockpit: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("claim", "title", "body", "needle"),
+    ("step", "title", "body", "needle"),
     [
-        ("../../etc", "t", "b", "not a claim id"),
-        ("t9.c9", "t", "b", "no evidence seam"),  # valid shape, but no seam authored
-        ("t1.c1", "   ", "b", "title must not be empty"),
-        ("t1.c1", "t", "", "body must not be empty"),
+        ("../../etc", "t", "b", "not a step id"),
+        ("t9.s9", "t", "b", "no evidence seam"),  # valid shape, but no seam authored
+        ("t1.s1", "   ", "b", "title must not be empty"),
+        ("t1.s1", "t", "", "body must not be empty"),
     ],
 )
 def test_add_evidence_refuses_bad_input_and_writes_nothing(
-    cockpit: Path, claim: str, title: str, body: str, needle: str
+    cockpit: Path, step: str, title: str, body: str, needle: str
 ) -> None:
-    errors = add_evidence(cockpit, claim, title, body)
+    errors = add_evidence(cockpit, step, title, body)
     assert errors and needle in errors[0]
     assert cockpit.read_text(encoding="utf-8") == _COCKPIT
     assert not (cockpit.parent / EVIDENCE_NAME).exists()
@@ -227,7 +227,7 @@ def test_lint_failure_blocks_injection_entirely(tmp_path: Path) -> None:
     )
     cockpit = tmp_path / "review.html"
     cockpit.write_text(broken, encoding="utf-8")
-    errors = add_evidence(cockpit, "t1.c1", "Callers", "+ x\n")
+    errors = add_evidence(cockpit, "t1.s1", "Callers", "+ x\n")
     assert errors and any(e.startswith("lint:") for e in errors)
     assert cockpit.read_text(encoding="utf-8") == broken
     assert not (tmp_path / EVIDENCE_NAME).exists()
@@ -236,7 +236,7 @@ def test_lint_failure_blocks_injection_entirely(tmp_path: Path) -> None:
 def test_injected_evidence_survives_the_bake(cockpit: Path) -> None:
     # AC: present in the baked review.html — the bake rewrites only its own Q&A
     # seam, and the strict-CSP artifact still lints clean with the fragment in it.
-    assert add_evidence(cockpit, "t1.c1", "Kept at close", "+ kept\n") == []
+    assert add_evidence(cockpit, "t1.s1", "Kept at close", "+ kept\n") == []
 
     bake_review(cockpit, qa_path=cockpit.parent / "absent.jsonl")
 
@@ -255,8 +255,8 @@ def test_non_numeric_seq_falls_back_instead_of_crashing(tmp_path: Path) -> None:
     # Well-formed JSON with a hand-mangled seq must not raise through the
     # injection path — degrade, never crash.
     payload = {
-        "schema": "review-live-evidence/0.1",
-        "fragments": [{"claim": "t1.c1", "seq": "x", "ts": "t", "title": "T", "body": "b"}],
+        "schema": "review-live-evidence/0.2",
+        "fragments": [{"step": "t1.s1", "seq": "x", "ts": "t", "title": "T", "body": "b"}],
     }
     (tmp_path / EVIDENCE_NAME).write_text(json.dumps(payload), encoding="utf-8")
     fragments = load_fragments(tmp_path / EVIDENCE_NAME)
@@ -271,13 +271,13 @@ def test_cli_success_and_floor(cockpit: Path, capsys: pytest.CaptureFixture[str]
     body = tmp_path / "evidence-input.txt"
     body.write_text("+ the callers\n", encoding="utf-8")
 
-    ok = main(["t1.c1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
+    ok = main(["t1.s1", "--title", "Callers", "--input", str(body), "--cockpit", str(cockpit)])
     assert ok == 0
     assert "Evidence injected" in capsys.readouterr().out
 
     # Unknown seam → blocked, non-zero, nothing written, "answer in chat" floor.
     before = cockpit.read_text(encoding="utf-8")
-    fail = main(["t9.c9", "--title", "X", "--input", str(body), "--cockpit", str(cockpit)])
+    fail = main(["t9.s9", "--title", "X", "--input", str(body), "--cockpit", str(cockpit)])
     assert fail == 1
     assert "answer in chat" in capsys.readouterr().err
     assert cockpit.read_text(encoding="utf-8") == before
@@ -285,14 +285,14 @@ def test_cli_success_and_floor(cockpit: Path, capsys: pytest.CaptureFixture[str]
     # Missing input file → usage-level error.
     assert (
         main(
-            ["t1.c1", "--title", "X", "--input", str(tmp_path / "nope"), "--cockpit", str(cockpit)]
+            ["t1.s1", "--title", "X", "--input", str(tmp_path / "nope"), "--cockpit", str(cockpit)]
         )
         == 2
     )
 
 
 def test_cli_records_are_json_readable(cockpit: Path) -> None:
-    assert add_evidence(cockpit, "t1.c1", "T", "+ b\n") == []
+    assert add_evidence(cockpit, "t1.s1", "T", "+ b\n") == []
     payload = json.loads((cockpit.parent / EVIDENCE_NAME).read_text(encoding="utf-8"))
-    assert payload["schema"] == "review-live-evidence/0.1"
-    assert payload["fragments"][0]["claim"] == "t1.c1"
+    assert payload["schema"] == "review-live-evidence/0.2"
+    assert payload["fragments"][0]["step"] == "t1.s1"

@@ -42,8 +42,8 @@ arbitrary remote host.
   **not** relax the untrusted-markup or no-inline-JS rules — the cockpit *we* author
   still contains no inline JS (Lavish injects its own at serve time, which the lint
   never sees). A wildcard or arbitrary-remote CSP still fails in `interactive`.
-- The SKILL authors the cockpit with `INTERACTIVE_CSP` for the interactive review and
-  lints with `--csp-mode interactive`. A future portable-export path would use
+- The renderer authors the cockpit with `INTERACTIVE_CSP` for the interactive review
+  and lints with `--csp-mode interactive`. A future portable-export path would use
   `STRICT_CSP` + strict lint.
 - The right long-term fix is upstream: a tool that injects inline/CDN assets into a
   page it serves should reconcile with that page's CSP (strip/rewrite it, or nonce

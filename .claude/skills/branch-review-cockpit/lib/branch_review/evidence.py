@@ -5,14 +5,14 @@ questions in chat (ADR-0003: the page is never regenerated per answer). This mod
 is the one sanctioned exception, as amended by ADR-0009: when a mid-review answer
 *is* new evidence the page should keep — "what about the callers of this?" answered
 with the callers themselves — the evidence becomes an escaped fragment injected at a
-**pre-planted seam** under the claim it substantiates. Same mechanism as the Q&A
-seam the bake fills: seam-bounded, idempotent, nothing outside the markers is ever
-touched.
+**pre-planted seam** under the Review Step it substantiates (ADR-0016). Same mechanism
+as the Q&A seam the bake fills: seam-bounded, idempotent, nothing outside the markers
+is ever touched.
 
 Delivery follows the #38 spike's verdict: Lavish watches ``review.html`` and
 re-renders the open page on write (chokidar → SSE reload, scroll restored), so a
 successful injection appears in the reviewer's browser by itself. The floor —
-lint failure, missing seam, malformed claim id — is **chat-only**: the injection is
+lint failure, missing seam, malformed step id — is **chat-only**: the injection is
 refused, nothing is written, and the loop answers in chat as usual.
 
 Three properties make the path safe:
@@ -27,7 +27,7 @@ Three properties make the path safe:
 3. **The record is run-scoped and separate.** Injected fragments are recorded in
    ``live-evidence.json`` beside the session (reset on regeneration like the
    transcript), **not** appended into ``analysis.json`` — the analysis stays the
-   isolated analyst's untouched testimony (ADR-0011). The Q&A log already records
+   isolated narrator's untouched testimony (ADR-0011). The Q&A log already records
    the exchange that produced the fragment; the baked page keeps the fragment
    because the bake only ever rewrites its own Q&A seam.
 
@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from branch_review.analysis import claim_ids as analysis_claim_ids
+from branch_review.analysis import step_ids as analysis_step_ids
 from branch_review.escape import diff_fragment, escape_text, evidence_seam_markers
 from branch_review.feedback import DEFAULT_COCKPIT
 from branch_review.lint import lint_cockpit
@@ -55,43 +55,43 @@ from branch_review.lint import lint_cockpit
 # collector; carried across resume). Raw text in, escaping at render time.
 EVIDENCE_NAME = "live-evidence.json"
 
-# The isolated analyst's record, beside the cockpit — its claim id set gates the
-# linter's structural pass (issue #62). Same basename the bake/validator use.
+# The isolated narrator's record, beside the cockpit — its step id set gates the
+# linter's structural pass (issues #62/#86). Same basename the bake/validator use.
 _ANALYSIS_NAME = "analysis.json"
 
-_SCHEMA = "review-live-evidence/0.1"
+_SCHEMA = "review-live-evidence/0.2"
 
-# A claim id as the analysis mints them (ADR-0012) — validated before any seam
-# string is built, so a hostile id can never smuggle markup or marker syntax.
-_CLAIM_ID = re.compile(r"^t\d+\.c\d+$")
+# A step id as the analysis mints them (ADR-0016) — validated before any seam string
+# is built, so a hostile id can never smuggle markup or marker syntax.
+_STEP_ID = re.compile(r"^t\d+\.s\d+$")
 
 
-def evidence_seam(claim_id: str) -> tuple[str, str]:
-    """The seam marker pair for one claim's live evidence.
+def evidence_seam(step_id: str) -> tuple[str, str]:
+    """The seam marker pair for one Review Step's live evidence.
 
-    Planted empty by the cockpit author under the claim's evidence list (SKILL
+    Planted empty by the cockpit author under the step's evidence list (SKILL
     step 5), exactly like the Q&A seam: HTML comments, invisible, and distinct
     from the Escape Boundary's ``brc:untrusted`` markers so the linter's balance
     count is unperturbed.
     """
-    if not _CLAIM_ID.match(claim_id):
-        raise ValueError(f"not a claim id: {claim_id!r}")
-    return evidence_seam_markers(claim_id)
+    if not _STEP_ID.match(step_id):
+        raise ValueError(f"not a step id: {step_id!r}")
+    return evidence_seam_markers(step_id)
 
 
 @dataclass(frozen=True)
 class EvidenceFragment:
-    """One injected fragment: which claim it substantiates, and its raw content."""
+    """One injected fragment: which step it substantiates, and its raw content."""
 
-    claim: str
+    step: str
     seq: int
     ts: str
     title: str
     body: str
 
 
-def render_claim_evidence(fragments: Sequence[EvidenceFragment]) -> str:
-    """Render one claim's fragments as the seam's full content (idempotent source).
+def render_step_evidence(fragments: Sequence[EvidenceFragment]) -> str:
+    """Render one step's fragments as the seam's full content (idempotent source).
 
     The seam is always rewritten wholesale from the record, so re-injection can
     never duplicate earlier fragments. The ``title`` is the agent's trusted prose
@@ -110,16 +110,16 @@ def render_claim_evidence(fragments: Sequence[EvidenceFragment]) -> str:
     return "\n".join(parts) + ("\n" if parts else "")
 
 
-def inject_evidence_html(html: str, claim_id: str, seam_content: str) -> tuple[str, bool]:
-    """Replace the claim's seam content with ``seam_content``; nothing else changes.
+def inject_evidence_html(html: str, step_id: str, seam_content: str) -> tuple[str, bool]:
+    """Replace the step's seam content with ``seam_content``; nothing else changes.
 
     Returns ``(new_html, seam_found)``. Unlike the Q&A injector there is **no**
-    fallback insertion point: a cockpit without the claim's seam simply cannot
+    fallback insertion point: a cockpit without the step's seam simply cannot
     take live evidence (the chat-only floor) — inventing a location would break
-    "attached to the right claim". A ``lambda`` supplies the replacement so
+    "attached to the right step". A ``lambda`` supplies the replacement so
     backslashes in the rendered content are never read as regex backreferences.
     """
-    seam_open, seam_close = evidence_seam(claim_id)
+    seam_open, seam_close = evidence_seam(step_id)
     if seam_open not in html or seam_close not in html:
         return html, False
     seam = re.compile(re.escape(seam_open) + ".*?" + re.escape(seam_close), re.DOTALL)
@@ -130,8 +130,8 @@ def inject_evidence_html(html: str, claim_id: str, seam_content: str) -> tuple[s
 # --- I/O shell ----------------------------------------------------------------
 
 
-def _load_claim_ids(path: Path) -> list[str] | None:
-    """Claim ids from the **defaulted** sibling ``analysis.json``, or ``None`` if absent/corrupt.
+def _load_step_ids(path: Path) -> list[str] | None:
+    """Step ids from the **defaulted** sibling ``analysis.json``, or ``None`` if absent/corrupt.
 
     Best-effort, for the sibling-default path only: the analysis is always present in a
     real run dir, so the post-injection lint gets the structural pass (issue #62) for
@@ -144,7 +144,7 @@ def _load_claim_ids(path: Path) -> list[str] | None:
         analysis = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return analysis_claim_ids(analysis)
+    return analysis_step_ids(analysis)
 
 
 def load_fragments(path: Path) -> list[EvidenceFragment]:
@@ -160,8 +160,8 @@ def load_fragments(path: Path) -> list[EvidenceFragment]:
     for entry in entries:
         if not isinstance(entry, Mapping):
             continue
-        claim = entry.get("claim")
-        if not isinstance(claim, str) or not _CLAIM_ID.match(claim):
+        step = entry.get("step")
+        if not isinstance(step, str) or not _STEP_ID.match(step):
             continue
         # A hand-edited or truncated record could carry a non-numeric seq; fall
         # back to the positional index rather than crash the injection (the same
@@ -172,7 +172,7 @@ def load_fragments(path: Path) -> list[EvidenceFragment]:
             seq = len(fragments) + 1
         fragments.append(
             EvidenceFragment(
-                claim=claim,
+                step=step,
                 seq=seq,
                 ts=str(entry.get("ts", "")),
                 title=str(entry.get("title", "")),
@@ -186,7 +186,7 @@ def save_fragments(path: Path, fragments: Sequence[EvidenceFragment]) -> None:
     payload = {
         "schema": _SCHEMA,
         "fragments": [
-            {"claim": f.claim, "seq": f.seq, "ts": f.ts, "title": f.title, "body": f.body}
+            {"step": f.step, "seq": f.seq, "ts": f.ts, "title": f.title, "body": f.body}
             for f in fragments
         ],
     }
@@ -195,28 +195,28 @@ def save_fragments(path: Path, fragments: Sequence[EvidenceFragment]) -> None:
 
 def add_evidence(
     cockpit: Path,
-    claim_id: str,
+    step_id: str,
     title: str,
     body: str,
     *,
     csp_mode: str = "interactive",
     styling: str = "vendored",
-    claim_ids: Iterable[str] | None = None,
+    step_ids: Iterable[str] | None = None,
     now: datetime | None = None,
 ) -> list[str]:
-    """Inject one new evidence fragment under ``claim_id``; return blocking errors.
+    """Inject one new evidence fragment under ``step_id``; return blocking errors.
 
-    The full gate, in order: claim id shape, non-empty title/body, seam present,
+    The full gate, in order: step id shape, non-empty title/body, seam present,
     and the **post-injection page passes the Cockpit Linter** — only then are the
     record and the cockpit written (both or neither). A non-empty return means
     nothing was written and the loop should answer in chat instead (the floor).
 
-    ``claim_ids`` is the analysis claim id set the linter's structural pass checks
+    ``step_ids`` is the analysis step id set the linter's structural pass checks
     against — an explicit input like ``styling``/``csp_mode``, resolved by the caller
     (:func:`main` loads it from the sibling ``analysis.json``); ``None`` skips that pass.
     """
-    if not _CLAIM_ID.match(claim_id):
-        return [f"not a claim id: {claim_id!r}"]
+    if not _STEP_ID.match(step_id):
+        return [f"not a step id: {step_id!r}"]
     if not title.strip():
         return ["evidence title must not be empty"]
     if not body.strip():
@@ -230,7 +230,7 @@ def add_evidence(
     record_path = cockpit.parent / EVIDENCE_NAME
     fragments = load_fragments(record_path)
     fragment = EvidenceFragment(
-        claim=claim_id,
+        step=step_id,
         seq=max((f.seq for f in fragments), default=0) + 1,
         ts=(now or datetime.now(UTC)).isoformat(),
         title=title,
@@ -238,16 +238,16 @@ def add_evidence(
     )
     candidate_fragments = [*fragments, fragment]
 
-    seam_content = render_claim_evidence([f for f in candidate_fragments if f.claim == claim_id])
-    candidate_html, seam_found = inject_evidence_html(html, claim_id, seam_content)
+    seam_content = render_step_evidence([f for f in candidate_fragments if f.step == step_id])
+    candidate_html, seam_found = inject_evidence_html(html, step_id, seam_content)
     if not seam_found:
         return [
-            f"no evidence seam for {claim_id} in {cockpit.name} — "
+            f"no evidence seam for {step_id} in {cockpit.name} — "
             "the cockpit was authored without one; answer in chat instead"
         ]
 
     lint_errors = lint_cockpit(
-        candidate_html, styling=styling, csp_mode=csp_mode, claim_ids=claim_ids
+        candidate_html, styling=styling, csp_mode=csp_mode, step_ids=step_ids
     )
     if lint_errors:
         return [f"lint: {error}" for error in lint_errors]
@@ -266,9 +266,9 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(
         prog="inject_evidence",
-        description="Inject an escaped, linted evidence fragment at a claim's seam.",
+        description="Inject an escaped, linted evidence fragment at a step's seam.",
     )
-    parser.add_argument("claim_id", help="The claim the evidence substantiates (e.g. t1.c2).")
+    parser.add_argument("step_id", help="The step the evidence substantiates (e.g. t1.s2).")
     parser.add_argument("--title", required=True, help="Short caption (your trusted prose).")
     parser.add_argument(
         "--input", type=Path, required=True, help="File holding the raw evidence body."
@@ -293,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="Path to the run's analysis.json (default: analysis.json beside the "
-        "cockpit). Its claim id set turns on the linter's structural pass.",
+        "cockpit). Its step id set turns on the linter's structural pass.",
     )
     args = parser.parse_args(argv)
 
@@ -303,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read evidence body: {exc}", file=sys.stderr)
         return 2
 
-    # Resolve the analysis claim ids for the linter's structural pass. An **explicit**
+    # Resolve the analysis step ids for the linter's structural pass. An **explicit**
     # --analysis must fail loudly on a typo or corrupt file (matching lint.py's CLI):
     # silently skipping the drift tripwire the operator asked for is a footgun. The
     # **defaulted** sibling may legitimately be absent or malformed, so it degrades to
@@ -317,18 +317,18 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as exc:
             print(f"error: {args.analysis} is not valid JSON: {exc}", file=sys.stderr)
             return 2
-        claim_ids: list[str] | None = analysis_claim_ids(analysis)
+        step_ids: list[str] | None = analysis_step_ids(analysis)
     else:
-        claim_ids = _load_claim_ids(args.cockpit.parent / _ANALYSIS_NAME)
+        step_ids = _load_step_ids(args.cockpit.parent / _ANALYSIS_NAME)
 
     errors = add_evidence(
         args.cockpit,
-        args.claim_id,
+        args.step_id,
         args.title,
         body,
         csp_mode=args.csp_mode,
         styling=args.styling,
-        claim_ids=claim_ids,
+        step_ids=step_ids,
     )
     if errors:
         for error in errors:
@@ -336,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Injection blocked — nothing was written; answer in chat.", file=sys.stderr)
         return 1
 
-    print(f"Evidence injected at {args.claim_id} (page re-renders if served via Lavish).")
+    print(f"Evidence injected at {args.step_id} (page re-renders if served via Lavish).")
     return 0
 
 

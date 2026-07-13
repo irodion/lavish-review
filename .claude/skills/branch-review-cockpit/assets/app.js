@@ -11,35 +11,37 @@
 // (computed client-side from the `@@` hunk headers) and visually distinct hunk
 // header rows. When the diff is a Hunk Anchorer section (`<section class="hunk"
 // id="hunk-…">`, issue #63), the header row self-links to that id so a reviewer
-// can grab the anchor, and `:target` navigation (from a claim's evidence link)
+// can grab the anchor, and `:target` navigation (from a step's evidence link)
 // highlights the row. The rebuild is text-only — same discipline as before, so a
 // `<script>` in a hunk still renders as characters — and it runs identically in
 // the served cockpit and the baked/portable `file://` copy.
 //
-// Layered cockpit (ADR-0009, issue #39): disclosure is native <details> — no JS
-// needed to descend. This script only adds navigation glue: following a claim's
+// Layered cockpit (ADR-0009/0016, issue #39): disclosure is native <details> — no
+// JS needed to descend. This script only adds navigation glue: following a step's
 // evidence link (or any #anchor) opens the target's ancestor <details> chain so a
 // deep link never lands on a collapsed, invisible element. The hash is used solely
 // as a getElementById key — never interpolated into markup or selectors.
 //
-// Reviewer dispositions (ADR-0012, issue #42): each claim gets JS-injected
-// controls (verified / concern / question open) that mark the claim locally,
-// update the thread's progress line, and queue a structured update through the
-// Lavish SDK (`window.lavish.queuePrompt` with a `data` payload and a per-claim
-// `queueKey` — the channel the #38 spike verified) for the loop agent to persist.
-// State is restored on load by fetching `dispositions.json` beside the cockpit.
-// Everything is rendered with createElement/textContent from closed vocabularies —
-// no attacker-derived string ever reaches markup. On `file://` (a portable or
-// baked artifact) there is no live session, so the controls are not rendered.
+// Reviewer dispositions (ADR-0012, reframed by ADR-0016, issues #42/#86): each
+// Review Step gets JS-injected controls (looks-right / concern / follow-up /
+// skipped — the five-state vocabulary, `unreviewed` being absence) that mark the
+// step locally, update the thread's progress line, and queue a structured update
+// through the Lavish SDK (`window.lavish.queuePrompt` with a `data` payload and a
+// per-step `queueKey` — the channel the #38 spike verified) for the loop agent to
+// persist. State is restored on load by fetching `dispositions.json` beside the
+// cockpit. Everything is rendered with createElement/textContent from closed
+// vocabularies — no attacker-derived string ever reaches markup. On `file://` (a
+// portable or baked artifact) there is no live session, so the controls are not
+// rendered.
 //
-// Claim-scoped questions (ADR-0015, issue #65): each claim also gets a JS-injected
-// ask affordance that queues the reviewer's question through the *same* presence-
-// gated channel, carrying the claim id as structured data
-// (`{kind: "claim-question", claim}`, `tag: "message"`, per-claim `queueKey` so
+// Step-scoped questions (ADR-0015, reframed by ADR-0016, issues #65/#86): each
+// step also gets a JS-injected ask affordance that queues the reviewer's question
+// through the *same* presence-gated channel, carrying the step id as structured
+// data (`{kind: "step-question", step}`, `tag: "message"`, per-step `queueKey` so
 // rapid edits collapse) — no DOM selector to resolve. The loop answers it grounded
-// in that claim; the exchange bakes into the Q&A Log like any chat question (it is
-// conversation, not state — no store, no apply step). The claim id is a closed
-// vocabulary (matched against `CLAIM_ID`); the reviewer's free-text question only
+// in that step; the exchange bakes into the Q&A Log like any chat question (it is
+// conversation, not state — no store, no apply step). The step id is a closed
+// vocabulary (matched against `STEP_ID`); the reviewer's free-text question only
 // ever reaches an `<input>`/`<textarea>` value, never markup. Same served-only gate
 // as dispositions: absent on `file://`.
 
@@ -183,25 +185,34 @@
     }
   }
 
-  // --- Reviewer dispositions (ADR-0012) -------------------------------------
+  // --- Reviewer dispositions (ADR-0012/0016) --------------------------------
 
   // Closed vocabularies: these strings are the ONLY values that ever reach the
   // DOM or the feedback channel — reviewer intent is expressed by choosing one.
-  const CLAIM_ID = /^t\d+\.c\d+$/;
-  const SETTABLE = ["verified", "concern", "question-open"];
-  const LABELS = { verified: "✓ verified", concern: "⚠ concern", "question-open": "? question" };
+  // `unreviewed` is the default (absence); the four SETTABLE states persist. The
+  // labels carry a glyph + word so a state never reads by colour alone (ADR-0014),
+  // and `looks-right` deliberately avoids a checkmark — an attest of comprehension,
+  // not an approval stamp (ADR-0016; CONTEXT "avoid checkmark/verdict").
+  const STEP_ID = /^t\d+\.s\d+$/;
+  const SETTABLE = ["looks-right", "concern", "follow-up", "skipped"];
+  const LABELS = {
+    "looks-right": "● looks right",
+    concern: "⚠ concern",
+    "follow-up": "? follow-up",
+    skipped: "↷ skip",
+  };
 
-  // Every claim panel under `root` (the document, or one thread) whose id is in the
-  // closed `t\d+.c\d+` vocabulary — the one filter the dispositions, questions, and
+  // Every step panel under `root` (the document, or one thread) whose id is in the
+  // closed `t\d+.s\d+` vocabulary — the one filter the dispositions, questions, and
   // deck all share.
-  function claimsIn(root) {
-    return Array.prototype.filter.call(root.querySelectorAll("details.claim"), function (el) {
-      return CLAIM_ID.test(el.id);
+  function stepsIn(root) {
+    return Array.prototype.filter.call(root.querySelectorAll("details.step"), function (el) {
+      return STEP_ID.test(el.id);
     });
   }
 
-  function claimElements() {
-    return claimsIn(document);
+  function stepElements() {
+    return stepsIn(document);
   }
 
   // Queue one prompt through the SDK and flush it. `window.lavish` is checked at
@@ -210,7 +221,7 @@
   // session (also #38). Returns false when there is no live SDK to accept the
   // prompt, so a caller can tell the reviewer instead of dropping it silently.
   // The shared seam for every structured feedback send — a disposition update and
-  // a claim-scoped question differ only in the payload they pass here.
+  // a step-scoped question differ only in the payload they pass here.
   function queueToSdk(message, options) {
     const sdk = window.lavish;
     if (!sdk || typeof sdk.queuePrompt !== "function") {
@@ -223,45 +234,47 @@
     return true;
   }
 
-  // The per-claim queueKey collapses rapid re-clicks to the last state.
-  function sendDisposition(claimId, disposition) {
-    queueToSdk("Disposition set: " + claimId + " -> " + disposition, {
+  // The per-step queueKey collapses rapid re-clicks to the last state. The message
+  // line and the `data` payload are exactly what `dispositions.py` parses (a step
+  // id + a five-state value) — the deterministic bridge, never re-typed by hand.
+  function sendDisposition(stepId, disposition) {
+    queueToSdk("Disposition set: " + stepId + " -> " + disposition, {
       tag: "choice",
       text: "disposition:" + disposition,
-      queueKey: "disposition:" + claimId,
-      data: { kind: "disposition", claim: claimId, disposition: disposition },
+      queueKey: "disposition:" + stepId,
+      data: { kind: "disposition", step: stepId, disposition: disposition },
     });
   }
 
-  // Reflect a claim's disposition onto a set of controls keyed by data-disposition:
+  // Reflect a step's disposition onto a set of controls keyed by data-disposition:
   // `aria-pressed` is true only on the button whose disposition is the current one.
-  // Shared by the in-claim summary controls and the oversized Stage control.
+  // Shared by the in-step summary controls and the oversized Stage control.
   function syncPressed(buttons, current) {
     Array.prototype.forEach.call(buttons, function (btn) {
       btn.setAttribute("aria-pressed", btn.dataset.disposition === current ? "true" : "false");
     });
   }
 
-  // The one disposition write rule, shared by the in-claim controls and the Stage:
+  // The one disposition write rule, shared by the in-step controls and the Stage:
   // re-selecting the active state clears it back to unreviewed, and every local
   // write is mirrored to the feedback channel. Returns the resulting state so a
   // caller (the Stage) can decide whether to auto-advance.
-  function toggleDisposition(claim, disposition) {
-    const active = claim.getAttribute("data-disposition") === disposition;
+  function toggleDisposition(step, disposition) {
+    const active = step.getAttribute("data-disposition") === disposition;
     const next = active ? "unreviewed" : disposition;
-    applyDisposition(claim, next);
-    sendDisposition(claim.id, next);
+    applyDisposition(step, next);
+    sendDisposition(step.id, next);
     return next;
   }
 
-  function applyDisposition(claim, disposition) {
+  function applyDisposition(step, disposition) {
     if (disposition === "unreviewed") {
-      claim.removeAttribute("data-disposition");
+      step.removeAttribute("data-disposition");
     } else {
-      claim.setAttribute("data-disposition", disposition);
+      step.setAttribute("data-disposition", disposition);
     }
-    syncPressed(claim.querySelectorAll(".disposition-controls button"), disposition);
-    const thread = claim.closest("section.thread");
+    syncPressed(step.querySelectorAll(".disposition-controls button"), disposition);
+    const thread = step.closest("section.thread");
     if (thread) {
       updateThreadProgress(thread);
     }
@@ -271,13 +284,13 @@
   }
 
   function updateThreadProgress(thread) {
-    const claims = claimsIn(thread);
-    if (!claims.length) {
+    const steps = stepsIn(thread);
+    if (!steps.length) {
       return;
     }
     let reviewed = 0;
     let concerns = 0;
-    claims.forEach(function (el) {
+    steps.forEach(function (el) {
       const state = el.getAttribute("data-disposition");
       if (state) {
         reviewed++;
@@ -296,7 +309,7 @@
       progress.className = "thread-progress";
       heading.appendChild(progress);
     }
-    let text = reviewed + "/" + claims.length + " reviewed";
+    let text = reviewed + "/" + steps.length + " reviewed";
     if (concerns) {
       text += " · " + concerns + " concern" + (concerns === 1 ? "" : "s");
     }
@@ -304,8 +317,8 @@
     progress.classList.toggle("has-concern", concerns > 0);
   }
 
-  function injectDispositionControls(claim) {
-    const summary = claim.querySelector("summary");
+  function injectDispositionControls(step) {
+    const summary = step.querySelector("summary");
     if (!summary || summary.querySelector(".disposition-controls")) {
       return;
     }
@@ -321,7 +334,7 @@
         // A button inside <summary> must not toggle the disclosure panel.
         event.preventDefault();
         event.stopPropagation();
-        toggleDisposition(claim, disposition);
+        toggleDisposition(step, disposition);
       });
       group.appendChild(btn);
     });
@@ -344,10 +357,10 @@
         if (!entries || typeof entries !== "object") {
           return;
         }
-        claimElements().forEach(function (claim) {
-          const value = entries[claim.id];
+        stepElements().forEach(function (step) {
+          const value = entries[step.id];
           if (typeof value === "string" && SETTABLE.indexOf(value) !== -1) {
-            applyDisposition(claim, value);
+            applyDisposition(step, value);
           }
         });
       })
@@ -362,59 +375,59 @@
     if (location.protocol === "file:") {
       return;
     }
-    const claims = claimElements();
-    if (!claims.length) {
+    const steps = stepElements();
+    if (!steps.length) {
       return;
     }
-    claims.forEach(injectDispositionControls);
+    steps.forEach(injectDispositionControls);
     document.querySelectorAll("section.thread").forEach(updateThreadProgress);
     loadDispositions();
   }
 
-  // --- Claim-scoped questions (ADR-0015) ------------------------------------
+  // --- Step-scoped questions (ADR-0015/0016) --------------------------------
 
-  // Queue the reviewer's question through the SDK, carrying the claim id as
+  // Queue the reviewer's question through the SDK, carrying the step id as
   // structured data — the same presence-gated channel dispositions use, keyed by a
-  // per-claim `queueKey` so a rapid edit-and-resend collapses to the latest text.
+  // per-step `queueKey` so a rapid edit-and-resend collapses to the latest text.
   // Unlike a disposition (a `tag: "choice"` state update), a question is a plain
   // `tag: "message"` — it flows into the Q&A Log and bakes like any chat question,
   // never filtered out as state. Returns false (via `queueToSdk`) when there is no
   // live SDK, so the caller can say so instead of dropping the question silently.
-  function sendClaimQuestion(claimId, text) {
+  function sendStepQuestion(stepId, text) {
     return queueToSdk(text, {
       tag: "message",
-      queueKey: "question:" + claimId, // collapses rapid edits, like dispositions
-      data: { kind: "claim-question", claim: claimId },
+      queueKey: "question:" + stepId, // collapses rapid edits, like dispositions
+      data: { kind: "step-question", step: stepId },
     });
   }
 
-  function injectAskControl(claim) {
-    const body = claim.querySelector(".claim-body");
-    if (!body || body.querySelector(".claim-ask")) {
+  function injectAskControl(step) {
+    const body = step.querySelector(".step-body");
+    if (!body || body.querySelector(".step-ask")) {
       return;
     }
     const group = document.createElement("div");
-    group.className = "claim-ask";
+    group.className = "step-ask";
 
     // A status line, updated with textContent only — never markup. `role="status"`
     // announces "Sent"/"No live session" to assistive tech without stealing focus.
     const status = document.createElement("span");
-    status.className = "claim-ask-status";
+    status.className = "step-ask-status";
     status.setAttribute("role", "status");
 
     const input = document.createElement("textarea");
-    input.className = "claim-ask-input";
+    input.className = "step-ask-input";
     input.rows = 2;
-    // A fixed placeholder + aria-label — the claim id is a closed vocabulary
-    // (CLAIM_ID), so it is safe to name; the reviewer's own text stays in `.value`,
+    // A fixed placeholder + aria-label — the step id is a closed vocabulary
+    // (STEP_ID), so it is safe to name; the reviewer's own text stays in `.value`,
     // never in markup. The aria-label survives once the placeholder disappears on
     // typing, keeping an accessible name for the field.
-    input.setAttribute("aria-label", "Ask about " + claim.id);
-    input.setAttribute("placeholder", "Ask about " + claim.id + "…");
+    input.setAttribute("aria-label", "Ask about " + step.id);
+    input.setAttribute("placeholder", "Ask about " + step.id + "…");
 
     const send = document.createElement("button");
     send.type = "button";
-    send.className = "claim-ask-send";
+    send.className = "step-ask-send";
     send.textContent = "Ask"; // fixed label, never derived text
 
     function submit() {
@@ -422,7 +435,7 @@
       if (!text) {
         return;
       }
-      if (sendClaimQuestion(claim.id, text)) {
+      if (sendStepQuestion(step.id, text)) {
         input.value = "";
         status.textContent = "Sent — the answer appears in the chat.";
       } else {
@@ -450,63 +463,66 @@
     body.appendChild(group);
   }
 
-  function setupClaimQuestions() {
+  function setupStepQuestions() {
     // Same served-only gate as dispositions: on file:// there is no loop to answer,
-    // so a claim carries no ask affordance (a record, not a review surface).
+    // so a step carries no ask affordance (a record, not a review surface).
     if (location.protocol === "file:") {
       return;
     }
-    claimElements().forEach(injectAskControl);
+    stepElements().forEach(injectAskControl);
   }
 
-  // --- Deck Mode (ADR-0014) -------------------------------------------------
+  // --- Deck Mode (ADR-0014/0016) --------------------------------------------
   //
   // When the cockpit is *served* (the same presence gate as dispositions), the
   // vendored script re-presents the L0–L3 document as a **Map** (threads in
-  // Review Route order with one disposition-tinted dot per claim, the changed
-  // files with their stats, overall progress) beside a **Stage** (one claim at a
+  // Review Route order with one disposition-tinted dot per step, the changed
+  // files with their stats, overall progress) beside a **Stage** (one step at a
   // time, its evidence hunk shown inline). Document mode is one visible toggle
   // away and is the only mode on `file://`; the baked record stays the document,
   // unchanged (ADR-0014).
   //
   // The deck is built strictly by RELOCATING and CLONING nodes already in the
   // document DOM — never by constructing markup from strings for untrusted data.
-  // The Stage *moves* the claim's own `<details class="claim">` element (so its
+  // The Stage *moves* the step's own `<details class="step">` element (so its
   // injected disposition controls, ask affordance, open state, and disposition
   // tint travel with it and the mode toggle round-trips losslessly), leaving a
   // hidden placeholder to move it back to; the inline evidence *clones* the
-  // claim's already-annotated hunk sections. Because every deck node is either a
+  // step's already-annotated hunk sections. Because every deck node is either a
   // fixed-vocabulary element built with createElement/textContent or a clone of
   // an already-escaped document node, a `<script>` hidden in a diff can still
   // only ever render as visible text — the same discipline the diff rebuild uses.
 
-  // The deck's live state, or null until the deck is built (file:// / no claims).
+  // The deck's live state, or null until the deck is built (file:// / no steps).
   let deck = null;
 
-  // Disposition tallies over a set of claims — reviewed/verified/concern/question.
-  function dispositionCounts(claims) {
-    const totals = { reviewed: 0, verified: 0, concern: 0, "question-open": 0 };
-    claims.forEach(function (claim) {
-      const state = claim.getAttribute("data-disposition");
+  // Disposition tallies over a set of steps — reviewed + one count per settable state.
+  function dispositionCounts(steps) {
+    const totals = { reviewed: 0 };
+    SETTABLE.forEach(function (d) {
+      totals[d] = 0;
+    });
+    steps.forEach(function (step) {
+      const state = step.getAttribute("data-disposition");
       if (state) {
         totals.reviewed++;
       }
-      if (state === "verified" || state === "concern" || state === "question-open") {
+      if (SETTABLE.indexOf(state) !== -1) {
         totals[state]++;
       }
     });
     return totals;
   }
 
-  // A thread heading's title text, with the id/chip/progress spans stripped —
-  // read off a detached clone so the live heading is never disturbed. text only.
+  // A thread heading's title text, with the id/chip/impacts/progress spans stripped
+  // — read off a detached clone so the live heading is never disturbed. text only.
   function threadTitleText(heading) {
     if (!heading) {
       return "";
     }
     const clone = heading.cloneNode(true);
     Array.prototype.forEach.call(
-      clone.querySelectorAll(".thread-id, .chip, .thread-progress"),
+      clone.querySelectorAll(".thread-id, .chip, .thread-impacts, .thread-progress"),
       function (node) {
         node.remove();
       }
@@ -524,24 +540,25 @@
   // and fraction, which all move with the reviewer's dispositions. The static file
   // rail (built once at deck-build time) is simply re-appended. Iterating the
   // grouping captured at build time — not the live thread subtree — keeps the
-  // currently-staged claim (relocated onto the Stage) in its thread's dots and count.
+  // currently-staged step (relocated onto the Stage) in its thread's dots and count.
   function renderMap() {
     const map = deck.map;
     map.textContent = "";
 
-    const overall = dispositionCounts(deck.claims);
+    const overall = dispositionCounts(deck.steps);
     const progress = cell("div", "deck-progress", null);
-    progress.appendChild(cell("span", "deck-tally", overall.reviewed + "/" + deck.claims.length + " reviewed"));
-    progress.appendChild(countBadge("verified", "✓", overall.verified));
+    progress.appendChild(cell("span", "deck-tally", overall.reviewed + "/" + deck.steps.length + " reviewed"));
+    progress.appendChild(countBadge("looks-right", "●", overall["looks-right"]));
     progress.appendChild(countBadge("concern", "⚠", overall.concern));
-    progress.appendChild(countBadge("question-open", "?", overall["question-open"]));
+    progress.appendChild(countBadge("follow-up", "?", overall["follow-up"]));
+    progress.appendChild(countBadge("skipped", "↷", overall.skipped));
     map.appendChild(progress);
 
     map.appendChild(cell("p", "deck-map-label", "Threads — review route"));
 
     deck.groups.forEach(function (group) {
-      const claims = group.claims;
-      if (!claims.length) {
+      const steps = group.steps;
+      if (!steps.length) {
         return;
       }
       const block = cell("div", "deck-thread-block", null);
@@ -551,31 +568,37 @@
       threadButton.className = "deck-thread";
       threadButton.appendChild(cell("span", "deck-thread-id", group.threadId));
       threadButton.appendChild(cell("span", "deck-thread-title", group.title));
-      const counts = dispositionCounts(claims);
-      threadButton.appendChild(cell("span", "deck-thread-frac", counts.reviewed + "/" + claims.length));
-      // Staging a thread lands on its first claim — the entry to that leg of the route.
+      const counts = dispositionCounts(steps);
+      threadButton.appendChild(cell("span", "deck-thread-frac", counts.reviewed + "/" + steps.length));
+      // Staging a thread lands on its first step — the entry to that leg of the route.
       threadButton.addEventListener("click", function () {
-        stageClaim(claims[0]);
+        stageStep(steps[0]);
       });
       block.appendChild(threadButton);
 
       const dots = cell("div", "deck-dots", null);
-      claims.forEach(function (claim) {
+      steps.forEach(function (step) {
         const dot = document.createElement("button");
         dot.type = "button";
         dot.className = "deck-dot";
-        dot.dataset.claim = claim.id;
-        const state = claim.getAttribute("data-disposition");
+        dot.dataset.step = step.id;
+        const state = step.getAttribute("data-disposition");
         if (state) {
           dot.setAttribute("data-disposition", state);
         }
-        if (claim === deck.staged) {
+        // The dot also carries its step's Behavior Impact so the Map tints by the
+        // change's character, not just the reviewer's disposition (ADR-0016).
+        const impact = step.getAttribute("data-impact");
+        if (impact) {
+          dot.setAttribute("data-impact", impact);
+        }
+        if (step === deck.staged) {
           dot.classList.add("current");
         }
-        dot.setAttribute("title", claim.id);
-        dot.setAttribute("aria-label", "Stage claim " + claim.id);
+        dot.setAttribute("title", step.id);
+        dot.setAttribute("aria-label", "Stage step " + step.id);
         dot.addEventListener("click", function () {
-          stageClaim(claim);
+          stageStep(step);
         });
         dots.appendChild(dot);
       });
@@ -642,92 +665,92 @@
     return (cut === -1 ? full : full.slice(0, cut)).trim();
   }
 
-  // Move the claim onto the Stage: record where it lived (a hidden placeholder)
+  // Move the step onto the Stage: record where it lived (a hidden placeholder)
   // and its open state, force it open, relocate the element itself, and clone its
-  // evidence hunks inline beneath it. Relocation (not cloning) keeps the claim's
+  // evidence hunks inline beneath it. Relocation (not cloning) keeps the step's
   // live controls and lets the mode toggle move it back byte-for-byte.
-  function stageClaim(claim) {
-    if (!claim || claim === deck.staged) {
+  function stageStep(step) {
+    if (!step || step === deck.staged) {
       showDeck();
       return;
     }
     unstageCurrent();
 
-    // Stage bookkeeping lives on the deck record (only one claim is ever staged),
-    // not as expando properties on the claim element that round-trips back into the
+    // Stage bookkeeping lives on the deck record (only one step is ever staged),
+    // not as expando properties on the step element that round-trips back into the
     // document: where it came from, and the open state to restore when it returns.
     const placeholder = cell("span", "deck-home", null);
-    claim.parentNode.insertBefore(placeholder, claim);
+    step.parentNode.insertBefore(placeholder, step);
     deck.stagedHome = placeholder;
-    deck.stagedPriorOpen = claim.open;
-    claim.open = true;
+    deck.stagedPriorOpen = step.open;
+    step.open = true;
 
     deck.stage.textContent = "";
-    deck.stage.appendChild(buildCrumb(claim));
+    deck.stage.appendChild(buildCrumb(step));
     const host = document.createElement("div");
-    host.className = "deck-claim-host";
-    host.appendChild(claim); // relocates the live element out of the document flow
+    host.className = "deck-step-host";
+    host.appendChild(step); // relocates the live element out of the document flow
     deck.stage.appendChild(host);
-    // The oversized V/C/Q control sits below the claim card, so the challenge
-    // questions (inside the card) always stay visible above it (ADR-0014 guardrail).
-    deck.stage.appendChild(buildStageControl(claim));
-    deck.stage.appendChild(buildInlineEvidence(claim));
+    // The oversized disposition control sits below the step card, so the review
+    // prompts (inside the card) always stay visible above it (ADR-0014 guardrail).
+    deck.stage.appendChild(buildStageControl(step));
+    deck.stage.appendChild(buildInlineEvidence(step));
 
-    deck.staged = claim;
-    deck.lastStaged = claim;
+    deck.staged = step;
+    deck.lastStaged = step;
     showDeck();
     renderMap();
   }
 
-  // Return the staged claim to exactly where it came from and restore its open
+  // Return the staged step to exactly where it came from and restore its open
   // state — the document is whole again, ready for document mode or a fresh stage.
   function unstageCurrent() {
-    const claim = deck.staged;
-    if (!claim) {
+    const step = deck.staged;
+    if (!step) {
       return;
     }
     const placeholder = deck.stagedHome;
     if (placeholder && placeholder.parentNode) {
-      placeholder.parentNode.insertBefore(claim, placeholder);
+      placeholder.parentNode.insertBefore(step, placeholder);
       placeholder.parentNode.removeChild(placeholder);
     }
-    claim.open = deck.stagedPriorOpen;
+    step.open = deck.stagedPriorOpen;
     deck.stagedHome = null;
     deck.staged = null;
-    // While the claim was on the Stage it was NOT a child of its thread, so a
+    // While the step was on the Stage it was NOT a child of its thread, so a
     // disposition set from the Stage could not update the document's per-thread
     // progress line (applyDisposition's `closest("section.thread")` was null, and a
-    // count then would have missed the relocated claim). Now that it is home and the
+    // count then would have missed the relocated step). Now that it is home and the
     // thread is whole again, recompute that thread's progress so document mode is
     // never stale after a round-trip.
-    const thread = claim.closest("section.thread");
+    const thread = step.closest("section.thread");
     if (thread) {
       updateThreadProgress(thread);
     }
   }
 
-  // The Stage's breadcrumb: the claim's thread (id + title) and the claim id.
-  function buildCrumb(claim) {
+  // The Stage's breadcrumb: the step's thread (id + title) and the step id.
+  function buildCrumb(step) {
     const crumb = cell("div", "deck-crumb", null);
-    const thread = claim.closest("section.thread");
+    const thread = step.closest("section.thread");
     const heading = thread ? thread.querySelector("h2") : null;
     const idSource = heading ? heading.querySelector(".thread-id") : null;
     if (idSource) {
       crumb.appendChild(cell("span", "deck-thread-id", idSource.textContent));
     }
     crumb.appendChild(cell("span", "deck-crumb-title", threadTitleText(heading)));
-    crumb.appendChild(cell("span", "deck-crumb-claim", claim.id));
+    crumb.appendChild(cell("span", "deck-crumb-step", step.id));
     return crumb;
   }
 
-  // Clone the hunk(s) this claim's evidence points at, inline under the Stage
+  // Clone the hunk(s) this step's evidence points at, inline under the Stage
   // card. Each evidence link is an in-page anchor; resolve it to its element and
   // clone it (a hunk section, or a file body for a file-level ref). Cloning keeps
-  // the L3 evidence whole in the document and lets several claims cite one hunk.
-  function buildInlineEvidence(claim) {
+  // the L3 evidence whole in the document and lets several steps cite one hunk.
+  function buildInlineEvidence(step) {
     const wrap = cell("div", "deck-evidence", null);
     const seen = Object.create(null);
-    const anchors = claim.querySelectorAll(".evidence-list a");
+    const anchors = step.querySelectorAll(".evidence-list a");
     Array.prototype.forEach.call(anchors, function (anchor) {
       const href = anchor.getAttribute("href") || "";
       if (href.charAt(0) !== "#" || href.length < 2) {
@@ -755,7 +778,7 @@
       wrap.appendChild(figure);
     });
     if (!wrap.querySelector(".deck-hunk")) {
-      wrap.appendChild(cell("p", "deck-evidence-none", "No inline hunk — see the evidence links in the claim."));
+      wrap.appendChild(cell("p", "deck-evidence-none", "No inline hunk — see the evidence links in the step."));
     }
     return wrap;
   }
@@ -795,7 +818,7 @@
     setToggle(true);
   }
 
-  // Return to the single layered document: move the staged claim home, clear the
+  // Return to the single layered document: move the staged step home, clear the
   // Stage, drop the `deck-active` flag. Content, open state, and tints round-trip.
   function showDocument() {
     unstageCurrent();
@@ -811,7 +834,7 @@
       if (deck.staged) {
         showDeck();
       } else {
-        stageClaim(deck.lastStaged || deck.claims[0]);
+        stageStep(deck.lastStaged || deck.steps[0]);
       }
     } else {
       showDocument();
@@ -819,7 +842,7 @@
   }
 
   // Refresh the deck views after a disposition changes — the Map (dots and
-  // fractions) and the oversized Stage control are both derived from the claims'
+  // fractions) and the oversized Stage control are both derived from the steps'
   // `data-disposition`, so they redraw on the deck's own path. No-op until built.
   function refreshDeck() {
     if (deck) {
@@ -828,25 +851,27 @@
     }
   }
 
-  // --- Deck keyboard flow + Stage dispositions (ADR-0014, issue #68) ---------
+  // --- Deck keyboard flow + Stage dispositions (ADR-0014/0016, issue #68) ----
   //
-  // On the Stage, an oversized V/C/Q control (with visible key hints) sets the
-  // staged claim's Reviewer Disposition through the very same write path the
+  // On the Stage, an oversized L/C/F/S control (with visible key hints) sets the
+  // staged step's Reviewer Disposition through the very same write path the
   // document-mode controls use — `applyDisposition` (local tint, dots, fractions,
-  // in-claim + Stage control) and `sendDisposition` (the presence-gated channel;
+  // in-step + Stage control) and `sendDisposition` (the presence-gated channel;
   // the payload is byte-identical, so the disposition bridge needs no change).
-  // Setting a disposition auto-advances to the next *unreviewed* claim in Review
-  // Route order (never skipping one, never landing on a reviewed claim); J/K move
-  // one claim back/forward freely (reviewed or not). Keys never fire while a
-  // typing surface is focused — the claim-scoped ask box, or any host input.
+  // Setting a disposition auto-advances to the next *unreviewed* step in Review
+  // Route order (never skipping one, never landing on a reviewed step); J/K move
+  // one step back/forward freely (reviewed or not). Keys never fire while a
+  // typing surface is focused — the step-scoped ask box, or any host input.
 
   // The Stage control's config, in Review-Route-natural order: each settable
   // disposition with the key that sets it and the visible hint the button renders
-  // (key cap + glyph + word — never colour alone, ADR-0014).
+  // (key cap + glyph + word — never colour alone, ADR-0014). `looks-right` uses no
+  // checkmark (an attest, not an approval — ADR-0016).
   const STAGE_KEYS = [
-    { key: "V", disposition: "verified", glyph: "✓", word: "verified" },
+    { key: "L", disposition: "looks-right", glyph: "●", word: "looks right" },
     { key: "C", disposition: "concern", glyph: "⚠", word: "concern" },
-    { key: "Q", disposition: "question-open", glyph: "?", word: "question" },
+    { key: "F", disposition: "follow-up", glyph: "?", word: "follow-up" },
+    { key: "S", disposition: "skipped", glyph: "↷", word: "skip" },
   ];
   // The lowercased-key → disposition lookup the keyboard handler uses, derived from
   // STAGE_KEYS so the vocabulary is declared once (a new disposition adds one row).
@@ -856,7 +881,7 @@
   });
 
   // Keyboard staging must never steal a keystroke meant for a text field — the
-  // claim-scoped ask box (a <textarea>) or any host input/contenteditable. A
+  // step-scoped ask box (a <textarea>) or any host input/contenteditable. A
   // non-element target (e.g. the document itself) is never a typing surface.
   function isTypingContext(target) {
     if (!target || typeof target.closest !== "function") {
@@ -868,8 +893,8 @@
   // The oversized Stage control: one big button per settable disposition, each
   // showing its key cap + glyph + word, plus a status line for the "nothing left
   // to advance to" announcement. Rebuilt with the Stage on every stage change, so
-  // the button handles live on the deck record only for the current claim.
-  function buildStageControl(claim) {
+  // the button handles live on the deck record only for the current step.
+  function buildStageControl(step) {
     const control = cell("div", "deck-control", null);
     control.appendChild(cell("p", "deck-control-label", "Set disposition"));
 
@@ -899,19 +924,19 @@
     control.appendChild(status);
     deck.status = status;
 
-    updateStageControl(claim);
+    updateStageControl(step);
     return control;
   }
 
-  // Reflect the staged claim's disposition on the oversized control. The Stage
-  // control and the in-claim controls both read `data-disposition` and sync the
+  // Reflect the staged step's disposition on the oversized control. The Stage
+  // control and the in-step controls both read `data-disposition` and sync the
   // same way (syncPressed), so they can never disagree — pressing either updates
   // the one source of truth.
-  function updateStageControl(claim) {
+  function updateStageControl(step) {
     if (!deck || !deck.stageControlButtons) {
       return;
     }
-    syncPressed(deck.stageControlButtons, claim ? claim.getAttribute("data-disposition") : null);
+    syncPressed(deck.stageControlButtons, step ? step.getAttribute("data-disposition") : null);
   }
 
   function announceStage(message) {
@@ -920,55 +945,55 @@
     }
   }
 
-  // Set (or clear) the staged claim's disposition through the document-mode write
+  // Set (or clear) the staged step's disposition through the document-mode write
   // path, then auto-advance. Re-selecting the active state clears it to unreviewed
-  // (parity with the in-claim controls, ADR-0014 guardrail) and does NOT advance —
+  // (parity with the in-step controls, ADR-0014 guardrail) and does NOT advance —
   // there is nothing to move on from.
   function disposeStaged(disposition) {
-    const claim = deck && deck.staged;
-    if (!claim) {
+    const step = deck && deck.staged;
+    if (!step) {
       return;
     }
-    // The same toggle-and-write the in-claim controls use; only the auto-advance
+    // The same toggle-and-write the in-step controls use; only the auto-advance
     // is the Stage's own. A re-select clears to unreviewed — stay put, nothing to
     // move on from — so advance only on a real disposition.
-    if (toggleDisposition(claim, disposition) === "unreviewed") {
+    if (toggleDisposition(step, disposition) === "unreviewed") {
       announceStage("");
       return;
     }
     advanceToNextUnreviewed();
   }
 
-  // Auto-advance target: the next claim with no disposition, searching forward in
-  // Review Route order and wrapping once (so claims disposed out of order are still
-  // reached). It never lands on a reviewed claim — only unreviewed ones — and with
-  // none left anywhere it stays on the current claim and says so.
+  // Auto-advance target: the next step with no disposition, searching forward in
+  // Review Route order and wrapping once (so steps disposed out of order are still
+  // reached). It never lands on a reviewed step — only unreviewed ones — and with
+  // none left anywhere it stays on the current step and says so.
   function advanceToNextUnreviewed() {
-    const claims = deck.claims;
-    const start = claims.indexOf(deck.staged);
-    // Step through every *other* claim once, forward and wrapping (step < length
+    const steps = deck.steps;
+    const start = steps.indexOf(deck.staged);
+    // Step through every *other* step once, forward and wrapping (step < length
     // stops before returning to `start`), landing on the first unreviewed one.
-    for (let step = 1; step < claims.length; step++) {
-      const candidate = claims[(start + step) % claims.length];
+    for (let step = 1; step < steps.length; step++) {
+      const candidate = steps[(start + step) % steps.length];
       if (!candidate.getAttribute("data-disposition")) {
-        stageClaim(candidate);
+        stageStep(candidate);
         return;
       }
     }
-    announceStage("All claims reviewed — nothing left to advance to.");
+    announceStage("All steps reviewed — nothing left to advance to.");
   }
 
-  // J/K free navigation: one claim forward/back in Review Route order, clamped at
+  // J/K free navigation: one step forward/back in Review Route order, clamped at
   // the route's ends (no wrap). Unlike auto-advance, this is NOT gated by
-  // disposition — it lands on reviewed claims too, so the reviewer can revisit.
+  // disposition — it lands on reviewed steps too, so the reviewer can revisit.
   function navigateStage(delta) {
-    const claims = deck.claims;
-    const from = claims.indexOf(deck.staged);
+    const steps = deck.steps;
+    const from = steps.indexOf(deck.staged);
     const next = from + delta;
-    if (from === -1 || next < 0 || next >= claims.length) {
+    if (from === -1 || next < 0 || next >= steps.length) {
       return;
     }
-    stageClaim(claims[next]);
+    stageStep(steps[next]);
   }
 
   // The single global keydown handler, active only while the deck is showing (the
@@ -1008,27 +1033,27 @@
       return;
     }
     const threads = Array.prototype.slice.call(document.querySelectorAll("section.thread"));
-    // Capture each thread's claims (and its static id/title) once, now, while every
-    // claim still sits in its thread — the Map renders from this stable grouping even
-    // after a claim is relocated onto the Stage (a relocated claim would otherwise
+    // Capture each thread's steps (and its static id/title) once, now, while every
+    // step still sits in its thread — the Map renders from this stable grouping even
+    // after a step is relocated onto the Stage (a relocated step would otherwise
     // vanish from it), and the title never needs re-deriving on a disposition change.
     const groups = threads.map(function (thread) {
       const heading = thread.querySelector("h2");
       const idSource = heading && heading.querySelector(".thread-id");
       return {
         thread: thread,
-        claims: claimsIn(thread),
+        steps: stepsIn(thread),
         threadId: idSource ? idSource.textContent : thread.id || "",
         title: threadTitleText(heading),
       };
     });
-    const claims = [];
+    const steps = [];
     groups.forEach(function (group) {
-      group.claims.forEach(function (claim) {
-        claims.push(claim);
+      group.steps.forEach(function (step) {
+        steps.push(step);
       });
     });
-    if (!claims.length) {
+    if (!steps.length) {
       return; // nothing to stage — leave the document as-is
     }
 
@@ -1057,7 +1082,7 @@
       stage: stage,
       toggle: toggle,
       groups: groups,
-      claims: claims,
+      steps: steps,
       fileNodes: buildFileNodes(), // static — built once, re-appended each render
       staged: null,
       stagedHome: null,
@@ -1078,7 +1103,7 @@
     document.addEventListener("keydown", onDeckKeydown);
 
     // Served → the deck is the presentation; the full document is one toggle away.
-    // setMode → stageClaim renders the Map, so no separate initial render is needed.
+    // setMode → stageStep renders the Map, so no separate initial render is needed.
     setMode("deck");
   }
 
@@ -1107,8 +1132,8 @@
     revealHashTarget(); // a deep link into a fresh load
 
     setupDispositions();
-    setupClaimQuestions();
-    // Built last: the deck relocates claims that already carry their injected
+    setupStepQuestions();
+    // Built last: the deck relocates steps that already carry their injected
     // controls, and clones hunk sections the diff rebuild has already annotated.
     buildDeck();
   });

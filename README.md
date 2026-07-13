@@ -4,17 +4,19 @@ A local, AI-assisted agent skill that turns a Git branch diff into an interactiv
 HTML **Review Cockpit**, opened and driven through
 [Lavish-AXI](https://www.npmjs.com/package/lavish-axi), to help a human reviewer
 audit AI- or human-generated changes faster. It reduces review navigation cost;
-it does **not** automate the review decision — the agent states per-claim
+it does **not** automate the review decision — the agent states per-step
 confidence, never a verdict.
 
 The cockpit is layered: **L0** shows what the branch is *for* (goal alignment),
-**L1** decomposes the change into narrative threads, **L2** states the claims you
-must judge (with the analyst's confidence and challenge questions), **L3** holds
-the evidence — the diff itself, demoted to leaf level. The analysis is formed
+**L1** decomposes the change into narrative threads, **L2** walks the guided
+**Review Steps** — each a stop with its Behavior Impact, the narrator's confidence,
+why it sits where it does, and the comparisons to make — and **L3** holds the
+evidence — the diff itself, demoted to leaf level. The analysis is formed
 **blind**, in an isolated context that never sees the conversation that wrote the
-branch. You descend at your own pace, set per-claim dispositions
-(`verified | concern | question-open`), ask questions in the page, and close with
-a self-contained `review.html` + pasteable `review.md` that record *your* review.
+branch. You descend at your own pace, set per-step dispositions
+(`looks-right | concern | follow-up | skipped`), ask questions in the page, and
+close with a self-contained `review.html` + pasteable `review.md` that record
+*your* review.
 
 See [DESIGN.md](./DESIGN.md) for the design, [CONTEXT.md](./CONTEXT.md) for the glossary,
 and [docs/adr/](./docs/adr/) for the load-bearing decisions.
@@ -73,7 +75,7 @@ Useful flags: `--platforms claude,cursor,codex` (skip auto-detection), `--dry-ru
 `--sessionstart-hook` (record the ambient-resume preference).
 
 On platforms without an isolated-subagent mechanism, the analysis runs in the
-invoking context and the cockpit's L0 says so explicitly — the independence
+invoking context and the renderer records that in the cockpit's L0 — the independence
 premise degrades visibly, never silently.
 
 ## Using it
@@ -92,11 +94,12 @@ see DESIGN.md's Configuration section.
 
 ## Security posture
 
-Everything untrusted — diff bodies, file paths, commit messages, goal text, browser
-feedback — crosses a deterministic Escape Boundary, is rendered under a strict CSP,
-and is verified by a post-write lint. Loopback only; no remote upload of repo code;
-browser feedback is answered and logged, never executed. The tool never applies
-code, never commits, and never prints a merge recommendation.
+Everything untrusted — narrator prose, diff bodies, file paths, commit messages,
+goal text, browser feedback — crosses a deterministic Escape Boundary. A deterministic
+renderer builds and lints the cockpit under a bounded CSP before atomically writing it.
+Loopback only; no remote upload of repo code; browser feedback is answered and logged,
+never executed. The tool never applies code, never commits, and never prints a merge
+recommendation.
 
 ## Development
 

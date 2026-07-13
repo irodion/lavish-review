@@ -15,7 +15,7 @@ const APP_JS = fileURLToPath(
 
 // A tiny builder: h(doc, "tag.class#id", { attr: value }, [children | "text"]).
 // The `#id` may appear anywhere after the tag and is split off first, so ids that
-// contain no `.` work regardless of class order (claim ids, which carry a dot, are
+// contain no `.` work regardless of class order (step ids, which carry a dot, are
 // set on the element directly instead).
 function h(doc, spec, attrs, children) {
   let id = null;
@@ -37,12 +37,13 @@ function h(doc, spec, attrs, children) {
   return el;
 }
 
-// One claim panel: <details class="claim" id>… summary chips + statement, body
-// with detail, challenge questions, and evidence links.
-function claim(doc, { id, kind, statement, confidence, challenge, evidence }) {
-  const summary = h(doc, "summary", null, [
-    h(doc, "span.chip.kind-" + kind, null, [kind]),
-    " " + statement + " ",
+// One L2 Review Step panel: <details class="step" id data-impact>… summary chips +
+// summary text, body with detail, why_now, review prompts, evidence links, and any
+// attention notes (muted asides, never counted).
+function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence, notes }) {
+  const summaryEl = h(doc, "summary", null, [
+    h(doc, "span.chip.impact-" + impact, null, [impact]),
+    " " + summary + " ",
     h(doc, "span.chip.confidence-" + confidence, null, ["confidence: " + confidence]),
   ]);
   const evidenceList = h(
@@ -53,16 +54,21 @@ function claim(doc, { id, kind, statement, confidence, challenge, evidence }) {
       h(doc, "li", null, [h(doc, "a", { href: e.href }, [e.label])].concat(e.note ? [" — ", h(doc, "span.note", null, [e.note])] : []))
     )
   );
-  const body = h(doc, "div.claim-body", null, [
+  const bodyChildren = [
     h(doc, "p.detail", null, ["Detail for " + id + "."]),
-    h(doc, "h4", null, ["Challenge"]),
-    h(doc, "ul.challenge-questions", null, challenge.map((q) => h(doc, "li", null, [q]))),
+    h(doc, "p.why-now", null, [whyNow]),
+    h(doc, "h4", null, ["Review prompts"]),
+    h(doc, "ul.review-prompts", null, prompts.map((q) => h(doc, "li", null, [q]))),
     h(doc, "h4", null, ["Evidence"]),
     evidenceList,
-  ]);
-  // The claim id carries a dot (t1.c1) — set it directly, not through the dotted
-  // `.class` spec syntax of h().
-  const panel = h(doc, "details.claim", null, [summary, body]);
+  ];
+  for (const note of notes || []) {
+    bodyChildren.push(h(doc, "aside.attention-note", null, [note]));
+  }
+  const body = h(doc, "div.step-body", null, bodyChildren);
+  // The step id carries a dot (t1.s1) — set it directly, not through the dotted
+  // `.class` spec syntax of h(). data-impact drives the derived thread/Map character.
+  const panel = h(doc, "details.step", { "data-impact": impact }, [summaryEl, body]);
   panel.id = id;
   return panel;
 }
@@ -82,9 +88,10 @@ function filePanel(doc, { id, path, added, deleted, hunkId, diffText }) {
   return h(doc, "details.file#" + id, null, [summary, fileBody]);
 }
 
-// The default fixture: two threads (t1: two claims, t2: one), three changed files.
-// t1.c1 cites a hunk whose diff text carries a <script> string (the DOM-relocation
-// invariant fixture); t1.c2 cites a file-level anchor; t2.c1 cites another hunk.
+// The default fixture: two threads (t1: two steps, t2: one), three changed files.
+// t1.s1 (a behavior-change) cites a hunk whose diff text carries a <script> string
+// (the DOM-relocation invariant fixture); t1.s2 (unknown-impact) cites a file-level
+// anchor; t2.s1 (test-change) cites another hunk.
 export function buildFixtureDocument() {
   const doc = new Document();
   const main = doc.createElement("main");
@@ -93,20 +100,23 @@ export function buildFixtureDocument() {
   const t1 = h(doc, "section.thread#t1", null, [
     h(doc, "h2", null, [h(doc, "span.thread-id", null, ["t1"]), "First thread"]),
     h(doc, "p.thread-summary", null, ["Summary of the first thread."]),
-    claim(doc, {
-      id: "t1.c1",
-      kind: "behavior",
-      statement: "The first claim, substantiated by a hunk.",
+    step(doc, {
+      id: "t1.s1",
+      impact: "behavior-change",
+      summary: "The first step, substantiated by a hunk.",
       confidence: "high",
-      challenge: ["Is the first claim really covered?"],
+      whyNow: "Start here — the observable behavior change.",
+      prompts: ["Compare the old and new delay computation."],
       evidence: [{ href: "#hunk-a1", label: "src/one.py", note: "the changed function" }],
+      notes: ["No test in the diff exercises the new timing."],
     }),
-    claim(doc, {
-      id: "t1.c2",
-      kind: "risk",
-      statement: "The second claim, substantiated at file level.",
+    step(doc, {
+      id: "t1.s2",
+      impact: "unknown-impact",
+      summary: "The second step, substantiated at file level.",
       confidence: "medium",
-      challenge: ["What breaks if this is wrong?"],
+      whyNow: "Read right after the change it depends on.",
+      prompts: ["Check the caller's timeout — does the cap ever bite?"],
       evidence: [{ href: "#file-f2", label: "src/two.py" }],
     }),
   ]);
@@ -114,12 +124,13 @@ export function buildFixtureDocument() {
   const t2 = h(doc, "section.thread#t2", null, [
     h(doc, "h2", null, [h(doc, "span.thread-id", null, ["t2"]), "Second thread"]),
     h(doc, "p.thread-summary", null, ["Summary of the second thread."]),
-    claim(doc, {
-      id: "t2.c1",
-      kind: "verify",
-      statement: "A verify claim in the second thread.",
+    step(doc, {
+      id: "t2.s1",
+      impact: "test-change",
+      summary: "A test-change step in the second thread.",
       confidence: "high",
-      challenge: ["Does the check pass?"],
+      whyNow: "Read this once you understand t1.s1 — it pins the new behavior.",
+      prompts: ["Does the test fail if the cap regresses?"],
       evidence: [{ href: "#hunk-b1", label: "src/three.py" }],
     }),
   ]);
@@ -167,7 +178,7 @@ export function buildFixtureDocument() {
 }
 
 // Run app.js against a document in the given protocol (default served/"http:").
-// `dispositions`, when given, is the `{claimId: state}` map a resumed session's
+// `dispositions`, when given, is the `{stepId: state}` map a resumed session's
 // dispositions.json would carry — the harness serves it back through fetch so the
 // restore-tint path can be exercised without a network.
 export function loadCockpit({

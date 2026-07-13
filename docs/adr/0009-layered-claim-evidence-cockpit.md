@@ -13,7 +13,7 @@ The Review Cockpit to date is a fixed sequence of fully-expanded sections — Ex
 
 **Amendments to prior ADRs.**
 
-- [ADR-0001](./0001-agent-authored-cockpit.md) stands: the agent still authors the cockpit directly, now as a layered document plus, occasionally, later fragments.
+- [ADR-0001](./0001-agent-authored-cockpit.md) is amended: the narrator authors the layered analysis and deterministic code authors its cockpit representation. Later evidence fragments remain seam-bounded mutations.
 - [ADR-0003](./0003-single-blocking-poll-loop.md) is amended, not repealed: the single blocking poll loop remains the only driver, but it gains one page-mutating operation — seam-bounded, lint-verified fragment injection. "No per-answer HTML regeneration" becomes "no page *regeneration*; bounded fragment *injection* only."
 - [ADR-0002](./0002-deterministic-escape-boundary.md) is unchanged and becomes more load-bearing: every injected fragment crosses the same boundary and lint as generation-time content.
 

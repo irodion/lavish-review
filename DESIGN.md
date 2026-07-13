@@ -12,8 +12,8 @@ See [CONTEXT.md](./CONTEXT.md) for the glossary and [docs/adr/](./docs/adr/) for
   → collect_review_context.py        (deterministic: git diff, goal evidence, escaping, context.json)
   → isolated analyst authors analysis.json   (fresh subagent, blind to this conversation — ADR-0011;
                                               validated; ≤3 repair rounds, fixes only by the analyst)
-  → orchestrator authors review.html (layered L0–L3 — ADR-0009; escaped fragments at seams;
-                                      empty Q&A + per-claim evidence seams planted)
+  → render_cockpit.py                (deterministic layered L0–L3 representation;
+                                      escaped prose/fragments; seams planted; atomic write)
   → copy assets into .review-agent/assets/   (cockpit.css, app.js — relative paths, Lavish requirement)
   → post-write lint                  (fail on unescaped <,> in untrusted regions or remote src/href;
                                       with --analysis, also on claim/seam/anchor drift — ADR-0014)
@@ -25,9 +25,9 @@ See [CONTEXT.md](./CONTEXT.md) for the glossary and [docs/adr/](./docs/adr/) for
 
 ## Architecture (ADR-0001, ADR-0002, ADR-0011)
 
-- **Deterministic layer = diff + goal collection only.** No template engine, no render script. `analysis.json` is authored structured, `review.html` directly.
-- **Orchestrator/analyst split (ADR-0011/0016).** The invoking session is the *orchestrator*: it collects, spawns the analyst, validates, authors the cockpit, and drives the loop — but authors nothing analytical. The *analyst* is an **independent change narrator** (`.claude/agents/review-analyst.md` — the inspectable isolation boundary; tools `Read/Glob/Grep/Write` only, never a fork): it forms threads, guided Review Steps (thread order is the Review Route), their Behavior Impacts, and confidences from the collected artifacts alone, blind to the conversation that wrote the branch. It narrates by default — no risk/omission/verify hunting unless a Focus Lens is configured — and classifies impact from the diff alone (intent may narrate, only evidence may classify — ADR-0016). The orchestrator never edits `analysis.json` — the file is the narrator's testimony; disagreements surface to the reviewer as questions.
-- **Escape boundary.** Structure and prose are trusted authorship; untrusted data (diff bodies, file paths, commit messages, branch names, goal text, echoed feedback) is emitted by scripts via stdlib `html.escape` and injected at fixed seams. Hardening: strict CSP, vendored `app.js` (no inline JS), post-write lint tripwire.
+- **Deterministic representation layer.** Collection produces escaped source artifacts; `render_cockpit(run_dir)` validates `analysis.json`, constructs the complete cockpit, resolves evidence, escapes prose, lints, and atomically writes `review.html`.
+- **Orchestrator/analyst/renderer split (ADR-0011/0016).** The invoking session is the *orchestrator*: it collects, spawns the analyst, validates, invokes the renderer, and drives the loop — but authors neither analysis nor HTML. The *analyst* is an **independent change narrator** (`.claude/agents/review-analyst.md` — the inspectable isolation boundary; tools `Read/Glob/Grep/Write` only, never a fork): it forms threads, guided Review Steps (thread order is the Review Route), their Behavior Impacts, and confidences from the collected artifacts alone, blind to the conversation that wrote the branch. It narrates by default — no risk/omission/verify hunting unless a Focus Lens is configured — and classifies impact from the diff alone (intent may narrate, only evidence may classify — ADR-0016). The orchestrator never edits `analysis.json` — the file is the narrator's testimony; disagreements surface to the reviewer as questions.
+- **Escape boundary.** The narrator's prose and all collected review data are untrusted HTML inputs. The renderer and mutation helpers apply stdlib `html.escape` at fixed seams. Hardening: bounded CSP, vendored `app.js` (no inline JS), post-write lint tripwire.
 
 ## Diff collection
 
@@ -60,7 +60,7 @@ Mapping from the v1 section names (for older issues/ADRs):
 | Diff | L3 evidence (leaf level) |
 | Test Checklist | L2 claims, `kind: verify` (take dispositions like any claim) |
 
-Diagrams: source still captured in `analysis.json`, rendering deferred. Styling: vendored `cockpit.css` default; `styling: cdn` opt-in uses Lavish's Tailwind+DaisyUI fallback. Test integration: **verify claims + read-only runner detection, no execution**.
+Diagrams: source still captured in `analysis.json`, rendering deferred. Styling: the cockpit always ships its core vendored `cockpit.css`/`app.js`; the retained `styling: cdn` compatibility mode relaxes the asset lint for host/CDN additions but does not replace those core assets. Test integration: **Review Prompts + read-only runner detection, no execution**.
 
 ### Deck Mode ([ADR-0014](./docs/adr/0014-deck-presentation-mode.md), [ADR-0015](./docs/adr/0015-claim-scoped-questions.md) — skeleton + keyboard flow landed; Stage-side ask pending)
 
@@ -117,7 +117,7 @@ Resolved by the **Config Resolver** (a pure-policy deep module + thin file-readi
 
 `goal_remote_fetch` (ADR-0010) lives in both scopes — repo wins, default `true`; set `false` to keep goal resolution strictly local (no `gh` calls).
 
-The collector writes the resolved policy to `.review-agent/resolved-config.json` so the agent threads `styling` (cockpit assets + lint), `focus`/`language_hints` (authoring lenses), and the machine settings into the later steps.
+The collector writes the resolved policy to `.review-agent/resolved-config.json` so the renderer threads `styling` into its asset-policy lint, while the agent threads `focus`/`language_hints` (authoring lenses) and machine settings into later steps. Core cockpit assets remain vendored in both styling modes.
 
 ## Packaging & security ([ADR-0013](./docs/adr/0013-self-contained-cross-platform-packaging.md))
 
