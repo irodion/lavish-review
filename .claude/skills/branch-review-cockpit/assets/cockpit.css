@@ -794,8 +794,9 @@ body.deck-active .deck {
 
 .deck-thread-block { margin-bottom: 0.5rem; }
 .deck-thread {
-  display: flex;
-  gap: 0.4rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.15rem 0.4rem;
   align-items: baseline;
   width: 100%;
   text-align: left;
@@ -810,8 +811,17 @@ body.deck-active .deck {
 }
 .deck-thread:hover { background: var(--bg); }
 .deck-thread-id { color: var(--accent); font-family: var(--mono); font-size: 0.72rem; }
-.deck-thread-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deck-thread-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deck-thread .thread-impacts {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  margin-left: 0;
+  font-size: 0.66rem;
+  white-space: normal;
+}
 .deck-thread-frac {
+  grid-column: 3;
+  grid-row: 1;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.72rem;
@@ -856,8 +866,9 @@ body.deck-active .deck {
 .deck-file:hover { color: var(--fg); }
 .deck-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* --- Stage: one step at a time, its evidence hunk inline --- */
+/* --- Stage: stop zero or one step at a time, with step evidence inline --- */
 .deck-stage { min-width: 0; max-width: 900px; }
+.deck-orientation-host > section.l0 { margin: 0; }
 .deck-crumb {
   display: flex;
   gap: 0.5rem;
@@ -942,7 +953,7 @@ body.deck-active .deck {
 .deck-hunk > pre.diff { max-height: 22rem; overflow: auto; margin: 0; }
 .deck-evidence-none { color: var(--muted); font-size: 0.85rem; }
 
-.deck-home { display: none; } /* marks a staged step's home in the document flow */
+.deck-home { display: none; } /* marks a staged L0/step node's home in document flow */
 
 /* Narrow viewports: the Map stops being a sticky side rail and stacks above the
    Stage, so Deck Mode collapses gracefully rather than crushing two columns. */

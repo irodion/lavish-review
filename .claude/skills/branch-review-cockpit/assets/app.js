@@ -477,10 +477,10 @@
   // When the cockpit is *served* (the same presence gate as dispositions), the
   // vendored script re-presents the L0–L3 document as a **Map** (threads in
   // Review Route order with one disposition-tinted dot per step, the changed
-  // files with their stats, overall progress) beside a **Stage** (one step at a
-  // time, its evidence hunk shown inline). Document mode is one visible toggle
-  // away and is the only mode on `file://`; the baked record stays the document,
-  // unchanged (ADR-0014).
+  // files with their stats, overall progress) beside a **Stage** (L0 stop zero,
+  // then one step at a time with its evidence hunk inline). Document mode is one
+  // visible toggle away and is the only mode on `file://`; the baked record stays
+  // the document, unchanged (ADR-0014).
   //
   // The deck is built strictly by RELOCATING and CLONING nodes already in the
   // document DOM — never by constructing markup from strings for untrusted data.
@@ -568,6 +568,11 @@
       threadButton.className = "deck-thread";
       threadButton.appendChild(cell("span", "deck-thread-id", group.threadId));
       threadButton.appendChild(cell("span", "deck-thread-title", group.title));
+      if (group.impactSummary) {
+        // Thread impact character is renderer-owned. Reuse its already-rendered
+        // text and attention class instead of deriving a second count in JS.
+        threadButton.appendChild(group.impactSummary.cloneNode(true));
+      }
       const counts = dispositionCounts(steps);
       threadButton.appendChild(cell("span", "deck-thread-frac", counts.reviewed + "/" + steps.length));
       // Staging a thread lands on its first step — the entry to that leg of the route.
@@ -665,6 +670,35 @@
     return (cut === -1 ? full : full.slice(0, cut)).trim();
   }
 
+  // Move L0 onto the Stage as the Review Route's stop zero. The deterministic
+  // renderer already authored the complete orientation; Deck Mode only relocates
+  // that existing node, just as it does for Review Steps.
+  function stageOrientation() {
+    const orientation = deck.orientation;
+    if (!orientation || deck.orientationStaged) {
+      showDeck();
+      return;
+    }
+    unstageCurrent();
+
+    const placeholder = cell("span", "deck-home", null);
+    orientation.parentNode.insertBefore(placeholder, orientation);
+    deck.orientationHome = placeholder;
+
+    deck.stage.textContent = "";
+    const host = document.createElement("div");
+    host.className = "deck-orientation-host";
+    host.appendChild(orientation);
+    deck.stage.appendChild(host);
+
+    deck.orientationStaged = true;
+    deck.lastStop = orientation;
+    deck.stageControlButtons = null;
+    deck.status = null;
+    showDeck();
+    renderMap();
+  }
+
   // Move the step onto the Stage: record where it lived (a hidden placeholder)
   // and its open state, force it open, relocate the element itself, and clone its
   // evidence hunks inline beneath it. Relocation (not cloning) keeps the step's
@@ -698,6 +732,7 @@
 
     deck.staged = step;
     deck.lastStaged = step;
+    deck.lastStop = step;
     showDeck();
     renderMap();
   }
@@ -705,6 +740,17 @@
   // Return the staged step to exactly where it came from and restore its open
   // state — the document is whole again, ready for document mode or a fresh stage.
   function unstageCurrent() {
+    if (deck.orientationStaged) {
+      const placeholder = deck.orientationHome;
+      if (placeholder && placeholder.parentNode) {
+        placeholder.parentNode.insertBefore(deck.orientation, placeholder);
+        placeholder.parentNode.removeChild(placeholder);
+      }
+      deck.orientationHome = null;
+      deck.orientationStaged = false;
+      return;
+    }
+
     const step = deck.staged;
     if (!step) {
       return;
@@ -831,8 +877,10 @@
 
   function setMode(mode) {
     if (mode === "deck") {
-      if (deck.staged) {
+      if (deck.staged || deck.orientationStaged) {
         showDeck();
+      } else if (deck.lastStop === deck.orientation) {
+        stageOrientation();
       } else {
         stageStep(deck.lastStaged || deck.steps[0]);
       }
@@ -987,8 +1035,18 @@
   // the route's ends (no wrap). Unlike auto-advance, this is NOT gated by
   // disposition — it lands on reviewed steps too, so the reviewer can revisit.
   function navigateStage(delta) {
+    if (deck.orientationStaged) {
+      if (delta > 0) {
+        stageStep(deck.steps[0]);
+      }
+      return;
+    }
     const steps = deck.steps;
     const from = steps.indexOf(deck.staged);
+    if (from === 0 && delta < 0 && deck.orientation) {
+      stageOrientation();
+      return;
+    }
     const next = from + delta;
     if (from === -1 || next < 0 || next >= steps.length) {
       return;
@@ -1033,6 +1091,7 @@
       return;
     }
     const threads = Array.prototype.slice.call(document.querySelectorAll("section.thread"));
+    const orientation = main.querySelector("section.l0");
     // Capture each thread's steps (and its static id/title) once, now, while every
     // step still sits in its thread — the Map renders from this stable grouping even
     // after a step is relocated onto the Stage (a relocated step would otherwise
@@ -1045,6 +1104,7 @@
         steps: stepsIn(thread),
         threadId: idSource ? idSource.textContent : thread.id || "",
         title: threadTitleText(heading),
+        impactSummary: heading ? heading.querySelector(".thread-impacts") : null,
       };
     });
     const steps = [];
@@ -1083,11 +1143,15 @@
       toggle: toggle,
       groups: groups,
       steps: steps,
+      orientation: orientation,
+      orientationStaged: false,
+      orientationHome: null,
       fileNodes: buildFileNodes(), // static — built once, re-appended each render
       staged: null,
       stagedHome: null,
       stagedPriorOpen: false,
       lastStaged: null,
+      lastStop: orientation || steps[0],
       mode: "document",
       stageControlButtons: null, // the current Stage control's disposition buttons
       status: null, // the Stage's `role="status"` announcement line
@@ -1115,12 +1179,28 @@
     document.addEventListener(
       "click",
       function (event) {
-        const anchor = event.target && event.target.closest && event.target.closest("a[href^='#']");
+        const anchor = event.target && event.target.closest && event.target.closest('a[href^="#"]');
         if (!anchor) {
           return;
         }
         const id = anchor.getAttribute("href").slice(1);
         const target = id && document.getElementById(id);
+        // A renderer-authored relates_to link is a Deck navigation affordance:
+        // stage that already-rendered Review Step directly, even across threads.
+        // All other anchors keep the document's normal reveal behavior below.
+        if (
+          deck &&
+          deck.mode === "deck" &&
+          anchor.closest(".step-relations") &&
+          STEP_ID.test(id) &&
+          target &&
+          deck.steps.indexOf(target) !== -1
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          stageStep(target);
+          return;
+        }
         if (target) {
           revealElement(target);
         }

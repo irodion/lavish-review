@@ -32,6 +32,7 @@ function lavishSpy(window) {
 
 test("the Stage renders the oversized L/C/F/S control below the step's review prompts", () => {
   const { document } = loadCockpit();
+  press(document, "j");
   const stage = document.querySelector(".deck-stage");
 
   const keys = stage.querySelectorAll(".deck-control-btn .deck-key").map((k) => k.textContent);
@@ -52,6 +53,7 @@ test("the Stage renders the oversized L/C/F/S control below the step's review pr
 test("an L/C/F/S key stages the disposition with the exact document-mode payload", () => {
   const { document, window } = loadCockpit();
   const calls = lavishSpy(window);
+  press(document, "j");
   assert.equal(stagedStepId(document), "t1.s1");
 
   press(document, "l");
@@ -73,8 +75,9 @@ test("an L/C/F/S key stages the disposition with the exact document-mode payload
 test("the Stage control button and its key are the same code path", () => {
   const { document, window } = loadCockpit();
   lavishSpy(window);
+  press(document, "j");
 
-  click(controlBtn(document, "concern")); // t1.s1 staged on load
+  click(controlBtn(document, "concern")); // t1.s1 staged after entering the route
   assert.equal(document.getElementById("t1.s1").getAttribute("data-disposition"), "concern");
   // Setting it auto-advanced, exactly as the key does.
   assert.equal(stagedStepId(document), "t1.s2");
@@ -109,6 +112,7 @@ test("setting a disposition auto-advances to the next unreviewed step, skipping 
 test("re-selecting the active state clears to unreviewed and stays put (no advance)", () => {
   const { document, window } = loadCockpit();
   const calls = lavishSpy(window);
+  press(document, "j");
 
   press(document, "l"); // t1.s1 -> looks-right, advances to t1.s2
   assert.equal(stagedStepId(document), "t1.s2");
@@ -122,7 +126,7 @@ test("re-selecting the active state clears to unreviewed and stays put (no advan
   assert.equal(calls[calls.length - 1].options.data.disposition, "unreviewed", "the clear is sent");
 });
 
-test("J/K navigate the route freely, clamped at the ends and landing on reviewed steps too", () => {
+test("J/K navigate stop zero and the route freely, clamped at both ends", () => {
   const { document, window } = loadCockpit();
   lavishSpy(window);
 
@@ -131,8 +135,14 @@ test("J/K navigate the route freely, clamped at the ends and landing on reviewed
   press(document, "l"); // advances to t2.s1
   click(dot(document, "t1.s1")); // back to the top
 
-  press(document, "k"); // already first — clamp
-  assert.equal(stagedStepId(document), "t1.s1", "K clamps at the route's start");
+  press(document, "k");
+  assert.ok(document.querySelector(".deck-stage .l0"), "K from the first step returns to stop zero");
+
+  press(document, "k");
+  assert.ok(document.querySelector(".deck-stage .l0"), "K clamps at stop zero");
+
+  press(document, "j");
+  assert.equal(stagedStepId(document), "t1.s1", "J re-enters the Review Route");
 
   press(document, "j"); // forward onto the reviewed t1.s2 (navigation is not state-gated)
   assert.equal(stagedStepId(document), "t1.s2", "J lands on the reviewed step");
@@ -148,6 +158,7 @@ test("J/K navigate the route freely, clamped at the ends and landing on reviewed
 test("keys are ignored while a typing surface (the step-ask box) is focused", () => {
   const { document, window } = loadCockpit();
   lavishSpy(window);
+  press(document, "j");
 
   const askBox = document.querySelector(".deck-stage .step-ask-input");
   assert.ok(askBox, "the staged step carries its ask affordance");
@@ -165,6 +176,7 @@ test("keys are ignored while a typing surface (the step-ask box) is focused", ()
 test("modifier chords pass through (⌘/Ctrl+key is a host shortcut, not a disposition)", () => {
   const { document, window } = loadCockpit();
   lavishSpy(window);
+  press(document, "j");
   press(document, "l", { metaKey: true });
   assert.equal(document.getElementById("t1.s1").getAttribute("data-disposition"), null);
 });
@@ -181,6 +193,7 @@ test("keys are inert in document mode (the Stage owns them)", () => {
 test("Map dots, thread fractions, and overall progress update on every change", () => {
   const { document, window } = loadCockpit();
   lavishSpy(window);
+  press(document, "j");
 
   press(document, "c"); // t1.s1 -> concern, advances to t1.s2
   assert.equal(dot(document, "t1.s1").getAttribute("data-disposition"), "concern", "Map dot tinted");
@@ -193,6 +206,7 @@ test("Map dots, thread fractions, and overall progress update on every change", 
 test("the Stage control and the in-step document-mode controls stay in sync", () => {
   const { document, window } = loadCockpit();
   lavishSpy(window);
+  press(document, "j");
 
   // Set via the in-step (document-mode) control on the staged step; the oversized
   // Stage control must reflect it (both read the one data-disposition).
@@ -207,6 +221,7 @@ test("the Stage control and the in-step document-mode controls stay in sync", ()
   // And the reverse: the Stage key marks the in-step control pressed.
   const { document: doc2, window: win2 } = loadCockpit();
   lavishSpy(win2);
+  press(doc2, "j");
   press(doc2, "f"); // sets t1.s1 then auto-advances away — re-stage it to read its control
   click(dot(doc2, "t1.s1"));
   const inStepFollowUp = doc2
@@ -219,10 +234,23 @@ test("the Stage control and the in-step document-mode controls stay in sync", ()
 test("restored dispositions (resume) tint the Map on load", async () => {
   const { document } = loadCockpit({ dispositions: { "t1.s1": "looks-right", "t2.s1": "concern" } });
   await flush(); // let loadDispositions' fetch → json → apply settle
+  press(document, "j");
 
   assert.equal(dot(document, "t1.s1").getAttribute("data-disposition"), "looks-right", "dot tinted from the store");
   assert.equal(dot(document, "t2.s1").getAttribute("data-disposition"), "concern");
   assert.match(document.querySelector(".deck-progress").textContent, /2\/3 reviewed/, "overall progress restored");
   // The staged step's oversized control reflects the restored state too.
   assert.equal(controlBtn(document, "looks-right").getAttribute("aria-pressed"), "true");
+});
+
+test("disposition keys are inert while L0 stop zero is staged", () => {
+  const { document, window } = loadCockpit();
+  const calls = lavishSpy(window);
+
+  press(document, "l");
+
+  assert.ok(document.querySelector(".deck-stage .l0"), "the orientation remains staged");
+  assert.equal(document.getElementById("t1.s1").getAttribute("data-disposition"), null);
+  assert.equal(calls.length, 0, "no disposition update is sent for L0");
+  assert.equal(document.querySelector(".deck-control"), null, "L0 has no judgment controls");
 });
