@@ -1,8 +1,8 @@
 """The Cockpit Linter — a deterministic post-write tripwire on ``review.html`` (ADR-0002).
 
 The Escape Boundary (:mod:`branch_review.escape`) makes untrusted data safe *by
-construction*, but the agent still authors the frame by hand. This linter is the
-defense-in-depth check that runs after the agent writes the cockpit and fails the
+construction*, and the deterministic renderer owns the frame. This linter is the
+defense-in-depth check that runs before the renderer writes the cockpit and fails the
 build — loudly, before the file is ever opened — if the frame violates the
 hardening rules. It is a tripwire, not a sanitizer: it never edits the cockpit, it
 only refuses an unsafe one.

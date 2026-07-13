@@ -75,7 +75,7 @@ Useful flags: `--platforms claude,cursor,codex` (skip auto-detection), `--dry-ru
 `--sessionstart-hook` (record the ambient-resume preference).
 
 On platforms without an isolated-subagent mechanism, the analysis runs in the
-invoking context and the cockpit's L0 says so explicitly — the independence
+invoking context and the renderer records that in the cockpit's L0 — the independence
 premise degrades visibly, never silently.
 
 ## Using it
@@ -94,11 +94,12 @@ see DESIGN.md's Configuration section.
 
 ## Security posture
 
-Everything untrusted — diff bodies, file paths, commit messages, goal text, browser
-feedback — crosses a deterministic Escape Boundary, is rendered under a strict CSP,
-and is verified by a post-write lint. Loopback only; no remote upload of repo code;
-browser feedback is answered and logged, never executed. The tool never applies
-code, never commits, and never prints a merge recommendation.
+Everything untrusted — narrator prose, diff bodies, file paths, commit messages,
+goal text, browser feedback — crosses a deterministic Escape Boundary. A deterministic
+renderer builds and lints the cockpit under a bounded CSP before atomically writing it.
+Loopback only; no remote upload of repo code; browser feedback is answered and logged,
+never executed. The tool never applies code, never commits, and never prints a merge
+recommendation.
 
 ## Development
 

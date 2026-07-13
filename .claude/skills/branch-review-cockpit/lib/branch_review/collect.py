@@ -2,14 +2,14 @@
 
 Runs ``git`` and the Python standard library only (agent-agnostic): it resolves
 the Base, computes the ``merge-base(base, HEAD)...HEAD`` diff, and writes the
-deterministic Review context files under ``.review-agent/`` that the agent then
-authors the Review Cockpit from. See ``DESIGN.md`` and ``CONTEXT.md``.
+deterministic Review context files under ``.review-agent/`` that the renderer combines
+with the narrator's analysis. See ``DESIGN.md`` and ``CONTEXT.md``.
 
 All untrusted data (diff bodies, file paths, commit messages, branch names) is
 emitted through the deterministic Escape Boundary (:mod:`branch_review.escape`,
 ADR-0002) as pre-escaped, marker-delimited fragments — ``diff.fragment.html`` and
-``fragments.html`` — that the agent injects verbatim; the agent never
-hand-interpolates a raw untrusted string.
+``fragments.html`` — that the renderer injects verbatim; agents never
+hand-interpolate raw untrusted strings.
 """
 
 from __future__ import annotations
@@ -77,6 +77,11 @@ _DISPOSITIONS_NAME = "dispositions.json"
 # The live-injected evidence record (issue #43) — keyed by the same run-scoped
 # claim ids, so it resets and survives exactly like the disposition store.
 _EVIDENCE_NAME = "live-evidence.json"
+
+# Renderer-only provenance for platforms that cannot enforce isolated analysis.
+# It is run-scoped: carrying a fallback disclosure into a later isolated run would
+# misstate how that new analysis was formed.
+_RENDER_CONTEXT_NAME = "render-context.json"
 
 
 class GitError(RuntimeError):
@@ -455,12 +460,19 @@ def _reset_run_scoped_artifacts(out_dir: Path) -> None:
     into the new ``review.html``/``review.md`` at close (the bake reads the default
     ``qa.jsonl`` beside the cockpit). ``analysis.json`` is cleared for the same reason
     in the analysis stage: a stale analysis must not survive into a run whose analyst
-    never wrote one (ADR-0011). ``dispositions.json`` is keyed by that analysis's claim
-    ids, so it resets with it (ADR-0012). A ``fresh`` resume keeps them all because it
-    does not call ``collect``. ``missing_ok`` so the ordinary "no prior run" case is a
-    no-op.
+    never wrote one (ADR-0011). ``dispositions.json`` is keyed by that analysis's step
+    ids, so it resets with it (ADR-0012). ``render-context.json`` records whether the
+    platform enforced analysis isolation, so it also resets rather than mislabel a new
+    run. A ``fresh`` resume keeps them all because it does not call ``collect``.
+    ``missing_ok`` makes the ordinary "no prior run" case a no-op.
     """
-    for name in (*RUN_SCOPED_ARTIFACTS, _ANALYSIS_NAME, _DISPOSITIONS_NAME, _EVIDENCE_NAME):
+    for name in (
+        *RUN_SCOPED_ARTIFACTS,
+        _ANALYSIS_NAME,
+        _DISPOSITIONS_NAME,
+        _EVIDENCE_NAME,
+        _RENDER_CONTEXT_NAME,
+    ):
         (out_dir / name).unlink(missing_ok=True)
 
 
@@ -497,7 +509,8 @@ def collect(
     Change Classifier policy. Then computes the ``base...HEAD`` diff and writes the
     deterministic context files (plus ``resolved-config.json``, the resolved styling / lens
     / machine settings the skill threads into authoring, linting, and the open/loop steps).
-    ``review.html`` is intentionally NOT written here — the agent authors it (ADR-0001).
+    ``review.html`` is intentionally NOT written here — :mod:`branch_review.render`
+    combines these artifacts with the narrator's validated analysis (ADR-0001).
 
     An explicit ``config`` overrides the resolved Change Classifier policy (used in tests);
     ``home`` overrides the machine-config location (also for tests). The base still comes

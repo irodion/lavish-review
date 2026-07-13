@@ -90,7 +90,7 @@ from branch_review.feedback import (
 ANALYSIS_NAME = "analysis.json"  # the structured Analysis (for the Markdown export)
 DEFAULT_MD_NAME = "review.md"  # the optional Markdown export
 
-# The bake fills the seam the agent authors as an empty placeholder
+# The bake fills the seam the renderer authors as an empty placeholder
 # ``<!--brc:qa-log--><!--/brc:qa-log-->`` after the Test Checklist (SKILL.md §5),
 # replacing everything between the markers so re-baking is idempotent.
 

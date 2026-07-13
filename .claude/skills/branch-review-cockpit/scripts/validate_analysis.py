@@ -4,7 +4,7 @@
 The real, unit-tested logic lives in ``src/branch_review/analysis.py`` (the single
 source of truth). This shim exposes it as the skill's runnable script: the agent
 runs it on ``.review-agent/analysis.json`` after authoring the analysis and before
-authoring the cockpit, so a malformed analysis is caught and fixed first.
+rendering the cockpit, so a malformed analysis is caught and fixed first.
 
 ``branch_review`` is resolved via ``_bootstrap`` — the repo's ``src/`` in
 development, the skill's vendored ``lib/`` when installed (ADR-0013).

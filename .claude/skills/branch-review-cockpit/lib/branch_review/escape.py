@@ -1,10 +1,10 @@
 """The deterministic Escape Boundary — untrusted data crosses here, escaped (ADR-0002).
 
-The agent authors the cockpit's frame and prose but **never hand-interpolates
-untrusted strings**. Diff bodies, file paths, commit messages, and branch names
-are attacker-influenceable: a hostile branch can hide ``<script>`` in a filename,
-a hunk, or a commit subject. This module is the single chokepoint that turns any
-such string into a safe HTML fragment the agent injects verbatim at a fixed seam.
+The narrator authors structured prose, while deterministic code owns its HTML
+representation. Diff bodies, file paths, commit messages, branch names, and narrator
+prose are attacker-influenceable: a hostile branch can hide ``<script>`` in a filename,
+a hunk, a commit subject, or text echoed into the analysis. This module is the single
+chokepoint that turns any such string into a safe HTML fragment for fixed seams.
 
 Two things make the boundary mechanical rather than a matter of agent discretion:
 

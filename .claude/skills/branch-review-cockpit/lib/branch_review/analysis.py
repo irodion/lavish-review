@@ -640,8 +640,9 @@ def step_ids(analysis: object) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     """CLI: validate an ``analysis.json`` file; exit non-zero on any problem.
 
-    The skill runs this after the narrator authors ``analysis.json`` and before it
-    authors the cockpit — a malformed analysis is fixed first, never rendered.
+    The skill runs this after the narrator authors ``analysis.json`` and before the
+    deterministic renderer authors the cockpit — a malformed analysis is fixed first,
+    never rendered.
     """
     parser = argparse.ArgumentParser(
         prog="validate_analysis",

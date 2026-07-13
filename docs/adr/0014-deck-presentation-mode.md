@@ -13,11 +13,11 @@ questions, its evidence hunk inline, an oversized disposition control with
 keyboard flow). The obvious implementations — a second generated artifact, or a
 served app that renders `analysis.json` — would fork the cockpit's identity and
 break the guarantees the skill is built on ([ADR-0001](./0001-agent-authored-cockpit.md)
-agent-authored single artifact, [ADR-0002](./0002-deterministic-escape-boundary.md)
+single rendered artifact, [ADR-0002](./0002-deterministic-escape-boundary.md)
 escape boundary, the bake's self-contained record).
 
 **Decision.** Deck Mode is a **presentation mode, not a second artifact**. The
-agent-authored L0–L3 document remains the single source of truth, the thing the
+rendered L0–L3 document remains the single source of truth, the thing the
 linter checks, and the form the baked `file://` record keeps. When the cockpit
 is *served* (a live review through the host), the vendored script builds the
 Map and Stage **by relocating and cloning nodes already in the document DOM** —

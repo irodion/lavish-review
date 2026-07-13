@@ -380,7 +380,13 @@ def _run_scoped_names() -> tuple[str, ...]:
     # regeneration, all preserved when a collect fails.
     from branch_review.feedback import RUN_SCOPED_ARTIFACTS
 
-    return (*RUN_SCOPED_ARTIFACTS, "analysis.json", "dispositions.json", "live-evidence.json")
+    return (
+        *RUN_SCOPED_ARTIFACTS,
+        "analysis.json",
+        "dispositions.json",
+        "live-evidence.json",
+        "render-context.json",
+    )
 
 
 def test_regeneration_clears_prior_run_artifacts(repo: Path) -> None:

@@ -123,6 +123,8 @@ def test_installed_scripts_run_from_the_vendored_package(installed_skill: Path) 
     assert result.returncode == 0, result.stderr
     result = _run_script(installed_skill, "lint_cockpit.py", "--help")
     assert result.returncode == 0, result.stderr
+    result = _run_script(installed_skill, "render_cockpit.py", "--help")
+    assert result.returncode == 0, result.stderr
 
 
 def test_installed_installer_sets_up_a_bare_repo(installed_skill: Path, tmp_path: Path) -> None:
