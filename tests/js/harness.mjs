@@ -40,7 +40,7 @@ function h(doc, spec, attrs, children) {
 // One L2 Review Step panel: <details class="step" id data-impact>… summary chips +
 // summary text, body with detail, why_now, review prompts, evidence links, and any
 // attention notes (muted asides, never counted).
-function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence, notes }) {
+function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence, notes, relations }) {
   const summaryEl = h(doc, "summary", null, [
     h(doc, "span.chip.impact-" + impact, null, [impact]),
     " " + summary + " ",
@@ -64,6 +64,18 @@ function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence,
   ];
   for (const note of notes || []) {
     bodyChildren.push(h(doc, "aside.attention-note", null, [note]));
+  }
+  if (relations && relations.length) {
+    bodyChildren.push(
+      h(
+        doc,
+        "p.step-relations",
+        null,
+        relations.map((relation) =>
+          h(doc, "a", { href: relation.href }, [relation.label])
+        )
+      )
+    );
   }
   const body = h(doc, "div.step-body", null, bodyChildren);
   // The step id carries a dot (t1.s1) — set it directly, not through the dotted
@@ -97,8 +109,24 @@ export function buildFixtureDocument() {
   const main = doc.createElement("main");
   doc.body.appendChild(main);
 
+  // L0 is the route's stop zero: deterministic renderer output that Deck Mode
+  // relocates whole onto the Stage before the first Review Step.
+  const l0 = h(doc, "section.l0", null, [
+    h(doc, "h2", null, ["Orientation"]),
+    h(doc, "blockquote.goal-text", null, ["Ship the narrated review route."]),
+    h(doc, "h3.analysis-title", null, ["Guided Deck presentation"]),
+    h(doc, "p.intent-read", null, ["Present the rendered change in review order."]),
+  ]);
+  main.appendChild(l0);
+
   const t1 = h(doc, "section.thread#t1", null, [
-    h(doc, "h2", null, [h(doc, "span.thread-id", null, ["t1"]), "First thread"]),
+    h(doc, "h2", null, [
+      h(doc, "span.thread-id", null, ["t1"]),
+      "First thread",
+      h(doc, "span.thread-impacts.attention-unknown-impact", null, [
+        "1 behavior-change · 1 unknown",
+      ]),
+    ]),
     h(doc, "p.thread-summary", null, ["Summary of the first thread."]),
     step(doc, {
       id: "t1.s1",
@@ -109,6 +137,10 @@ export function buildFixtureDocument() {
       prompts: ["Compare the old and new delay computation."],
       evidence: [{ href: "#hunk-a1", label: "src/one.py", note: "the changed function" }],
       notes: ["No test in the diff exercises the new timing."],
+      relations: [
+        { href: "#t2.s1", label: "test for this behavior → t2.s1" },
+        { href: "#hunk-a1", label: "supporting evidence anchor" },
+      ],
     }),
     step(doc, {
       id: "t1.s2",
@@ -122,7 +154,11 @@ export function buildFixtureDocument() {
   ]);
 
   const t2 = h(doc, "section.thread#t2", null, [
-    h(doc, "h2", null, [h(doc, "span.thread-id", null, ["t2"]), "Second thread"]),
+    h(doc, "h2", null, [
+      h(doc, "span.thread-id", null, ["t2"]),
+      "Second thread",
+      h(doc, "span.thread-impacts", null, ["1 test"]),
+    ]),
     h(doc, "p.thread-summary", null, ["Summary of the second thread."]),
     step(doc, {
       id: "t2.s1",

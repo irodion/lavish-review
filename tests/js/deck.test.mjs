@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Element } from "./dom.mjs";
-import { loadCockpit, click } from "./harness.mjs";
+import { loadCockpit, click, press } from "./harness.mjs";
 
 const dot = (document, stepId) =>
   document.querySelectorAll(".deck-dot").find((d) => d.dataset.step === stepId);
@@ -22,6 +22,20 @@ function containsScriptElement(el) {
   }
   return false;
 }
+
+test("served Deck starts at L0 stop zero and J advances into the Review Route", () => {
+  const { document } = loadCockpit();
+
+  assert.ok(document.querySelector(".deck-stage .l0"), "the rendered orientation is staged first");
+  assert.equal(document.querySelector("main .l0"), null, "L0 is relocated rather than duplicated");
+  assert.match(document.querySelector(".deck-tally").textContent, /^0\/3 reviewed$/);
+
+  press(document, "j");
+  assert.equal(stagedStepId(document), "t1.s1", "forward navigation enters the first step");
+
+  press(document, "k");
+  assert.ok(document.querySelector(".deck-stage .l0"), "back from the first step returns to stop zero");
+});
 
 test("builds the Map and Stage from the document when served", () => {
   const { document } = loadCockpit();
@@ -47,12 +61,28 @@ test("builds the Map and Stage from the document when served", () => {
   // Overall progress: nothing reviewed yet.
   assert.match(document.querySelector(".deck-tally").textContent, /^0\/3 reviewed$/);
 
+  press(document, "j"); // stop zero → first Review Step
   // The first step is staged, whole, with its review prompts and the exact hunk that
   // substantiates it rendered inline (line-numbered — the annotated table).
   assert.equal(stagedStepId(document), "t1.s1");
   const stage = document.querySelector(".deck-stage");
   assert.ok(stage.querySelector("details.step .review-prompts"), "review prompts on Stage");
   assert.ok(stage.querySelector(".deck-hunk .diff-table"), "the evidence hunk is inline");
+});
+
+test("the Map reuses each thread's renderer-derived impact summary", () => {
+  const { document } = loadCockpit();
+
+  const summaries = document
+    .querySelectorAll(".deck-thread .thread-impacts")
+    .map((summary) => summary.textContent);
+  assert.deepEqual(summaries, ["1 behavior-change · 1 unknown", "1 test"]);
+  assert.ok(
+    document
+      .querySelectorAll(".deck-thread .thread-impacts")[0]
+      .classList.contains("attention-unknown-impact"),
+    "the renderer's attention class is preserved"
+  );
 });
 
 test("clicking a dot or a thread stages that step", () => {
@@ -73,9 +103,42 @@ test("clicking a dot or a thread stages that step", () => {
   assert.equal(stagedStepId(document), "t2.s1");
 });
 
+test("a relates_to link stages its Review Step target across threads", () => {
+  const { document } = loadCockpit();
+  press(document, "j");
+
+  const jump = document
+    .querySelectorAll(".deck-stage .step-relations a")
+    .find((anchor) => anchor.getAttribute("href") === "#t2.s1");
+  click(jump);
+
+  assert.equal(stagedStepId(document), "t2.s1");
+  assert.ok(dot(document, "t2.s1").classList.contains("current"));
+  assert.ok(document.body.classList.contains("deck-active"), "the jump stays in Deck Mode");
+});
+
+test("a non-step relation anchor keeps normal document reveal behavior", () => {
+  const { document } = loadCockpit();
+  press(document, "j");
+
+  const anchor = document
+    .querySelectorAll(".deck-stage .step-relations a")
+    .find((candidate) => candidate.getAttribute("href") === "#hunk-a1");
+  const event = click(anchor);
+
+  assert.equal(stagedStepId(document), "t1.s1", "non-step anchors do not change the Stage");
+  assert.equal(event.defaultPrevented, false, "normal anchor navigation is preserved");
+  assert.equal(
+    document.getElementById("hunk-a1").closest("details.file").open,
+    true,
+    "the target's document disclosure is revealed"
+  );
+});
+
 test("the staged step is relocated (not duplicated) out of the document", () => {
   const { document } = loadCockpit();
-  // t1.s1 is staged on load. It must live in exactly one place: the Stage.
+  press(document, "j");
+  // After entering the route, t1.s1 must live in exactly one place: the Stage.
   const matches = document.querySelectorAll("details.step").filter((c) => c.id === "t1.s1");
   assert.equal(matches.length, 1, "the step exists once");
   assert.ok(matches[0].closest(".deck-stage"), "and it is on the Stage");
@@ -128,6 +191,22 @@ test("the mode toggle round-trips content, open state, and disposition tints", (
   assert.equal(document.querySelectorAll(".deck-file-name").length, 3);
 });
 
+test("the mode toggle round-trips L0 stop zero without duplicating it", () => {
+  const { document } = loadCockpit();
+  const orientation = document.querySelector(".deck-stage .l0");
+
+  click(document.querySelector(".deck-toggle"));
+  assert.equal(document.querySelector("main .l0"), orientation, "document mode restores L0 home");
+
+  click(document.querySelector(".deck-toggle"));
+  assert.equal(
+    document.querySelector(".deck-stage .l0"),
+    orientation,
+    "returning to Deck restores the same staged stop"
+  );
+  assert.equal(document.querySelectorAll("section.l0").length, 1, "L0 is never duplicated");
+});
+
 test("no deck is built on file:// (a baked record renders document mode only)", () => {
   const { document } = loadCockpit({ protocol: "file:" });
   assert.equal(document.querySelector(".deck"), null, "no deck container");
@@ -150,8 +229,9 @@ test("inline evidence is cloned without ids, so the live DOM keeps unique ids", 
 test("DOM-relocation-only: a <script> in a diff renders as text, never executes", () => {
   globalThis.__pwned = undefined;
   const { document } = loadCockpit();
+  press(document, "j");
 
-  // t1.s1 (staged on load) cites a hunk whose diff line embeds a <script> string.
+  // t1.s1 cites a hunk whose diff line embeds a <script> string.
   const stage = document.querySelector(".deck-stage");
   const inlineHunk = stage.querySelector(".deck-hunk");
   assert.ok(
