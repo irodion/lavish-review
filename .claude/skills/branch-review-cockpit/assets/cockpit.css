@@ -467,14 +467,12 @@ details.step > .step-body { padding: 0.75rem 1rem; }
 }
 /* Done state: the ○→✓ glyph carries the primary shape change (never colour
    alone); the ticked glyph brightens from --muted to --fg — neutral emphasis,
-   not a judgment hue, so a ✓ never reads as a disposition. The prose mutes and
-   strikes; the struck line does not cross into the <button> — an atomic inline
-   box — so the tick glyph stays legible. */
+   not a judgment hue, so a ✓ never reads as a disposition. The prose is already
+   muted (inherited from .review-prompts), so ticking just adds a strike-through;
+   the struck line does not cross into the <button> — an atomic inline box — so
+   the tick glyph stays legible. */
 .prompt-tick[aria-pressed="true"] { color: var(--fg); }
-.review-prompts li.ticked {
-  color: var(--muted);
-  text-decoration: line-through;
-}
+.review-prompts li.ticked { text-decoration: line-through; }
 /* Attention Notes (ADR-0016): muted asides on the step — an untested behavior change,
    a goal gap. Never in the Map, never counted in progress, no judgment control of
    their own. A note is narration from the negative side, not an adjudicated finding,

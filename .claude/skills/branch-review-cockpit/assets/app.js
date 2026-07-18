@@ -467,13 +467,18 @@
     body.appendChild(group);
   }
 
-  function setupStepQuestions() {
-    // Same served-only gate as dispositions: on file:// there is no loop to answer,
-    // so a step carries no ask affordance (a record, not a review surface).
+  // Inject a served-only control onto every step. file:// is a portable record, not a
+  // review surface, so its steps carry no injected controls — the same gate dispositions
+  // use (dispositions just do extra per-step wiring, so they don't route through here).
+  function forEachServedStep(inject) {
     if (location.protocol === "file:") {
       return;
     }
-    stepElements().forEach(injectAskControl);
+    stepElements().forEach(inject);
+  }
+
+  function setupStepQuestions() {
+    forEachServedStep(injectAskControl); // no ask loop on a file:// record
   }
 
   // --- Tickable review prompts (issue #99) ----------------------------------
@@ -527,12 +532,7 @@
   }
 
   function setupPromptTicks() {
-    // Served-only, exactly like dispositions and the ask affordance: a file:// record
-    // shows the prompts as plain list items, never as an interactive checklist.
-    if (location.protocol === "file:") {
-      return;
-    }
-    stepElements().forEach(injectPromptTicks);
+    forEachServedStep(injectPromptTicks); // a file:// record shows prompts as plain list items
   }
 
   // --- Deck Mode (ADR-0014/0016) --------------------------------------------
