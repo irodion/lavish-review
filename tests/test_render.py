@@ -195,14 +195,34 @@ def test_render_cockpit_omits_run_meta_without_context(tmp_path: Path) -> None:
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 
-def test_render_cockpit_run_meta_falls_back_to_head_only(tmp_path: Path) -> None:
+def test_render_cockpit_omits_run_meta_without_generated_at(tmp_path: Path) -> None:
     run_dir = tmp_path / ".review-agent"
     _write_run(run_dir)
-    (run_dir / "context.json").write_text(json.dumps({"head_sha": "abc123"}), encoding="utf-8")
+    # head_sha + merge_base but no generated_at: any identity we could form here is
+    # reusable across a same-commit regeneration, so the meta must be omitted (fail
+    # safe) rather than fall back to a weaker identity that reopens finding #2.
+    (run_dir / "context.json").write_text(
+        json.dumps({"head_sha": "abc123", "merge_base": "def456"}), encoding="utf-8"
+    )
 
     html = render_cockpit(run_dir).read_text(encoding="utf-8")
 
-    assert '<meta name="brc-run" content="abc123">' in html
+    assert 'name="brc-run"' not in html
+
+
+def test_render_cockpit_run_meta_without_merge_base(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    # head_sha + generated_at (no merge_base) is a complete identity — the load-bearing
+    # timestamp is present, so the meta is emitted without the optional base segment.
+    (run_dir / "context.json").write_text(
+        json.dumps({"head_sha": "abc123", "generated_at": "2026-07-18T06:00:00Z"}),
+        encoding="utf-8",
+    )
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert '<meta name="brc-run" content="abc123:2026-07-18T06:00:00Z">' in html
 
 
 def test_render_cockpit_supports_degraded_goal_alignment(tmp_path: Path) -> None:
