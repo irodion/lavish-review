@@ -99,6 +99,42 @@ def _isolation_note(run_dir: Path) -> str:
     )
 
 
+def _run_meta(run_dir: Path) -> str:
+    """A ``<meta name="brc-run">`` stamping this run's diff identity, or ``""``.
+
+    The served cockpit's client store (``assets/app.js``, issue #112) keys its
+    persisted deck state by the artifact path *and* this identity, so a regenerated
+    run self-invalidates rather than restoring stale state across the clean break.
+
+    The identity is the collector's ``head_sha``, then ``merge_base`` (a base that
+    advanced under a fixed HEAD is a new run), then ``generated_at``. The timestamp is
+    load-bearing: a review *regenerated on the same commit range* keeps the same head
+    and merge-base, but the narrator re-mints Review Step ids positionally each run, so
+    a stale ``t1.s2`` draft/position could otherwise restore onto a step that now means
+    something else. The collector re-stamps ``generated_at`` every collection, making
+    each regeneration a distinct identity; a seam-only live-evidence injection never
+    re-collects, so the meta — and the identity — stays stable across the very reload
+    the store exists to survive. ``context.json`` is optional: absent or with no
+    ``head_sha`` the meta is omitted and the store stays inert (absence discards) —
+    never keyed to a fabricated identity.
+    """
+    path = run_dir / "context.json"
+    if not path.exists():
+        return ""
+    context = _load_json(path)
+    if not isinstance(context, Mapping):
+        return ""
+    head = context.get("head_sha")
+    if not isinstance(head, str) or not head:
+        return ""
+    parts = [head]
+    for key in ("merge_base", "generated_at"):
+        value = context.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+    return f'<meta name="brc-run" content="{escape_text(":".join(parts))}">'
+
+
 def _fragment_block(source: str, name: str) -> str:
     marker = f"<!-- fragment: {name} -->"
     start = source.find(marker)
@@ -411,6 +447,7 @@ def _document(
     meta_html = _fragment_block(fragments_source, "meta")
     goal_html = _fragment_block(fragments_source, "goal")
     isolation_note = _isolation_note(run_dir)
+    run_meta = _run_meta(run_dir)
     threads = _items(analysis.get("threads"))
     return "\n".join(
         [
@@ -420,6 +457,7 @@ def _document(
             '<meta charset="utf-8">',
             f'<meta http-equiv="Content-Security-Policy" content="{INTERACTIVE_CSP}">',
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            *([run_meta] if run_meta else []),
             "<title>Branch Review Cockpit</title>",
             '<link rel="stylesheet" href="assets/cockpit.css">',
             "</head>",

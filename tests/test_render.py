@@ -145,6 +145,66 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
     )
 
 
+def test_render_cockpit_stamps_run_identity_meta(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)
+    (run_dir / "context.json").write_text(
+        json.dumps(
+            {"head_sha": "abc123", "merge_base": "def456", "generated_at": "2026-07-18T06:00:00Z"}
+        ),
+        encoding="utf-8",
+    )
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # The run identity pins the store to this exact run — head, base, and the collection
+    # timestamp — so a regenerated run's persisted deck state self-invalidates instead of
+    # leaking across the clean break, even when the commit range is unchanged.
+    assert '<meta name="brc-run" content="abc123:def456:2026-07-18T06:00:00Z">' in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_run_identity_distinguishes_same_commit_regenerations(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    ctx = run_dir / "context.json"
+    same_range = {"head_sha": "abc123", "merge_base": "def456"}
+
+    ctx.write_text(json.dumps({**same_range, "generated_at": "first"}), encoding="utf-8")
+    first = render_cockpit(run_dir).read_text(encoding="utf-8")
+    ctx.write_text(json.dumps({**same_range, "generated_at": "second"}), encoding="utf-8")
+    second = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # Same head and merge-base, different collection → different identity, so a stale
+    # positional step id from the first run cannot restore onto the second (finding #2).
+    assert 'content="abc123:def456:first"' in first
+    assert 'content="abc123:def456:second"' in second
+
+
+def test_render_cockpit_omits_run_meta_without_context(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)  # no context.json — a degraded run
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # Absence of the run identity is honest: the store simply stays inert rather than
+    # keying persistence to a fabricated identity.
+    assert 'name="brc-run"' not in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_run_meta_falls_back_to_head_only(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    (run_dir / "context.json").write_text(json.dumps({"head_sha": "abc123"}), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert '<meta name="brc-run" content="abc123">' in html
+
+
 def test_render_cockpit_supports_degraded_goal_alignment(tmp_path: Path) -> None:
     run_dir = tmp_path / ".review-agent"
     _write_run(run_dir)
