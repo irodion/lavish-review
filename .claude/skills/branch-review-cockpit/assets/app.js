@@ -443,6 +443,7 @@
         // the reviewer loses nothing; just say it could not be sent.
         status.textContent = "No live session — question not sent.";
       }
+      persistUiState(); // a sent question clears the draft; a failed one keeps it
     }
 
     send.addEventListener("click", submit);
@@ -456,6 +457,9 @@
         status.textContent = "";
       }
     });
+    // Persist the half-typed question so an injection reload never loses it. The
+    // draft only ever lives in `.value` (never markup) and never leaves this tab.
+    input.addEventListener("input", persistUiState);
 
     group.appendChild(input);
     group.appendChild(send);
@@ -862,6 +866,7 @@
     deck.mode = "deck";
     document.body.classList.add("deck-active");
     setToggle(true);
+    persistUiState(); // mode + staged step (staging routes through here)
   }
 
   // Return to the single layered document: move the staged step home, clear the
@@ -873,6 +878,7 @@
     document.body.classList.remove("deck-active");
     setToggle(false);
     renderMap();
+    persistUiState(); // the reviewer chose the full document — remember it across a reload
   }
 
   function setMode(mode) {
@@ -1080,6 +1086,208 @@
     }
   }
 
+  // --- Run-scoped UI-state store (issue #112) --------------------------------
+  //
+  // The one sanctioned page mutation — live-evidence injection — writes review.html,
+  // which the host answers with an SSE reload that resets the iframe. Disposition
+  // tints (re-fetched from dispositions.json) and scroll (host chrome) survive that,
+  // but the deck's *ephemeral* state does not: which step is staged, deck vs document
+  // mode, a half-typed step question, and document-mode disclosure. This store carries
+  // exactly that across the reload, keyed by the artifact path AND the renderer's run
+  // identity (`<meta name="brc-run">`), so a regenerated run's state self-invalidates
+  // instead of leaking across the clean break.
+  //
+  // It is deliberately narrow: sessionStorage (per-tab, survives the reload — the same
+  // mechanism the host uses for queued pills), served-only (inert on file:// and in the
+  // baked record), and never a channel for Reviewer Dispositions (those stay server
+  // state, fetched from dispositions.json) or any feedback send. Restore is defensive:
+  // a missing/mismatched run identity, a corrupt blob, or a staged-step id that no
+  // longer resolves is discarded, never guessed.
+
+  const UI_STORE_KEY_PREFIX = "brc:ui:";
+
+  // The store handle — {backend, key, run} when persistence is live, else null (file://,
+  // no sessionStorage, or no run identity stamped). Set once by restoreUiState().
+  let uiStore = null;
+  // Persistence stays suppressed until the initial restore completes, so the deck's
+  // own build-time staging (setMode → stageOrientation) can't clobber stored state
+  // before it is read back.
+  let uiReady = false;
+
+  function runIdentity() {
+    const meta = document.querySelector('meta[name="brc-run"]');
+    const content = meta && meta.getAttribute("content");
+    return content || null;
+  }
+
+  function storageBackend() {
+    // file:// is a record, not a review surface — never persist (the deck's gate too).
+    if (location.protocol === "file:") {
+      return null;
+    }
+    // Access itself can throw under strict privacy settings; a missing or unusable
+    // backend simply means the store is inert, never an error.
+    try {
+      return window.sessionStorage || null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function buildUiStore() {
+    const backend = storageBackend();
+    if (!backend) {
+      return null;
+    }
+    const run = runIdentity();
+    if (!run) {
+      return null; // no run identity → inert (nothing keyed, nothing restored)
+    }
+    return { backend: backend, key: UI_STORE_KEY_PREFIX + (location.pathname || ""), run: run };
+  }
+
+  function readUiState() {
+    if (!uiStore) {
+      return null;
+    }
+    let raw;
+    try {
+      raw = uiStore.backend.getItem(uiStore.key);
+    } catch (_err) {
+      return null;
+    }
+    if (!raw) {
+      return null;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (_err) {
+      return null; // a corrupt blob is discarded, never trusted
+    }
+    // A run-identity mismatch is the clean-break signal: the stored state belongs to a
+    // different diff, so discard it rather than restore stale positions and drafts.
+    if (!parsed || typeof parsed !== "object" || parsed.run !== uiStore.run) {
+      return null;
+    }
+    return parsed;
+  }
+
+  function writeUiState(state) {
+    if (!uiStore) {
+      return;
+    }
+    state.run = uiStore.run;
+    try {
+      uiStore.backend.setItem(uiStore.key, JSON.stringify(state));
+    } catch (_err) {
+      // Quota or a read-only backend: persistence is best-effort, never fatal.
+    }
+  }
+
+  // Non-empty per-step ask drafts, keyed by step id — the reviewer's in-progress text.
+  function snapshotDrafts() {
+    const drafts = Object.create(null);
+    stepElements().forEach(function (step) {
+      const input = step.querySelector(".step-ask-input");
+      if (input && input.value) {
+        drafts[step.id] = input.value;
+      }
+    });
+    return drafts;
+  }
+
+  // Document-mode disclosure per <details> id. The staged step is force-open on the
+  // Stage, so record its *document* truth (stagedPriorOpen), not its transient state.
+  function snapshotOpen() {
+    const open = Object.create(null);
+    document.querySelectorAll("details.step, details.file").forEach(function (panel) {
+      if (!panel.id) {
+        return;
+      }
+      open[panel.id] = deck && deck.staged === panel ? deck.stagedPriorOpen : panel.open;
+    });
+    return open;
+  }
+
+  // The reviewer's current stop on the Review Route — "l0" for orientation, else the
+  // step id — read from `lastStop` so it holds even in document mode (where nothing is
+  // *staged* but the reviewer still has a position the deck returns to). This is what
+  // must survive a reload, not the transient `staged`, which is null in document mode.
+  function currentStopId() {
+    if (!deck || deck.orientationStaged || deck.lastStop === deck.orientation) {
+      return "l0";
+    }
+    const stop = deck.lastStop;
+    return stop && stop.id ? stop.id : null;
+  }
+
+  // Persist the whole ephemeral deck state. Inert until the initial restore has run
+  // (uiReady) and only when a live store and a built deck exist.
+  function persistUiState() {
+    if (!uiReady || !uiStore || !deck) {
+      return;
+    }
+    writeUiState({
+      mode: deck.mode,
+      stop: currentStopId(),
+      drafts: snapshotDrafts(),
+      open: snapshotOpen(),
+    });
+  }
+
+  // Restore the ephemeral deck state saved before an injection reload. Ordered so the
+  // final view matches what the reviewer left: disclosure first (document truth), then
+  // drafts, then the staged stop, then the mode. Every step is defensive — an unknown
+  // id or a stale run is discarded, never guessed. Runs once, after the deck is built.
+  function restoreUiState() {
+    uiStore = buildUiStore();
+    if (!uiStore || !deck) {
+      return; // inert: nothing to restore, and persistence stays off (uiReady false)
+    }
+    const state = readUiState();
+    if (state) {
+      if (state.open && typeof state.open === "object") {
+        Object.keys(state.open).forEach(function (id) {
+          const panel = document.getElementById(id);
+          if (panel && (panel.matches("details.step") || panel.matches("details.file"))) {
+            panel.open = !!state.open[id];
+          }
+        });
+      }
+      if (state.drafts && typeof state.drafts === "object") {
+        stepElements().forEach(function (step) {
+          const draft = state.drafts[step.id];
+          if (typeof draft === "string") {
+            const input = step.querySelector(".step-ask-input");
+            if (input) {
+              input.value = draft;
+            }
+          }
+        });
+      }
+      // Stage the reviewer's last stop first — in *either* mode — so the deck's
+      // return memory (lastStop/lastStaged) is set through the real staging paths.
+      // Then, if the reviewer had toggled to the document, unstage back to it: the
+      // memory stays, so a later toggle to the deck lands where they left off.
+      if (state.stop === "l0") {
+        stageOrientation();
+      } else if (typeof state.stop === "string") {
+        const target = document.getElementById(state.stop);
+        if (target && deck.steps.indexOf(target) !== -1) {
+          stageStep(target);
+        }
+      }
+      if (state.mode === "document") {
+        setMode("document");
+      }
+    }
+    // Persistence is live from here — snapshot the restored (or default) state so a
+    // subsequent reload has a fresh record even if the reviewer changes nothing.
+    uiReady = true;
+    persistUiState();
+  }
+
   function buildDeck() {
     // file:// is a record, not a review surface — no live session, so no deck
     // (the exact gate dispositions and the ask affordance use).
@@ -1216,5 +1424,12 @@
     // Built last: the deck relocates steps that already carry their injected
     // controls, and clones hunk sections the diff rebuild has already annotated.
     buildDeck();
+    // A <details> toggle carries no other signal, so persist document-mode disclosure
+    // on its own event (capture: the `toggle` event does not bubble). Inert until the
+    // restore below turns persistence on, and on file:// (no store) throughout.
+    document.addEventListener("toggle", persistUiState, true);
+    // Finally, restore any state a prior injection reload left behind — after the deck
+    // exists to receive it, and after the ask boxes exist to hold restored drafts.
+    restoreUiState();
   });
 })();

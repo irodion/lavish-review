@@ -213,21 +213,54 @@ export function buildFixtureDocument() {
   return doc;
 }
 
+// A dependency-free stand-in for Window.sessionStorage: the same getItem/setItem/
+// removeItem surface the store touches, backed by a Map. Passing one instance across
+// two loadCockpit() calls models the tab-scoped storage that survives the host's SSE
+// reload (the injection case the store exists to defend). `seed` preloads entries.
+export function memoryStorage(seed = null) {
+  const map = new Map(seed ? Object.entries(seed) : []);
+  return {
+    getItem: (k) => (map.has(String(k)) ? map.get(String(k)) : null),
+    setItem: (k, v) => {
+      map.set(String(k), String(v));
+    },
+    removeItem: (k) => {
+      map.delete(String(k));
+    },
+    _map: map,
+  };
+}
+
 // Run app.js against a document in the given protocol (default served/"http:").
 // `dispositions`, when given, is the `{stepId: state}` map a resumed session's
 // dispositions.json would carry — the harness serves it back through fetch so the
-// restore-tint path can be exercised without a network.
+// restore-tint path can be exercised without a network. `sessionStorage` (a
+// memoryStorage) and `run` (the brc-run meta identity) drive the UI-state store
+// (issue #112): reuse one sessionStorage across two loads, holding `run` fixed, to
+// model an injection reload; change `run` to model a regenerated run.
 export function loadCockpit({
   protocol = "http:",
   doc = buildFixtureDocument(),
   dispositions = null,
+  sessionStorage = null,
+  run = "run-1",
 } = {}) {
-  const location = { protocol, hash: "" };
+  const location = { protocol, hash: "", pathname: "/review.html" };
   const window = {
     lavish: undefined,
+    sessionStorage: sessionStorage || undefined,
     addEventListener() {},
     removeEventListener() {},
   };
+
+  // The renderer stamps the run identity into <meta name="brc-run">; mirror that so
+  // the store can key on it. Absent when `run` is null (a degraded render).
+  if (run !== null && !doc.querySelector('meta[name="brc-run"]')) {
+    const meta = doc.createElement("meta");
+    meta.setAttribute("name", "brc-run");
+    meta.setAttribute("content", run);
+    doc.documentElement.appendChild(meta);
+  }
   // The presenter never fetches on file://; on http:// loadDispositions() calls
   // fetch. Serve the given dispositions store back (a resumed review), or an
   // not-ok response so it no-ops without a network (a fresh review).
@@ -272,4 +305,16 @@ export function press(target, key, opts = {}) {
 // Let the microtask chain in loadDispositions (fetch → json → apply) settle.
 export function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// Type into a step's ask box the way a reviewer would: set the field value and fire
+// the `input` event the store listens for. Returns the textarea, or null if absent
+// (e.g. on file://, where no ask affordance is injected).
+export function typeDraft(document, stepId, text) {
+  const step = document.getElementById(stepId);
+  const input = step && step.querySelector(".step-ask-input");
+  if (!input) return null;
+  input.value = text;
+  input.dispatchEvent(new DomEvent("input", { bubbles: true }));
+  return input;
 }

@@ -99,6 +99,50 @@ def _isolation_note(run_dir: Path) -> str:
     )
 
 
+def _run_meta(run_dir: Path) -> str:
+    """A ``<meta name="brc-run">`` stamping this run's diff identity, or ``""``.
+
+    The served cockpit's client store (``assets/app.js``, issue #112) keys its
+    persisted deck state by the artifact path *and* this identity, so a regenerated
+    run self-invalidates rather than restoring stale state across the clean break.
+
+    The identity is the collector's ``head_sha``, then ``merge_base`` (a base that
+    advanced under a fixed HEAD is a new run), then ``generated_at``. The timestamp is
+    **load-bearing and required**: a review *regenerated on the same commit range* keeps
+    the same head and merge-base, but the narrator re-mints Review Step ids positionally
+    each run, so a stale ``t1.s2`` draft/position could otherwise restore onto a step
+    that now means something else. The collector re-stamps ``generated_at`` every
+    collection, making each regeneration a distinct identity; a seam-only live-evidence
+    injection never re-collects, so the meta — and the identity — stays stable across the
+    very reload the store exists to survive.
+
+    Because ``generated_at`` is what carries that guarantee, the meta is emitted only
+    when it (and ``head_sha``) are present: any identity we could form without it —
+    ``head`` or ``head:merge_base`` — is reusable across a same-commit regeneration, so
+    keying persistence to one would reopen exactly that hazard. When it is absent (or
+    ``context.json`` is), the meta is omitted and the store stays inert (absence
+    discards) rather than fall back to a weaker, reusable identity.
+    """
+    path = run_dir / "context.json"
+    if not path.exists():
+        return ""
+    context = _load_json(path)
+    if not isinstance(context, Mapping):
+        return ""
+    head = context.get("head_sha")
+    generated_at = context.get("generated_at")
+    if not isinstance(head, str) or not head:
+        return ""
+    if not isinstance(generated_at, str) or not generated_at:
+        return ""  # the load-bearing part is missing → fail safe, keep the store inert
+    parts = [head]
+    merge_base = context.get("merge_base")
+    if isinstance(merge_base, str) and merge_base:
+        parts.append(merge_base)
+    parts.append(generated_at)
+    return f'<meta name="brc-run" content="{escape_text(":".join(parts))}">'
+
+
 def _fragment_block(source: str, name: str) -> str:
     marker = f"<!-- fragment: {name} -->"
     start = source.find(marker)
@@ -411,6 +455,7 @@ def _document(
     meta_html = _fragment_block(fragments_source, "meta")
     goal_html = _fragment_block(fragments_source, "goal")
     isolation_note = _isolation_note(run_dir)
+    run_meta = _run_meta(run_dir)
     threads = _items(analysis.get("threads"))
     return "\n".join(
         [
@@ -420,6 +465,7 @@ def _document(
             '<meta charset="utf-8">',
             f'<meta http-equiv="Content-Security-Policy" content="{INTERACTIVE_CSP}">',
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            *([run_meta] if run_meta else []),
             "<title>Branch Review Cockpit</title>",
             '<link rel="stylesheet" href="assets/cockpit.css">',
             "</head>",
