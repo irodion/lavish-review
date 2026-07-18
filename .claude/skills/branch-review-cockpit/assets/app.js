@@ -476,6 +476,65 @@
     stepElements().forEach(injectAskControl);
   }
 
+  // --- Tickable review prompts (issue #99) ----------------------------------
+  //
+  // Each `review_prompt` is a comparison the reviewer works through, so it gets a
+  // tick affordance to check off — turning a Review Step into a sequence of micro-
+  // completions instead of one dreaded essay. A tick is EPHEMERAL served-session UI
+  // state: it is NOT a Reviewer Disposition, never queued through the feedback
+  // channel, and never touches dispositions, progress counts, or auto-advance —
+  // completing every prompt does not adjudicate the step (judgment stays the
+  // reviewer's explicit act). The tick lives on the prompt's own `<li>` (a `ticked`
+  // class + the button's `aria-pressed`), so it relocates onto the Stage and back
+  // with the step, losslessly round-tripping the mode toggle; the UI store carries
+  // it across an injection reload (snapshotTicks). On file:// (a baked/portable
+  // record) no control is injected — the prompts stay plain list items, the same
+  // served-only gate the deck and dispositions use.
+
+  // Reflect a prompt's ticked state on its `<li>` and the tick button together, so the
+  // class the stylesheet reads and the `aria-pressed` assistive tech reads never disagree.
+  function setPromptTick(li, ticked) {
+    li.classList.toggle("ticked", ticked);
+    const btn = li.querySelector(".prompt-tick");
+    if (btn) {
+      btn.setAttribute("aria-pressed", ticked ? "true" : "false");
+      btn.textContent = ticked ? "✓" : "○"; // ✓ / ○ — a shape change, never colour alone
+    }
+  }
+
+  function injectPromptTicks(step) {
+    Array.prototype.forEach.call(step.querySelectorAll(".review-prompts li"), function (li) {
+      if (li.querySelector(".prompt-tick")) {
+        return; // already injected (idempotent, like the disposition/ask controls)
+      }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "prompt-tick";
+      btn.setAttribute("aria-pressed", "false");
+      btn.setAttribute("aria-label", "Mark this review prompt as done");
+      btn.textContent = "○"; // ○ unticked; setPromptTick swaps to ✓
+      btn.addEventListener("click", function () {
+        setPromptTick(li, !li.classList.contains("ticked"));
+        persistUiState(); // a tick is ephemeral state to carry across the injection reload
+      });
+      li.insertBefore(btn, li.firstChild);
+      // Mark the row interactive so the stylesheet can lay it out as a tick line
+      // without a relational (:has) selector — JS sets the state class, CSS reads it,
+      // the same contract `ticked`/`data-disposition`/the deck classes follow. The
+      // baked file:// record never reaches here, so its prompts stay plain <li> items.
+      li.classList.add("tickable");
+    });
+  }
+
+  function setupPromptTicks() {
+    // Served-only, exactly like dispositions and the ask affordance: a file:// record
+    // shows the prompts as plain list items, never as an interactive checklist.
+    if (location.protocol === "file:") {
+      return;
+    }
+    stepElements().forEach(injectPromptTicks);
+  }
+
   // --- Deck Mode (ADR-0014/0016) --------------------------------------------
   //
   // When the cockpit is *served* (the same presence gate as dispositions), the
@@ -1197,6 +1256,29 @@
     return drafts;
   }
 
+  // Ticked review prompts (issue #99), keyed by step id → the ticked prompt indices
+  // within that step. Index is stable within a run (prompts are rendered once and the
+  // run identity keys the whole store, so a regenerated run's ticks self-invalidate).
+  // Ephemeral UI state only — never a Reviewer Disposition, never a feedback send.
+  function snapshotTicks() {
+    const ticks = Object.create(null);
+    stepElements().forEach(function (step) {
+      const on = [];
+      Array.prototype.forEach.call(
+        step.querySelectorAll(".review-prompts li"),
+        function (li, index) {
+          if (li.classList.contains("ticked")) {
+            on.push(index);
+          }
+        }
+      );
+      if (on.length) {
+        ticks[step.id] = on;
+      }
+    });
+    return ticks;
+  }
+
   // Document-mode disclosure per <details> id. The staged step is force-open on the
   // Stage, so record its *document* truth (stagedPriorOpen), not its transient state.
   function snapshotOpen() {
@@ -1233,13 +1315,15 @@
       stop: currentStopId(),
       drafts: snapshotDrafts(),
       open: snapshotOpen(),
+      ticks: snapshotTicks(),
     });
   }
 
   // Restore the ephemeral deck state saved before an injection reload. Ordered so the
   // final view matches what the reviewer left: disclosure first (document truth), then
-  // drafts, then the staged stop, then the mode. Every step is defensive — an unknown
-  // id or a stale run is discarded, never guessed. Runs once, after the deck is built.
+  // drafts, then prompt ticks, then the staged stop, then the mode. Every step is
+  // defensive — an unknown id, a stale run, or an out-of-range tick index is discarded,
+  // never guessed. Runs once, after the deck is built.
   function restoreUiState() {
     uiStore = buildUiStore();
     if (!uiStore || !deck) {
@@ -1264,6 +1348,20 @@
               input.value = draft;
             }
           }
+        });
+      }
+      if (state.ticks && typeof state.ticks === "object") {
+        stepElements().forEach(function (step) {
+          const on = state.ticks[step.id];
+          if (!Array.isArray(on)) {
+            return;
+          }
+          const items = step.querySelectorAll(".review-prompts li");
+          on.forEach(function (index) {
+            if (typeof index === "number" && items[index]) {
+              setPromptTick(items[index], true);
+            }
+          });
         });
       }
       // Stage the reviewer's last stop first — in *either* mode — so the deck's
@@ -1421,6 +1519,7 @@
 
     setupDispositions();
     setupStepQuestions();
+    setupPromptTicks();
     // Built last: the deck relocates steps that already carry their injected
     // controls, and clones hunk sections the diff rebuild has already annotated.
     buildDeck();

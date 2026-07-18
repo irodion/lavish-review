@@ -440,6 +440,41 @@ details.step > .step-body { padding: 0.75rem 1rem; }
   font-size: 0.92rem;
 }
 .review-prompts li { margin: 0.2rem 0; }
+/* Tickable review prompts (issue #99): working a step is a sequence of micro-
+   completions, so each prompt gets its own tick affordance. The control is
+   JS-injected only when served — never on file:// — and the same JS marks the
+   row `tickable`, so the served-mode layout keys off that state class (never a
+   :has() relational selector) and the baked/portable record keeps plain bulleted
+   prompts. A tick is ephemeral session UI, never a Reviewer Disposition — so its
+   colour deliberately stays out of the reserved judgment palette (--level-*). */
+.review-prompts li.tickable {
+  list-style: none;
+  margin-left: -1.1rem; /* reclaim the bullet indent the row no longer needs */
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.prompt-tick {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+/* Done state: the ○→✓ glyph carries the primary shape change (never colour
+   alone); the ticked glyph brightens from --muted to --fg — neutral emphasis,
+   not a judgment hue, so a ✓ never reads as a disposition. The prose mutes and
+   strikes; the struck line does not cross into the <button> — an atomic inline
+   box — so the tick glyph stays legible. */
+.prompt-tick[aria-pressed="true"] { color: var(--fg); }
+.review-prompts li.ticked {
+  color: var(--muted);
+  text-decoration: line-through;
+}
 /* Attention Notes (ADR-0016): muted asides on the step — an untested behavior change,
    a goal gap. Never in the Map, never counted in progress, no judgment control of
    their own. A note is narration from the negative side, not an adjudicated finding,
