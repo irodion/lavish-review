@@ -17,12 +17,13 @@
         {
           "id": "t1.s1",
           "impact": "behavior-change",
-          "summary": "Retries now back off exponentially from RETRY_BASE_DELAY, doubling per attempt, capped at 60s.",
+          "summary": "Retry delay changes from a fixed 1s to exponential backoff.",
           "detail": "Before: every retry waited a constant 1s. After: the wait is base * 2**attempt, clamped to 60s. A caller that used to retry 5 times in 5s now spreads those retries across roughly a minute.",
           "confidence": "high",
           "why_now": "Start here — this is the observable behavior change the whole branch exists to make; every other step is downstream of it.",
           "review_prompts": [
-            "Compare the old constant-delay line with the new base * 2**attempt computation: is the cap applied before or after the doubling, so a single wait can never exceed 60s?"
+            "Compare the old constant 1s delay with the new base * 2**attempt: does the wait now grow with each attempt?",
+            "Confirm the 60s cap is applied after the doubling, so no single wait can exceed 60s."
           ],
           "evidence": [
             { "path": "src/retry.py", "hunk": 1 }
@@ -35,11 +36,13 @@
         {
           "id": "t1.s2",
           "impact": "unknown-impact",
-          "summary": "Whether the 60s cap is observable depends on the caller's own request timeout, which this diff does not show.",
-          "confidence": "medium",
+          "summary": "Whether the 60s cap ever bites depends on the caller's request timeout.",
+          "detail": "The cap only changes behavior if a computed wait would exceed the caller's per-request timeout. That timeout lives in src/client/pool.py, which this branch does not touch, so its value — and thus whether the cap is ever reached — is not visible in the diff.",
+          "confidence": "low",
           "why_now": "Read right after the policy change: if the pool's per-request timeout is under 60s, the cap never bites and the change is smaller than it looks.",
           "review_prompts": [
-            "Check src/client/pool.py's request timeout: is it shorter than 60s? If so, does the new cap ever actually take effect?"
+            "Read src/client/pool.py's per-request timeout: is it shorter than 60s?",
+            "If that timeout is under 60s, can the new cap ever take effect at all?"
           ],
           "evidence": [
             { "note": "widened: src/client/pool.py sets the per-request timeout but was not changed by this branch" }
@@ -56,12 +59,13 @@
         {
           "id": "t2.s1",
           "impact": "behavior-change",
-          "summary": "The old RETRY_DELAY key is renamed to RETRY_BASE_DELAY and no longer read; a deployment still setting the old key silently loses its override.",
-          "detail": "The config loader reads only the new name. There is no compatibility shim or deprecation warning, so an existing RETRY_DELAY in the environment is now ignored rather than honored.",
-          "confidence": "high",
+          "summary": "RETRY_DELAY is renamed to RETRY_BASE_DELAY; the old key is no longer read.",
+          "detail": "The config loader reads only the new name. There is no compatibility shim or deprecation warning in the diff, so an existing RETRY_DELAY in the environment would be ignored rather than honored — but only a grep across every config consumer confirms nothing else still reads the old key.",
+          "confidence": "medium",
           "why_now": "Read after the backoff change it supports: this is where the change reaches operators, and the compatibility break lives here, not in the retry math.",
           "review_prompts": [
-            "Confirm no deployment target still sets RETRY_DELAY (env, deploy templates, runbooks); should the old key be honored for one release with a warning?"
+            "Confirm no deployment target still sets the old RETRY_DELAY key — env, deploy templates, runbooks.",
+            "Decide whether the old key should be honored for one release with a deprecation warning."
           ],
           "evidence": [
             { "path": "src/config.py", "hunk": 1 }
@@ -78,12 +82,12 @@
         {
           "id": "t3.s1",
           "impact": "behavior-preserving",
-          "summary": "The doubling-and-cap arithmetic is lifted verbatim into compute_delay(); the retry loop now calls the helper.",
-          "detail": "The extracted body is the same expression, in the same order (double, then clamp). No new branch, no changed constant. The intent is a readability refactor with no behavior change.",
+          "summary": "The delay arithmetic is lifted verbatim into a compute_delay() helper.",
+          "detail": "The extracted body is the same expression, in the same order (double, then clamp). No new branch, no changed constant; the retry loop now calls the helper. The intent is a readability refactor with no behavior change.",
           "confidence": "high",
           "why_now": "Read alongside the backoff change: this is the same math relocated, so confirming it here lets you trust t1.s1 without re-reading the arithmetic twice.",
           "review_prompts": [
-            "Confirm the extracted compute_delay() preserves the order of operations — cap applied *after* doubling, exactly as the inline version did — so the refactor changes nothing observable."
+            "Confirm compute_delay() applies the cap after doubling, exactly as the inline version did."
           ],
           "evidence": [
             { "path": "src/retry.py", "hunk": 2 }
@@ -100,11 +104,12 @@
         {
           "id": "t4.s1",
           "impact": "test-change",
-          "summary": "A new test asserts the delay sequence 1, 2, 4, 8, … and that it never exceeds 60s.",
+          "summary": "A new test pins the delay sequence and the 60s cap.",
+          "detail": "It asserts the wait sequence 1, 2, 4, 8, … and that no computed wait exceeds 60s.",
           "confidence": "high",
           "why_now": "Read this once you understand t1.s1: it is the evidence that the new behavior is pinned, and it is the first thing that would fail if the cap regressed.",
           "review_prompts": [
-            "Does this test fail if the 60s cap is removed, or only if the doubling breaks? A test that passes with the cap gone is not pinning the cap."
+            "Confirm this test fails if the 60s cap is removed, not only if the doubling breaks — otherwise it is not pinning the cap."
           ],
           "relates_to": ["t1.s1"],
           "evidence": [

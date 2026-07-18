@@ -168,9 +168,13 @@ Route policy below, not by copying the example's particular sequence. Structure:
   - **`unknown-impact` is informative, never a shrug.** State precisely what
     context is missing and where it would come from — the file, caller, or config
     the diff doesn't show — so the reviewer knows what to check to resolve it.
+  - `summary` / `detail?` — `summary` is the step's one-line scan line; `detail`
+    carries the mechanism, the before/after, and the consequence. Hold the `summary`
+    to ~15 plain words — see the **Prose contract** below.
   - `confidence` — `high|medium|low`: **your** confidence in the step's reading,
     stated honestly (ADR-0012). Confidence is about one step; you never emit an
-    overall verdict about the change.
+    overall verdict about the change. An all-`high` route is a smell to recheck — see
+    the **Prose contract** below.
   - `why_now` — one sentence: why this step sits at this position on the Review
     Route (its route rationale). Required on every step.
   - `review_prompts` — the comparisons and confirmations the reviewer should make:
@@ -181,7 +185,8 @@ Route policy below, not by copying the example's particular sequence. Structure:
     reviewer has a concrete comparison to make — for preserving, the preservation
     check; for unknown, the specific file, caller, or config to open to resolve the
     impact); optional on `test-change` and `mechanical-change`, where a forced
-    prompt only breeds boilerplate.
+    prompt only breeds boilerplate. **One comparison per prompt** — see the
+    **Prose contract** below.
   - `evidence` — ≥1 refs the step lands on: `{path}` (**a changed file — a
     `fragments.json` entry**; the cockpit links it to that file's L3 fragment)
     and/or `{note}` ("no test touches this"). A **widened-into** file has no diff
@@ -218,6 +223,32 @@ Route policy below, not by copying the example's particular sequence. Structure:
 
 Use the **raw `path` values** from `fragments.json` in `paths`/`evidence` — this
 is JSON data, not HTML.
+
+## Prose contract: write steps a reviewer can scan
+
+The schema guarantees *floors* — presence, integrity, closed vocabularies — **not
+narration quality** (ADR-0016). These three rules are that second layer; they are
+not validated, so they hold only because you hold them. Left unheld, the guided
+route degrades into a stack of undifferentiated changelog essays — the exact failure
+this surface exists to prevent.
+
+- **Summary budget — one scannable line, not a paragraph.** A step `summary` is
+  **≤ ~15 plain words naming what changed**; the mechanism, the before/after, and the
+  consequence all move to `detail`. *Why:* the `summary` is the reviewer's scan line
+  down the route — at a paragraph's length the scan is lost and every step reads the
+  same weight.
+- **One comparison per prompt — a single check the reviewer can act on.** Each
+  `review_prompt` makes **exactly one** comparison or confirmation; split a compound
+  "confirm A, B, and C" into separate prompts. *Why:* a reviewer answers a prompt by
+  doing the one thing it asks; a prompt that asks three gets one answer and two silent
+  skips.
+- **Confidence spread is honest — uniform `high` is a smell to recheck, not a verdict.**
+  Before you finish, re-read your hardest calls; a uniform `high` is the prompt to do
+  that, not proof you erred. Downgrade only where the evidence leaves a reading
+  genuinely shakier — if after an honest recheck they really are all well-supported,
+  they stay `high`. *Why:* the spread across `high|medium|low` shows the reviewer where
+  to spend scrutiny, and a manufactured downgrade misdirects it worse than an honest
+  flat `high`.
 
 ## Finishing
 
