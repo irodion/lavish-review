@@ -288,6 +288,28 @@ def _count_lines(path: Path) -> int:
         return sum(1 for _ in handle)
 
 
+def _is_disposition_only(feedback_raw: str) -> bool:
+    """True when a poll's prompts were **all** disposition updates — a state-only exchange.
+
+    A disposition click and a question travel the same feedback channel, so a poll that
+    carried only dispositions still lands here as a record (its ``answer`` is the loop's
+    ``"Recorded."`` ack that reopens the presence-gated channel — SKILL.md step 8b). The
+    bake already drops these from the rendered Q&A Log (``_without_disposition_prompts``);
+    stamping the discriminator here lets the served resume recap (issue #102) exclude them
+    from its answered-question tally **without re-parsing the poll TOON in the browser** —
+    ADR-0007 keeps that one extractor in Python.
+
+    A disposition is the sole ``tag: choice`` prompt (the in-page controls' channel, and
+    ``dispositions.parse_disposition_prompt``'s own first gate), so an exchange with at
+    least one prompt, all of tag ``choice``, is disposition-only. A poll with no parseable
+    prompts is **not** disposition-only — there is no disposition to have filtered out,
+    matching the bake, which only drops an exchange when its prompts were present and all
+    dispositions.
+    """
+    prompts = extract_prompts(feedback_raw)
+    return bool(prompts) and all(prompt.tag == "choice" for prompt in prompts)
+
+
 def append_exchange(
     qa_path: Path,
     *,
@@ -300,13 +322,15 @@ def append_exchange(
     ``feedback_raw`` is the prior poll's raw TOON (the untrusted question) captured
     verbatim — stored as a JSON string, so it is data, never code. ``ensure_ascii``
     is off so non-ASCII feedback round-trips, matching the UTF-8 the rest of the
-    skill writes.
+    skill writes. ``disposition_only`` marks a state-only ack so the served recap can
+    exclude it from its answered-question count without parsing TOON (:func:`_is_disposition_only`).
     """
     record = {
         "seq": _count_lines(qa_path) + 1,
         "ts": now.isoformat(),
         "feedback_raw": feedback_raw,
         "answer": answer,
+        "disposition_only": _is_disposition_only(feedback_raw),
     }
     line = json.dumps(record, ensure_ascii=False)
     with qa_path.open("a", encoding="utf-8") as handle:

@@ -73,7 +73,45 @@ def test_append_exchange_writes_one_jsonl_record(tmp_path: Path) -> None:
         "ts": _NOW.isoformat(),
         "feedback_raw": "status: feedback",
         "answer": "because X",
+        # No parseable prompt block → not a disposition-only ack (a real exchange).
+        "disposition_only": False,
     }
+
+
+# One tag:choice disposition prompt (the in-page control) — a state-only ack.
+_TOON_DISPOSITION_ROW = (
+    '  "7","Disposition set: t1.s1 -> looks-right","summary > button",'
+    "choice,disposition:looks-right\n"
+)
+# One tag:message prompt — a real question.
+_TOON_QUESTION_ROW = '  "8",what does the cap bound?,"",message,Freeform message\n'
+_NEXT_STEP = 'next_step: "..."\n'
+
+_TOON_DISPOSITION_ONLY = (
+    "prompts[1]{uid,prompt,selector,tag,text}:\n" + _TOON_DISPOSITION_ROW + _NEXT_STEP
+)
+_TOON_QUESTION = "prompts[1]{uid,prompt,selector,tag,text}:\n" + _TOON_QUESTION_ROW + _NEXT_STEP
+# A disposition and a question in the same poll — a mixed exchange, not disposition-only.
+_TOON_MIXED = (
+    "prompts[2]{uid,prompt,selector,tag,text}:\n"
+    + _TOON_DISPOSITION_ROW
+    + _TOON_QUESTION_ROW
+    + _NEXT_STEP
+)
+
+
+def test_append_exchange_flags_disposition_only_acks(tmp_path: Path) -> None:
+    # The served resume recap (issue #102) counts answered *questions* — so a poll that
+    # carried only a disposition (its answer is the loop's "Recorded." ack) must be marked
+    # disposition_only, while a real question or a mixed poll must not be.
+    qa = tmp_path / QA_NAME
+    append_exchange(qa, feedback_raw=_TOON_DISPOSITION_ONLY, answer="Recorded.", now=_NOW)
+    append_exchange(qa, feedback_raw=_TOON_QUESTION, answer="the cap bounds at 30s", now=_NOW)
+    append_exchange(qa, feedback_raw=_TOON_MIXED, answer="the cap bounds at 30s", now=_NOW)
+
+    lines = qa.read_text(encoding="utf-8").splitlines()
+    flags = [json.loads(line)["disposition_only"] for line in lines]
+    assert flags == [True, False, False]
 
 
 def test_append_exchange_increments_seq_and_appends(tmp_path: Path) -> None:

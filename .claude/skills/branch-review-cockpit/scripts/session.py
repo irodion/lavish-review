@@ -10,6 +10,7 @@ Usage (run from the repo root being reviewed):
 
     python3 .../scripts/session.py evaluate   # restore vs regenerate (step 0)
     python3 .../scripts/session.py start       # record the open session (after open)
+    python3 .../scripts/session.py resume      # bump the recap resume signal (/review-resume)
     python3 .../scripts/session.py end         # mark ended (/review-close)
 
 ``evaluate`` prints JSON the agent branches on; it never regenerates or opens
