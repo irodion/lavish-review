@@ -119,8 +119,11 @@ export function buildFixtureDocument() {
   doc.body.appendChild(main);
 
   // L0 is the route's stop zero: deterministic renderer output that Deck Mode
-  // relocates whole onto the Stage before the first Review Step.
-  const l0 = h(doc, "section.l0", null, [
+  // relocates whole onto the Stage before the first Review Step. The renderer stamps
+  // the per-route reading budgets here (issue #101) — core = the two behavior-affecting
+  // steps (8 + 40 = 48 lines → ~2 min), full = all three (+200 → 248 lines → ~10 min) —
+  // which the Map's route selector relays verbatim.
+  const l0 = h(doc, "section.l0", { "data-core-budget": "~2 min", "data-full-budget": "~10 min" }, [
     h(doc, "h2", null, ["Orientation"]),
     h(doc, "blockquote.goal-text", null, ["Ship the narrated review route."]),
     h(doc, "h3.analysis-title", null, ["Guided Deck presentation"]),

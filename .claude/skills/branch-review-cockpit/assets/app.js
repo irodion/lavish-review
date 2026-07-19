@@ -559,6 +559,40 @@
   // The deck's live state, or null until the deck is built (file:// / no steps).
   let deck = null;
 
+  // --- Core-first route (issue #101) ----------------------------------------
+  //
+  // The abridged "core" route walks only the steps whose Behavior Impact earns a
+  // first-pass read — behavior-change and unknown-impact — in Review Route order; the
+  // "full" route is every step, one selector click away. Switching route changes only
+  // *sequencing*: J/K, auto-advance, and the L0/selector budgets follow the active route,
+  // but the Map still shows every dot (nothing is hidden, only sequenced) and document
+  // mode / the baked record are untouched. Impact is read off the renderer's `data-impact`
+  // — the very attribute the dots already relay — never re-derived here.
+  const CORE_IMPACTS = { "behavior-change": true, "unknown-impact": true };
+  const ROUTES = [
+    { route: "core", name: "Core", budgetAttr: "data-core-budget" },
+    { route: "full", name: "Full", budgetAttr: "data-full-budget" },
+  ];
+
+  function isCoreStep(step) {
+    return !!CORE_IMPACTS[step.getAttribute("data-impact")];
+  }
+
+  // The steps of the active route, in Review Route order. Core falls back to the full
+  // route when it is empty (no core steps) — a route with nothing to walk is never active.
+  function routeSteps() {
+    if (deck.route === "core" && deck.coreSteps.length) {
+      return deck.coreSteps;
+    }
+    return deck.steps;
+  }
+
+  // "core " while the (non-empty) core route is active, else "" — the qualifier the
+  // auto-advance boundary message uses ("All core steps reviewed …" vs "All steps …").
+  function activeRouteLabel() {
+    return deck.route === "core" && deck.coreSteps.length ? "core " : "";
+  }
+
   // Disposition tallies over a set of steps — reviewed + one count per settable state.
   function dispositionCounts(steps) {
     const totals = { reviewed: 0 };
@@ -604,20 +638,93 @@
   // rail (built once at deck-build time) is simply re-appended. Iterating the
   // grouping captured at build time — not the live thread subtree — keeps the
   // currently-staged step (relocated onto the Stage) in its thread's dots and count.
+  // The honest per-route progress: "core R/N · full R/N reviewed" (issue #101). Both are
+  // always shown so the abridged pass never masquerades as complete coverage; the active
+  // route carries an `.active` class for emphasis. text only, from closed vocabularies.
+  function buildRouteTally() {
+    const tally = cell("span", "deck-tally", null);
+    const coreReviewed = dispositionCounts(deck.coreSteps).reviewed;
+    const fullReviewed = dispositionCounts(deck.steps).reviewed;
+    tally.appendChild(
+      cell(
+        "span",
+        "deck-frac deck-frac-core" + (deck.route === "core" ? " active" : ""),
+        "core " + coreReviewed + "/" + deck.coreSteps.length
+      )
+    );
+    tally.appendChild(document.createTextNode(" · "));
+    tally.appendChild(
+      cell(
+        "span",
+        "deck-frac deck-frac-full" + (deck.route === "full" ? " active" : ""),
+        "full " + fullReviewed + "/" + deck.steps.length
+      )
+    );
+    tally.appendChild(document.createTextNode(" reviewed"));
+    return tally;
+  }
+
+  // The route selector on the Map: Core / Full, each with the reading-time budget the
+  // renderer stamped on L0 (weight.py owns the pace policy; the deck relays the label, it
+  // never re-derives minutes). Rebuilt each render so the pressed state tracks deck.route;
+  // shown only when the review actually abridges (routeOffered).
+  function buildRouteSelector() {
+    const wrap = cell("div", "deck-route", null);
+    wrap.appendChild(cell("span", "deck-route-label", "Route"));
+    const group = cell("div", "deck-route-buttons", null);
+    ROUTES.forEach(function (spec) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "deck-route-btn";
+      btn.dataset.route = spec.route;
+      btn.setAttribute("aria-pressed", deck.route === spec.route ? "true" : "false");
+      btn.appendChild(cell("span", "deck-route-name", spec.name));
+      const budget = deck.orientation ? deck.orientation.getAttribute(spec.budgetAttr) : null;
+      if (budget) {
+        // Renderer-derived budget label, relayed verbatim (text only) — absent on an
+        // unsized or older page, where the button simply carries no sub-label.
+        btn.appendChild(cell("span", "deck-route-budget", budget));
+      }
+      btn.addEventListener("click", function () {
+        setRoute(spec.route);
+      });
+      group.appendChild(btn);
+    });
+    wrap.appendChild(group);
+    return wrap;
+  }
+
   function renderMap() {
     const map = deck.map;
     map.textContent = "";
 
     const overall = dispositionCounts(deck.steps);
     const progress = cell("div", "deck-progress", null);
-    progress.appendChild(cell("span", "deck-tally", overall.reviewed + "/" + deck.steps.length + " reviewed"));
+    if (deck.routeOffered) {
+      // The active route is marked on the fractions themselves (.deck-frac.active), not on
+      // the container — buildRouteTally owns that emphasis.
+      progress.appendChild(buildRouteTally());
+    } else {
+      progress.appendChild(cell("span", "deck-tally", overall.reviewed + "/" + deck.steps.length + " reviewed"));
+    }
     progress.appendChild(countBadge("looks-right", "●", overall["looks-right"]));
     progress.appendChild(countBadge("concern", "⚠", overall.concern));
     progress.appendChild(countBadge("follow-up", "?", overall["follow-up"]));
     progress.appendChild(countBadge("skipped", "↷", overall.skipped));
     map.appendChild(progress);
 
+    // The route selector rides at the top of the Map, above the thread list, when the
+    // review abridges — the whole change is still one selector click away.
+    if (deck.routeOffered) {
+      map.appendChild(buildRouteSelector());
+    }
+
     map.appendChild(cell("p", "deck-map-label", "Threads — review route"));
+
+    // While the abridged core route is active, dots for steps outside it are dimmed (a
+    // texture cue, never a colour) so the Map reads which stops the pass sequences —
+    // without hiding any (they stay clickable; nothing is hidden, only sequenced).
+    const coreActive = deck.route === "core" && deck.coreSteps.length > 0;
 
     deck.groups.forEach(function (group) {
       const steps = group.steps;
@@ -674,6 +781,9 @@
         }
         if (step === deck.staged) {
           dot.classList.add("current");
+        }
+        if (coreActive && !isCoreStep(step)) {
+          dot.classList.add("off-route"); // outside the active route — dimmed, not hidden
         }
         dot.setAttribute("title", step.id);
         dot.setAttribute("aria-label", "Stage step " + step.id);
@@ -976,6 +1086,27 @@
     }
   }
 
+  // Switch the active route (issue #101). Switching only re-sequences J/K and auto-advance
+  // — it never hides a step or force-navigates, so a step that belongs to both routes stays
+  // staged (the acceptance criterion), and one outside the new route stays staged too, just
+  // off-route until the next move. Re-renders the Map (selector, dual progress, off-route
+  // dots) and persists the choice so an injection reload restores it (#112). Inert unless
+  // the review abridges and the route actually changes; an empty core route never activates.
+  function setRoute(route) {
+    if (!deck || !deck.routeOffered || deck.route === route) {
+      return;
+    }
+    if (route !== "core" && route !== "full") {
+      return;
+    }
+    if (route === "core" && !deck.coreSteps.length) {
+      return;
+    }
+    deck.route = route;
+    renderMap();
+    persistUiState();
+  }
+
   // --- Deck keyboard flow + Stage dispositions (ADR-0014/0016, issue #68) ----
   //
   // On the Stage, an oversized L/C/F/S control (with visible key hints) sets the
@@ -1089,46 +1220,64 @@
     advanceToNextUnreviewed();
   }
 
-  // Auto-advance target: the next step with no disposition, searching forward in
-  // Review Route order and wrapping once (so steps disposed out of order are still
-  // reached). It never lands on a reviewed step — only unreviewed ones — and with
-  // none left anywhere it stays on the current step and says so.
+  // Auto-advance target: the next unreviewed step of the ACTIVE route, searching forward
+  // in Review Route order and wrapping once (so steps disposed out of order are still
+  // reached). It never lands on a reviewed step — only unreviewed ones — and with none
+  // left in the route it stays on the current step and says so. Scanning the full step
+  // list in order (filtered to the route) keeps the search correct even when the staged
+  // step is itself off the active route (reached by a dot click): it resumes into the route.
   function advanceToNextUnreviewed() {
-    const steps = deck.steps;
-    const start = steps.indexOf(deck.staged);
-    // Step through every *other* step once, forward and wrapping (step < length
-    // stops before returning to `start`), landing on the first unreviewed one.
-    for (let step = 1; step < steps.length; step++) {
-      const candidate = steps[(start + step) % steps.length];
-      if (!candidate.getAttribute("data-disposition")) {
+    const all = deck.steps;
+    const inRoute = new Set(routeSteps());
+    const start = all.indexOf(deck.staged);
+    for (let step = 1; step < all.length; step++) {
+      const candidate = all[(start + step) % all.length];
+      if (inRoute.has(candidate) && !candidate.getAttribute("data-disposition")) {
         stageStep(candidate);
         return;
       }
     }
-    announceStage("All steps reviewed — nothing left to advance to.");
+    announceStage("All " + activeRouteLabel() + "steps reviewed — nothing left to advance to.");
   }
 
-  // J/K free navigation: one step forward/back in Review Route order, clamped at
-  // the route's ends (no wrap). Unlike auto-advance, this is NOT gated by
-  // disposition — it lands on reviewed steps too, so the reviewer can revisit.
+  // J/K free navigation: one step forward/back along the ACTIVE route, clamped at the
+  // route's ends (no wrap). Unlike auto-advance, this is NOT gated by disposition — it
+  // lands on reviewed steps too, so the reviewer can revisit. Off-route steps (reached by
+  // a dot click) are stepped over, so J/K always land on the route the reviewer chose.
   function navigateStage(delta) {
+    const route = routeSteps();
     if (deck.orientationStaged) {
-      if (delta > 0) {
-        stageStep(deck.steps[0]);
+      if (delta > 0 && route.length) {
+        stageStep(route[0]); // stop zero → the head of the active route
       }
       return;
     }
-    const steps = deck.steps;
-    const from = steps.indexOf(deck.staged);
-    if (from === 0 && delta < 0 && deck.orientation) {
+    const all = deck.steps;
+    const from = all.indexOf(deck.staged);
+    if (from === -1) {
+      return;
+    }
+    const inRoute = new Set(route);
+    if (delta > 0) {
+      // The next active-route step after the staged one, in full order — clamp at the end.
+      for (let i = from + 1; i < all.length; i++) {
+        if (inRoute.has(all[i])) {
+          stageStep(all[i]);
+          return;
+        }
+      }
+      return;
+    }
+    // Backward: the previous active-route step; with none before it, back to stop zero.
+    for (let i = from - 1; i >= 0; i--) {
+      if (inRoute.has(all[i])) {
+        stageStep(all[i]);
+        return;
+      }
+    }
+    if (deck.orientation) {
       stageOrientation();
-      return;
     }
-    const next = from + delta;
-    if (from === -1 || next < 0 || next >= steps.length) {
-      return;
-    }
-    stageStep(steps[next]);
   }
 
   // The single global keydown handler, active only while the deck is showing (the
@@ -1324,6 +1473,7 @@
     }
     writeUiState({
       mode: deck.mode,
+      route: deck.route, // the chosen core/full pass survives the injection reload (#101)
       stop: currentStopId(),
       drafts: snapshotDrafts(),
       open: snapshotOpen(),
@@ -1343,6 +1493,14 @@
     }
     const state = readUiState();
     if (state) {
+      // Restore the chosen route first, so the Map (selector, dual progress, off-route
+      // dots) and every budget reflect it before the stop is staged. Ignored unless the
+      // review abridges and the value is a known route — a stale/foreign value is discarded.
+      // A restored L0 stop may short-circuit staging without a render, so re-render here.
+      if (deck.routeOffered && (state.route === "core" || state.route === "full")) {
+        deck.route = state.route;
+        renderMap();
+      }
       if (state.open && typeof state.open === "object") {
         Object.keys(state.open).forEach(function (id) {
           const panel = document.getElementById(id);
@@ -1438,6 +1596,13 @@
       return; // nothing to stage — leave the document as-is
     }
 
+    // The abridged core-first route (issue #101) is offered only when it genuinely
+    // abridges: a proper, non-empty subset. When every step is core (or none is), core ===
+    // full — there is nothing to select, so the deck behaves exactly as the single full
+    // route (backward-compatible with a review that has no such split).
+    const coreSteps = steps.filter(isCoreStep);
+    const routeOffered = coreSteps.length > 0 && coreSteps.length < steps.length;
+
     const container = document.createElement("div");
     container.className = "deck";
     const map = document.createElement("nav");
@@ -1464,6 +1629,9 @@
       toggle: toggle,
       groups: groups,
       steps: steps,
+      coreSteps: coreSteps,
+      routeOffered: routeOffered,
+      route: "full", // full is the default; the reviewer opts into the abridged core pass
       orientation: orientation,
       orientationStaged: false,
       orientationHome: null,

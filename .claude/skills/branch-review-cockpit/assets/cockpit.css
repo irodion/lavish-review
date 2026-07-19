@@ -841,6 +841,63 @@ body.deck-active .deck {
 .deck-count.follow-up { color: var(--warn); }
 .deck-count.skipped { color: var(--muted); }
 
+/* Dual per-route progress (issue #101): "core R/N · full R/N reviewed" — both always
+   shown so the abridged pass never masquerades as complete coverage. The inactive route
+   is muted; the active one carries the weight. Emphasis is weight/tone, never a new
+   colour meaning (judgment-color discipline). */
+.deck-frac { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.deck-frac.active { font-weight: 600; color: var(--fg); }
+
+/* --- Route selector: the core-first pass vs the full route (issue #101) ---
+   A small segmented control at the top of the Map. Neutral surface — the selection is
+   navigation, not judgment — so no judgment colour; the pressed leg is marked by fill
+   and weight, echoing the disposition control's pressed treatment. */
+.deck-route {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.6rem 0 0.2rem;
+}
+.deck-route-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.deck-route-buttons {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.deck-route-btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.deck-route-btn:hover { color: var(--fg); }
+.deck-route-btn[aria-pressed="true"] {
+  color: var(--fg);
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.deck-route-name { font-weight: 600; }
+.deck-route-budget {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  color: var(--muted);
+}
+
 .deck-map-label {
   margin: 0.85rem 0 0.35rem;
   font-size: 0.7rem;
@@ -929,6 +986,10 @@ body.deck-active .deck {
 .deck-dot[data-disposition="follow-up"] { background: var(--warn); border-color: var(--warn); }
 .deck-dot[data-disposition="skipped"] { background: var(--muted); border-color: var(--muted); }
 .deck-dot.current { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* While the abridged core route is active (issue #101), dots outside it are dimmed — a
+   texture cue that the pass sequences past them, never a hide: they stay in place and
+   clickable, so nothing is hidden, only sequenced. */
+.deck-dot.off-route { opacity: 0.35; }
 
 .deck-file {
   display: flex;
