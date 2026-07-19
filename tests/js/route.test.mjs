@@ -152,10 +152,10 @@ test("switching to core keeps a staged non-core step (nothing is force-navigated
 });
 
 test("a review that does not abridge shows no selector and a single fraction", () => {
-  // Make every step core (all behavior-affecting): core === full, so there is nothing to
-  // select and the deck behaves exactly as the single full route.
+  // Make every step core (the renderer stamps data-core on it): core === full, so there is
+  // nothing to select and the deck behaves exactly as the single full route.
   const doc = buildFixtureDocument();
-  doc.getElementById("t2.s1").setAttribute("data-impact", "behavior-change");
+  doc.getElementById("t2.s1").setAttribute("data-core", "true");
   const { document } = loadCockpit({ doc });
 
   assert.equal(document.querySelector(".deck-route"), null, "no route selector");

@@ -566,31 +566,34 @@
   // "full" route is every step, one selector click away. Switching route changes only
   // *sequencing*: J/K, auto-advance, and the L0/selector budgets follow the active route,
   // but the Map still shows every dot (nothing is hidden, only sequenced) and document
-  // mode / the baked record are untouched. Impact is read off the renderer's `data-impact`
-  // — the very attribute the dots already relay — never re-derived here.
-  const CORE_IMPACTS = { "behavior-change": true, "unknown-impact": true };
+  // mode / the baked record are untouched. Which steps are core is the renderer's call
+  // (CORE_IMPACTS in render.py), stamped as `data-core` and relayed here — never
+  // re-derived in JS, the same Python-owned-policy/relay posture as data-weight-bucket.
   const ROUTES = [
     { route: "core", name: "Core", budgetAttr: "data-core-budget" },
     { route: "full", name: "Full", budgetAttr: "data-full-budget" },
   ];
 
   function isCoreStep(step) {
-    return !!CORE_IMPACTS[step.getAttribute("data-impact")];
+    return step.getAttribute("data-core") === "true";
+  }
+
+  // Whether the (non-empty) core route is the active one — the single derivation of that
+  // fact, shared by routeSteps(), activeRouteLabel(), and renderMap()'s off-route dimming.
+  function coreRouteActive() {
+    return deck.route === "core" && deck.coreSteps.length > 0;
   }
 
   // The steps of the active route, in Review Route order. Core falls back to the full
   // route when it is empty (no core steps) — a route with nothing to walk is never active.
   function routeSteps() {
-    if (deck.route === "core" && deck.coreSteps.length) {
-      return deck.coreSteps;
-    }
-    return deck.steps;
+    return coreRouteActive() ? deck.coreSteps : deck.steps;
   }
 
   // "core " while the (non-empty) core route is active, else "" — the qualifier the
   // auto-advance boundary message uses ("All core steps reviewed …" vs "All steps …").
   function activeRouteLabel() {
-    return deck.route === "core" && deck.coreSteps.length ? "core " : "";
+    return coreRouteActive() ? "core " : "";
   }
 
   // Disposition tallies over a set of steps — reviewed + one count per settable state.
@@ -641,10 +644,9 @@
   // The honest per-route progress: "core R/N · full R/N reviewed" (issue #101). Both are
   // always shown so the abridged pass never masquerades as complete coverage; the active
   // route carries an `.active` class for emphasis. text only, from closed vocabularies.
-  function buildRouteTally() {
+  function buildRouteTally(fullReviewed) {
     const tally = cell("span", "deck-tally", null);
     const coreReviewed = dispositionCounts(deck.coreSteps).reviewed;
-    const fullReviewed = dispositionCounts(deck.steps).reviewed;
     tally.appendChild(
       cell(
         "span",
@@ -702,8 +704,9 @@
     const progress = cell("div", "deck-progress", null);
     if (deck.routeOffered) {
       // The active route is marked on the fractions themselves (.deck-frac.active), not on
-      // the container — buildRouteTally owns that emphasis.
-      progress.appendChild(buildRouteTally());
+      // the container — buildRouteTally owns that emphasis. Reuse the full reviewed count
+      // already computed above rather than re-tallying deck.steps.
+      progress.appendChild(buildRouteTally(overall.reviewed));
     } else {
       progress.appendChild(cell("span", "deck-tally", overall.reviewed + "/" + deck.steps.length + " reviewed"));
     }
@@ -724,7 +727,7 @@
     // While the abridged core route is active, dots for steps outside it are dimmed (a
     // texture cue, never a colour) so the Map reads which stops the pass sequences —
     // without hiding any (they stay clickable; nothing is hidden, only sequenced).
-    const coreActive = deck.route === "core" && deck.coreSteps.length > 0;
+    const coreActive = coreRouteActive();
 
     deck.groups.forEach(function (group) {
       const steps = group.steps;
@@ -1099,9 +1102,6 @@
     if (route !== "core" && route !== "full") {
       return;
     }
-    if (route === "core" && !deck.coreSteps.length) {
-      return;
-    }
     deck.route = route;
     renderMap();
     persistUiState();
@@ -1257,25 +1257,17 @@
     if (from === -1) {
       return;
     }
+    // Scan in the requested direction (delta is ±1) for the nearest active-route step,
+    // stepping over any off-route step reached by a dot click. Forward clamps silently at
+    // the route's end; backward with none before it falls back to stop zero.
     const inRoute = new Set(route);
-    if (delta > 0) {
-      // The next active-route step after the staged one, in full order — clamp at the end.
-      for (let i = from + 1; i < all.length; i++) {
-        if (inRoute.has(all[i])) {
-          stageStep(all[i]);
-          return;
-        }
-      }
-      return;
-    }
-    // Backward: the previous active-route step; with none before it, back to stop zero.
-    for (let i = from - 1; i >= 0; i--) {
+    for (let i = from + delta; i >= 0 && i < all.length; i += delta) {
       if (inRoute.has(all[i])) {
         stageStep(all[i]);
         return;
       }
     }
-    if (deck.orientation) {
+    if (delta < 0 && deck.orientation) {
       stageOrientation();
     }
   }

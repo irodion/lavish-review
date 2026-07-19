@@ -83,6 +83,12 @@ function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence,
   // data-weight + data-weight-bucket (issue #100) are the renderer-derived reading weight
   // and its Map-dot size tier the deck relays onto the dot.
   const attrs = { "data-impact": impact };
+  // Mirror the renderer: it stamps data-core on behavior-change/unknown-impact steps
+  // (CORE_IMPACTS) so the deck relays core-route membership (issue #101) rather than
+  // re-deriving it — the harness fixture must carry the same flag.
+  if (impact === "behavior-change" || impact === "unknown-impact") {
+    attrs["data-core"] = "true";
+  }
   if (weight !== undefined) {
     attrs["data-weight"] = String(weight);
   }
