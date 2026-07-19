@@ -180,6 +180,15 @@ def test_step_weight_unparseable_hunk_flags_without_counting() -> None:
     assert step_weight([{"path": "a.py", "hunk": 1}], files) == StepWeight(0, True)
 
 
+def test_step_weight_malformed_hunk_id_degrades_without_crashing() -> None:
+    # A malformed analysis could carry a non-int hunk id — including an unhashable list or
+    # dict that would crash the seen-set. It must degrade to an approximate floor, not raise.
+    files = {"a.py": _file("a.py", hunks=[_hunk(1, "@@ -1,4 +1,4 @@", lines=4)])}
+    assert step_weight([{"path": "a.py", "hunk": [1, 2]}], files) == StepWeight(0, True)
+    assert step_weight([{"path": "a.py", "hunk": {"x": 1}}], files) == StepWeight(0, True)
+    assert step_weight([{"path": "a.py", "hunk": "1"}], files) == StepWeight(0, True)
+
+
 def test_step_weight_file_level_ref_superseded_by_a_hunk_ref_to_the_same_file() -> None:
     # A step that cites both the whole file and a specific hunk of it must not count the
     # file's lines twice — the precise hunk supersedes the file-level ref (finding #2).

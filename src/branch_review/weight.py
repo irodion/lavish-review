@@ -195,11 +195,18 @@ def step_weight(evidence: object, files_by_path: Mapping[str, Mapping[str, objec
             approximate = True
             continue
         if "hunk" in ref:
-            hunk_key = (path, ref["hunk"])
+            hunk_id = ref["hunk"]
+            if isinstance(hunk_id, bool) or not isinstance(hunk_id, int):
+                # A hunk id is an int (analysis schema 0.4). A malformed one — a str, or
+                # an unhashable list/dict that would crash the seen-set — can't be sized or
+                # safely keyed, so it degrades to an approximate floor rather than raising.
+                approximate = True
+                continue
+            hunk_key = (path, hunk_id)
             if hunk_key in seen_hunks:
                 continue
             seen_hunks.add(hunk_key)
-            result = hunk_reading_size(entry, ref["hunk"])
+            result = hunk_reading_size(entry, hunk_id)
             if result is None:
                 approximate = True
             else:
