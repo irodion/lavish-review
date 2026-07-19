@@ -915,6 +915,10 @@ body.deck-active .deck {
 .deck-dot[data-weight-bucket="w2"] { --dot-w: 20px; }
 .deck-dot[data-weight-bucket="w3"] { --dot-w: 32px; }
 .deck-dot[data-weight-bucket="w4"] { --dot-w: 46px; }
+/* A wholly-unsized stop (note-only evidence: cost unknown) must NOT read as the smallest
+   dot — that would say "trivial". A mid width plus a dashed edge marks it "not sized",
+   a texture cue (never a colour), echoing the dashed weight-approx chip. */
+.deck-dot[data-weight-bucket="unsized"] { --dot-w: 20px; border-style: dashed; }
 /* An unreviewed dot hints its step's Behavior Impact (ADR-0016): the attention-worthy
    impacts get a tinted border so the Map reads by change-character before any
    disposition is set. A set disposition (below) fills the dot and wins. */

@@ -134,11 +134,11 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
     # Every step carries a derived reading weight on its panel (a number + its Map-dot
     # size tier) and a chip in its summary (document + Stage). This fixture's hunk header
     # is degenerate ("@@") and t1.s2 is note-only, so nothing is measurable: the weight is
-    # an approximate floor of 0 (→ w1), shown as "unsized" — never a "~0 lines · <1 min"
-    # budget that would read as negligible.
+    # an approximate floor of 0, shown as "unsized" — never a "~0 lines · <1 min" budget
+    # that would read as negligible, and its dot is bucketed "unsized", not the w1 smallest.
     assert (
         '<details class="step" id="t1.s1" data-impact="behavior-change"'
-        ' data-weight="0" data-weight-bucket="w1">' in html
+        ' data-weight="0" data-weight-bucket="unsized">' in html
     )
     assert '<span class="chip weight weight-approx"' in html
     assert ">unsized</span>" in html
@@ -187,12 +187,13 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
     assert s1_tag in html
     assert '<span class="chip weight" title=' in html
     assert "24 lines" in html
-    # t1.s2 is note-only, so the thread/route rollups become an explicit lower bound: at
-    # least the 24 measured lines, with the unmeasured note evidence on top (≥, not ~).
+    # t1.s2 is note-only, so the line count becomes an explicit floor (≥ the 24 measured,
+    # with the unmeasured note on top) while the time stays a rough "~" estimate — never a
+    # rounded-up "≥ min" bound.
     assert '<section class="thread" id="t1" data-weight="24">' in html
     assert '<span class="thread-weight" data-weight="24"' in html
-    assert 'title="≥24 lines to read">≥1 min</span>' in html
-    assert "Reading weight: ≥24 lines · ≥1 min at reading pace (~25 lines/min)" in html
+    assert 'title="≥24 lines to read">~1 min</span>' in html
+    assert "Reading weight: ≥24 lines · ~1 min at reading pace (~25 lines/min)" in html
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 

@@ -251,16 +251,17 @@ def lines_label(weight: StepWeight) -> str:
 def minutes_label(weight: StepWeight) -> str:
     """A compact reading-time label at reading pace that never fakes a sub-minute budget.
 
-    Exact → ``~5 min`` (``<1 min`` for a genuinely tiny, fully-measured load). Approximate
-    with a measured floor → a lower bound ``≥5 min``. Approximate with nothing measured →
-    ``unknown``: no time is estimated for evidence that carries no measurable lines (the
-    unsized portion is the whole of it, so any minute figure would mislead).
+    Always a rough ``~5 min`` (``<1 min`` for a genuinely tiny load), or ``unknown`` when
+    nothing could be measured — no time is estimated for evidence that carries no
+    measurable lines. Deliberately **not** a strict ``≥`` bound even for an approximate
+    weight: the minutes come from dividing the (integer, floor-honest) line count by an
+    approximate pace and rounding *up* (:func:`reading_minutes`), so a ``≥`` claim would
+    round the lower bound the wrong way (26 lines is ~1.04 min, not "at least 2"). The
+    line count carries the honest ``≥`` floor; the time stays an estimate.
     """
     if weight.approximate and weight.lines == 0:
         return "unknown"
     minutes = reading_minutes(weight.lines)
-    if weight.approximate:
-        return f"≥{minutes} min"
     return f"~{minutes} min" if minutes >= 1 else "<1 min"
 
 
@@ -275,3 +276,17 @@ def weight_bucket(lines: int) -> str:
         if lines < bound:
             return bucket
     return "w4"
+
+
+def dot_bucket(weight: StepWeight) -> str:
+    """The Map-dot class for a step: its size tier, or ``unsized`` when the weight is an
+    approximate floor of 0.
+
+    A wholly-unsized stop (note-only/unsized evidence) has ``lines == 0``, which would
+    otherwise size to ``w1`` — the *smallest* dot — reading as "trivial" exactly when the
+    renderer is labelling its cost unknown. ``unsized`` gets a distinct stylesheet
+    treatment instead, so the Map never shows an unmeasured stop as the lightest one.
+    """
+    if weight.approximate and weight.lines == 0:
+        return "unsized"
+    return weight_bucket(weight.lines)

@@ -11,6 +11,7 @@ from branch_review.weight import (
     FILE_LEVEL_CAP,
     LINES_PER_MINUTE,
     StepWeight,
+    dot_bucket,
     file_change_size,
     file_ref_weight,
     hunk_reading_size,
@@ -244,15 +245,28 @@ def test_lines_label_marks_lower_bounds_and_unsized_evidence() -> None:
     assert lines_label(StepWeight(0, False)) == "0 lines"
 
 
-def test_minutes_label_never_fakes_a_sub_minute_budget_for_unsized_evidence() -> None:
+def test_minutes_label_is_a_rough_estimate_never_a_rounded_up_lower_bound() -> None:
     assert minutes_label(StepWeight(0, False)) == "<1 min"
     assert minutes_label(StepWeight(LINES_PER_MINUTE, False)) == "~1 min"
     assert minutes_label(StepWeight(LINES_PER_MINUTE * 3 + 1, False)) == "~4 min"
-    # Approximate but measured → a lower bound (never "<1 min").
-    assert minutes_label(StepWeight(LINES_PER_MINUTE * 2, True)) == "≥2 min"
-    assert minutes_label(StepWeight(5, True)) == "≥1 min"
-    # Approximate with nothing measured → "unknown", not a sub-minute figure.
+    # Approximate stays a rough "~" estimate — never "≥N min", which (with ceil rounding)
+    # would round the lower bound upward: 26 lines is ~1.04 min, not "at least 2".
+    assert minutes_label(StepWeight(LINES_PER_MINUTE + 1, True)) == "~2 min"
+    assert minutes_label(StepWeight(5, True)) == "~1 min"
+    # Approximate with nothing measurable → "unknown", not a sub-minute figure.
     assert minutes_label(StepWeight(0, True)) == "unknown"
+
+
+def test_dot_bucket_never_sizes_an_unsized_stop_as_the_smallest_dot() -> None:
+    assert dot_bucket(StepWeight(8, False)) == "w1"
+    assert dot_bucket(StepWeight(200, False)) == "w4"
+    # Approximate but measured → a real size tier from its floor.
+    assert dot_bucket(StepWeight(200, True)) == "w4"
+    # An exact zero (a step citing nothing to read) is a genuine smallest dot.
+    assert dot_bucket(StepWeight(0, False)) == "w1"
+    # A wholly-unsized weight (approximate floor of 0) is "unsized", NOT the w1 smallest —
+    # it must not read as the lightest stop when its cost is actually unknown.
+    assert dot_bucket(StepWeight(0, True)) == "unsized"
 
 
 # --- Map-dot size tier (Python-owned policy the Deck JS relays verbatim) -------

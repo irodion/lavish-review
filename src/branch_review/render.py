@@ -28,11 +28,11 @@ from branch_review.lint import lint_cockpit
 from branch_review.weight import (
     LINES_PER_MINUTE,
     StepWeight,
+    dot_bucket,
     lines_label,
     minutes_label,
     rollup,
     step_weight,
-    weight_bucket,
 )
 
 DEFAULT_RUN_DIR = Path(".review-agent")
@@ -301,7 +301,7 @@ def _render_step(
     weight = step_weight(step.get("evidence"), files_by_path)
     parts = [
         f'<details class="step" id="{escape_text(sid)}" data-impact="{escape_text(impact)}"'
-        f' data-weight="{weight.lines}" data-weight-bucket="{weight_bucket(weight.lines)}">',
+        f' data-weight="{weight.lines}" data-weight-bucket="{dot_bucket(weight)}">',
         "<summary>",
         f'<span class="chip impact-{escape_text(impact)}">{escape_text(impact)}</span> ',
         fragment(_text(step.get("summary"))),
