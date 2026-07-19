@@ -151,6 +151,13 @@ def test_step_weight_note_only_is_zero_and_approximate() -> None:
     assert step_weight([{"note": "poetry.lock churn omitted"}], {}) == StepWeight(0, True)
 
 
+def test_step_weight_malformed_ref_still_flags_approximate() -> None:
+    # A ref with no path and no string note ({} or a non-string note) is unsizable
+    # evidence: it must make the total a floor, never a fabricated-exact 0.
+    assert step_weight([{}], {}) == StepWeight(0, True)
+    assert step_weight([{"note": 123}], {}) == StepWeight(0, True)
+
+
 def test_step_weight_hunk_with_a_note_is_sized_by_the_hunk_not_flagged() -> None:
     # The example fixture's shape: one ref carrying path + hunk + an explanatory note.
     files = {"a.py": _file("a.py", hunks=[_hunk(1, "@@ -1,4 +1,10 @@", lines=13)])}

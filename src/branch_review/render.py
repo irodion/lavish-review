@@ -364,10 +364,13 @@ def _render_thread(
     # Reading cost rolled up from the thread's steps — a per-thread total the Map reuses
     # (the derived-over-authored rule: no thread weight is ever in the analysis).
     weight = rollup(step_weight(step.get("evidence"), files_by_path) for step in steps)
+    # The Map shows this thread rollup as a bare minute figure, so its tooltip states the
+    # reading-pace heuristic too — a rollup is never a bare number the reviewer can't
+    # recalibrate (weight.py's contract), matching the L0 route estimate.
     weight_title = (
         "reading time unknown — cited evidence carries no measurable lines"
         if weight.approximate and weight.lines == 0
-        else f"{lines_label(weight)} to read"
+        else f"{lines_label(weight)} to read (~{LINES_PER_MINUTE} lines/min)"
     )
     return "\n".join(
         [

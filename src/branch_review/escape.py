@@ -394,8 +394,10 @@ def fragment_index_entry(
     merged verbatim into the entry — the classifier's per-file line counts (``added``,
     ``deleted``, ``binary``) that survive even when the body does. ``hunks`` (when
     given) is the file's per-hunk index from :func:`file_diff_fragment` —
-    ``[{index, anchor, header_html}, …]``, the manifest side of the Hunk Anchorer
-    (ADR-0014) that lets a ``{path, hunk}`` evidence ref link to the exact hunk. It rides only on
+    ``[{index, anchor, header_html, lines}, …]`` (``lines`` is the hunk's rendered
+    diff-body count, consumed by :mod:`branch_review.weight`), the manifest side of the
+    Hunk Anchorer (ADR-0014) that lets a ``{path, hunk}`` evidence ref link to the exact
+    hunk. It rides only on
     an included body — an **omitted** file has no fragment, hence no hunk ids (the key
     is simply absent, never ``[]`` masquerading as "no hunks in a shown diff"). Keeping
     the whole entry schema in this one builder is deliberate: ``fragments.json`` has a

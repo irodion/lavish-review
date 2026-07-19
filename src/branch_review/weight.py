@@ -183,10 +183,12 @@ def step_weight(evidence: object, files_by_path: Mapping[str, Mapping[str, objec
     for ref in refs:
         path = ref.get("path")
         if not isinstance(path, str):
-            # Note-only (or malformed) evidence: nothing to size, but its presence
-            # means the step's real reading load is larger than what we counted.
-            if isinstance(ref.get("note"), str):
-                approximate = True
+            # A ref with no sizeable path — a note-only ref, or a malformed one (``{}`` or
+            # a non-string ``note``): its evidence exists but cannot be sized, so the total
+            # becomes a floor rather than a fabricated-exact number. (A validated analysis
+            # shouldn't carry a malformed ref, but the module's guarantee holds regardless
+            # of input.)
+            approximate = True
             continue
         entry = files_by_path.get(path)
         if entry is None:

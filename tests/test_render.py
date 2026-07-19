@@ -192,7 +192,8 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
     # rounded-up "≥ min" bound.
     assert '<section class="thread" id="t1" data-weight="24">' in html
     assert '<span class="thread-weight" data-weight="24"' in html
-    assert 'title="≥24 lines to read">~1 min</span>' in html
+    # The thread tooltip states the reading-pace heuristic too, like the L0 route estimate.
+    assert 'title="≥24 lines to read (~25 lines/min)">~1 min</span>' in html
     assert "Reading weight: ≥24 lines · ~1 min at reading pace (~25 lines/min)" in html
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
