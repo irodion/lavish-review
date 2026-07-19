@@ -360,9 +360,7 @@ def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict
         # (see the module note above) — so a ``\r`` or Unicode separator embedded in a hunk
         # body cannot forge an extra line and inflate this otherwise-exact count.
         lines = sum(1 for line in hunk_text.split("\n")[1:] if line[:1] in (" ", "+", "-"))
-        hunks.append(
-            {"index": index, "anchor": anchor, "header_html": header_html, "lines": lines}
-        )
+        hunks.append({"index": index, "anchor": anchor, "header_html": header_html, "lines": lines})
         parts.append(
             f'<section class="hunk" id="{anchor}">'
             f'<pre class="diff">{fragment(hunk_text)}</pre>'

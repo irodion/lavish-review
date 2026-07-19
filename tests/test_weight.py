@@ -23,7 +23,14 @@ from branch_review.weight import (
 )
 
 
-def _file(path: str, *, added: int = 0, deleted: int = 0, omitted: bool = False, hunks=None):
+def _file(
+    path: str,
+    *,
+    added: int = 0,
+    deleted: int = 0,
+    omitted: bool = False,
+    hunks: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     """A fragments-manifest file entry, shaped like the collector's output."""
     entry: dict[str, object] = {
         "path": path,
@@ -36,7 +43,7 @@ def _file(path: str, *, added: int = 0, deleted: int = 0, omitted: bool = False,
     return entry
 
 
-def _hunk(index: int, header: str, lines: int | None = None):
+def _hunk(index: int, header: str, lines: int | None = None) -> dict[str, object]:
     """A manifest hunk entry — header crossed through the Escape Boundary like the real one.
 
     ``lines`` is the collector's exact per-hunk count (issue #100); omit it to model an
@@ -225,17 +232,27 @@ def test_reading_minutes_rounds_up_from_the_stated_pace() -> None:
 # --- Labels --------------------------------------------------------------------
 
 
-def test_lines_label_pluralizes_and_marks_approximate() -> None:
+def test_lines_label_marks_lower_bounds_and_unsized_evidence() -> None:
     assert lines_label(StepWeight(1, False)) == "1 line"
     assert lines_label(StepWeight(24, False)) == "24 lines"
-    assert lines_label(StepWeight(24, True)) == "~24 lines"
-    assert lines_label(StepWeight(0, True)) == "~0 lines"
+    # Approximate but measured → an explicit lower bound, not a vague "~".
+    assert lines_label(StepWeight(24, True)) == "≥24 lines"
+    # Approximate with nothing measured → "unsized", never "~0 lines" (which reads as
+    # negligible when the truth is "could not be sized").
+    assert lines_label(StepWeight(0, True)) == "unsized"
+    # Exact zero (a step citing no sizeable evidence) is a genuine zero, not unsized.
+    assert lines_label(StepWeight(0, False)) == "0 lines"
 
 
-def test_minutes_label_floors_below_a_minute() -> None:
-    assert minutes_label(0) == "<1 min"
-    assert minutes_label(LINES_PER_MINUTE) == "~1 min"
-    assert minutes_label(LINES_PER_MINUTE * 3 + 1) == "~4 min"
+def test_minutes_label_never_fakes_a_sub_minute_budget_for_unsized_evidence() -> None:
+    assert minutes_label(StepWeight(0, False)) == "<1 min"
+    assert minutes_label(StepWeight(LINES_PER_MINUTE, False)) == "~1 min"
+    assert minutes_label(StepWeight(LINES_PER_MINUTE * 3 + 1, False)) == "~4 min"
+    # Approximate but measured → a lower bound (never "<1 min").
+    assert minutes_label(StepWeight(LINES_PER_MINUTE * 2, True)) == "≥2 min"
+    assert minutes_label(StepWeight(5, True)) == "≥1 min"
+    # Approximate with nothing measured → "unknown", not a sub-minute figure.
+    assert minutes_label(StepWeight(0, True)) == "unknown"
 
 
 # --- Map-dot size tier (Python-owned policy the Deck JS relays verbatim) -------

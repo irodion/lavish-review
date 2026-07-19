@@ -161,9 +161,7 @@ def file_ref_weight(entry: Mapping[str, object]) -> int:
     return min(file_change_size(entry), FILE_LEVEL_CAP)
 
 
-def step_weight(
-    evidence: object, files_by_path: Mapping[str, Mapping[str, object]]
-) -> StepWeight:
+def step_weight(evidence: object, files_by_path: Mapping[str, Mapping[str, object]]) -> StepWeight:
     """The derived reading weight for one step, summed over its evidence refs.
 
     Duplicate refs (the same hunk, or the same file at file level, cited twice) are
@@ -236,15 +234,33 @@ def reading_minutes(lines: int) -> int:
 
 
 def lines_label(weight: StepWeight) -> str:
-    """A compact lines label: ``24 lines`` (sized) or ``~24 lines`` (approximate floor)."""
+    """A compact lines label that never understates unmeasured evidence.
+
+    Exact → ``24 lines``. Approximate with a measured floor → an explicit lower bound
+    ``≥24 lines``. Approximate with **nothing** measured (note-only/unsized evidence, a
+    floor of 0) → ``unsized`` — never ``~0 lines``, which would read as "negligible" when
+    the truth is "we could not size it".
+    """
+    if weight.approximate and weight.lines == 0:
+        return "unsized"
     unit = "line" if weight.lines == 1 else "lines"
-    prefix = "~" if weight.approximate else ""
+    prefix = "≥" if weight.approximate else ""
     return f"{prefix}{weight.lines} {unit}"
 
 
-def minutes_label(lines: int) -> str:
-    """A compact time label at reading pace: ``~5 min``, or ``<1 min`` for a tiny load."""
-    minutes = reading_minutes(lines)
+def minutes_label(weight: StepWeight) -> str:
+    """A compact reading-time label at reading pace that never fakes a sub-minute budget.
+
+    Exact → ``~5 min`` (``<1 min`` for a genuinely tiny, fully-measured load). Approximate
+    with a measured floor → a lower bound ``≥5 min``. Approximate with nothing measured →
+    ``unknown``: no time is estimated for evidence that carries no measurable lines (the
+    unsized portion is the whole of it, so any minute figure would mislead).
+    """
+    if weight.approximate and weight.lines == 0:
+        return "unknown"
+    minutes = reading_minutes(weight.lines)
+    if weight.approximate:
+        return f"≥{minutes} min"
     return f"~{minutes} min" if minutes >= 1 else "<1 min"
 
 

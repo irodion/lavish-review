@@ -133,18 +133,24 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
     assert "1 behavior-change · 1 test" in html
     # Every step carries a derived reading weight on its panel (a number + its Map-dot
     # size tier) and a chip in its summary (document + Stage). This fixture's hunk header
-    # is degenerate ("@@") and t1.s2 is note-only, so both weights are a floor of 0 (→ w1).
+    # is degenerate ("@@") and t1.s2 is note-only, so nothing is measurable: the weight is
+    # an approximate floor of 0 (→ w1), shown as "unsized" — never a "~0 lines · <1 min"
+    # budget that would read as negligible.
     assert (
         '<details class="step" id="t1.s1" data-impact="behavior-change"'
         ' data-weight="0" data-weight-bucket="w1">' in html
     )
     assert '<span class="chip weight weight-approx"' in html
-    assert "~0 lines" in html
-    # Thread + route rollups, with the time heuristic stated at L0.
+    assert ">unsized</span>" in html
+    assert "~0 lines" not in html and "<1 min" not in html
+    # Thread + route rollups: nothing measurable → an honest "not sized", no faked time.
     assert '<section class="thread" id="t1" data-weight="0">' in html
     assert '<span class="thread-weight" data-weight="0"' in html
-    assert '<li class="route-weight">Reading weight: ~0 lines · &lt;1 min at reading pace' in html
-    assert "lines/min)" in html
+    assert ">unknown</span>" in html
+    assert (
+        '<li class="route-weight">Reading weight: not sized — '
+        "the cited evidence carries no measurable lines</li>" in html
+    )
     assert '<aside class="attention-note">' in html
     assert 'href="#hunk-' in html
     assert '<details class="file"' in html
@@ -181,11 +187,12 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
     assert s1_tag in html
     assert '<span class="chip weight" title=' in html
     assert "24 lines" in html
-    # t1.s2 is note-only, so the thread/route rollups stay a floor (~24, still 1 min).
+    # t1.s2 is note-only, so the thread/route rollups become an explicit lower bound: at
+    # least the 24 measured lines, with the unmeasured note evidence on top (≥, not ~).
     assert '<section class="thread" id="t1" data-weight="24">' in html
     assert '<span class="thread-weight" data-weight="24"' in html
-    assert 'title="~24 lines to read">~1 min</span>' in html
-    assert "Reading weight: ~24 lines · ~1 min at reading pace (~25 lines/min)" in html
+    assert 'title="≥24 lines to read">≥1 min</span>' in html
+    assert "Reading weight: ≥24 lines · ≥1 min at reading pace (~25 lines/min)" in html
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 

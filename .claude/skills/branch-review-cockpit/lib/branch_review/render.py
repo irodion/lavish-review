@@ -364,7 +364,11 @@ def _render_thread(
     # Reading cost rolled up from the thread's steps — a per-thread total the Map reuses
     # (the derived-over-authored rule: no thread weight is ever in the analysis).
     weight = rollup(step_weight(step.get("evidence"), files_by_path) for step in steps)
-    weight_title = f"{lines_label(weight)} to read"
+    weight_title = (
+        "reading time unknown — cited evidence carries no measurable lines"
+        if weight.approximate and weight.lines == 0
+        else f"{lines_label(weight)} to read"
+    )
     return "\n".join(
         [
             f'<section class="thread" id="{escape_text(tid)}" data-weight="{weight.lines}">',
@@ -376,7 +380,7 @@ def _render_thread(
             f"{escape_text(_impact_summary(steps))}</span>",
             f'<span class="thread-weight" data-weight="{weight.lines}"'
             f' title="{escape_text(weight_title)}">'
-            f"{escape_text(minutes_label(weight.lines))}</span>",
+            f"{escape_text(minutes_label(weight))}</span>",
             "</h2>",
             f'<p class="thread-summary">{fragment(_text(thread.get("summary")))}</p>',
             f'<p class="thread-paths">{" · ".join(paths)}</p>',
@@ -396,10 +400,17 @@ def _render_orientation(
     threads = _items(analysis.get("threads"))
     all_steps = [step for thread in threads for step in _items(thread.get("steps"))]
     route_weight = rollup(step_weight(step.get("evidence"), files_by_path) for step in all_steps)
-    route_estimate = (
-        f"Reading weight: {lines_label(route_weight)} · "
-        f"{minutes_label(route_weight.lines)} at reading pace (~{LINES_PER_MINUTE} lines/min)"
-    )
+    if route_weight.approximate and route_weight.lines == 0:
+        # Nothing across the route was measurable (all note-only/unsized evidence): a time
+        # would misread as "negligible", so state the unknown instead of "~0 lines · <1 min".
+        route_estimate = (
+            "Reading weight: not sized — the cited evidence carries no measurable lines"
+        )
+    else:
+        route_estimate = (
+            f"Reading weight: {lines_label(route_weight)} · "
+            f"{minutes_label(route_weight)} at reading pace (~{LINES_PER_MINUTE} lines/min)"
+        )
     links = "".join(
         f'<li><a href="#{escape_text(_text(thread.get("id")))}">'
         f"{fragment(_text(thread.get('title')))}</a></li>"
