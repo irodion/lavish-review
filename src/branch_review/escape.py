@@ -305,6 +305,18 @@ def hunk_anchor_id(fragment_id: str, index: int) -> str:
     return f"hunk-{fragment_id}-{index}"
 
 
+def hunk_section_open(anchor: str) -> str:
+    """The opening tag of an anchored hunk ``<section>`` — one source for that literal.
+
+    Both the Hunk Anchorer that writes it (:func:`file_diff_fragment`) and the renderer
+    that splices narrated-margin annotations onto it (``render._annotate_hunks``, issue
+    #103) build the tag from here, so a change to its shape can't silently desync the two
+    (the splice keys off this exact string; a drifted tag would no-op and drop the margins).
+    ``anchor`` is a :func:`hunk_anchor_id` value — ``[0-9a-f-]`` only, safe as an id unescaped.
+    """
+    return f'<section class="hunk" id="{anchor}">'
+
+
 def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict[str, object]]]:
     """Render one changed file's diff as anchored per-hunk blocks + its hunk index.
 
@@ -362,9 +374,7 @@ def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict
         lines = sum(1 for line in hunk_text.split("\n")[1:] if line[:1] in (" ", "+", "-"))
         hunks.append({"index": index, "anchor": anchor, "header_html": header_html, "lines": lines})
         parts.append(
-            f'<section class="hunk" id="{anchor}">'
-            f'<pre class="diff">{fragment(hunk_text)}</pre>'
-            "</section>"
+            f'{hunk_section_open(anchor)}<pre class="diff">{fragment(hunk_text)}</pre></section>'
         )
 
     parts.append("</div>")

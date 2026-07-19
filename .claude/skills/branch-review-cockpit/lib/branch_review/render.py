@@ -23,6 +23,7 @@ from branch_review.escape import (
     escape_text,
     evidence_seam_markers,
     fragment,
+    hunk_section_open,
 )
 from branch_review.lint import lint_cockpit
 from branch_review.weight import (
@@ -340,15 +341,16 @@ def _annotate_hunks(
     the per-hunk ``<section class="hunk" id=…>`` whose id the manifest also carries (the
     Hunk Anchorer, :func:`branch_review.escape.file_diff_fragment`). For every hunk in the
     manifest we insert a margin — the narrating step(s) or the neutral un-narrated marker —
-    directly after that section's opening tag. The insertion is keyed on the collision-free
-    hunk id (a deterministic seam, not a parse) and lands outside the ``<pre>``'s untrusted
-    region, so the Escape Boundary is untouched.
+    directly after that section's opening tag, matched via the shared
+    :func:`branch_review.escape.hunk_section_open` so the writer and this splice can't
+    desync. The match is the collision-free hunk id (not a parse) and lands outside the
+    ``<pre>``'s untrusted region, so the Escape Boundary is untouched.
     """
     for hunk in _items(entry.get("hunks")):
         anchor = _text(hunk.get("anchor"))
         if not anchor:
             continue
-        opening = f'<section class="hunk" id="{anchor}">'
+        opening = hunk_section_open(anchor)
         margin = _hunk_margin(by_hunk.get(anchor))
         fragment_html = fragment_html.replace(opening, opening + margin, 1)
     return fragment_html

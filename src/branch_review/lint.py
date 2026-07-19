@@ -329,10 +329,6 @@ class _TagAuditor(HTMLParser):
 
     def _audit(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {name.lower(): (value or "") for name, value in attrs}
-        # A narrated-margin link is flagged by its class; read it once (first-wins, like
-        # the id/class reads below) so the in-page-anchor branch can tag its fragment.
-        link_classes = (_first_attr(attrs, "class") or "").split() if tag == "a" else []
-        is_margin_link = "narrating-step" in link_classes
 
         # Audit the RAW (name, value) pairs, not the collapsed dict: when a tag
         # carries duplicate attributes the browser keeps the FIRST, so
@@ -363,7 +359,9 @@ class _TagAuditor(HTMLParser):
                 # an element id. Bare "#" (scroll-to-top) carries no fragment to check.
                 if tag == "a" and name == "href" and value.startswith("#") and len(value) > 1:
                     self.anchor_fragments.append(value[1:])
-                    if is_margin_link:
+                    # A narrated-margin link (issue #103) is flagged by its class — a
+                    # subset held to a tighter bar (must resolve to a real step id).
+                    if "narrating-step" in (_first_attr(attrs, "class") or "").split():
                         self.margin_step_fragments.append(value[1:])
 
         # Element id (an anchor target) and, when the element is a step panel, its

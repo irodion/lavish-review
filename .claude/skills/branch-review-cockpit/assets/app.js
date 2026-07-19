@@ -2063,20 +2063,17 @@
         }
         if (target) {
           revealElement(target);
-          // The file-level narration link lives inside a file's <summary>, where a bare
-          // click also fires that summary's disclosure toggle — the same footgun the
-          // in-summary disposition controls guard against. Suppress it so jumping to the
-          // narrating step never flips the file panel as a side effect, and drive the
-          // scroll through the hash the prevented default would have set. Hunk-level
-          // margins sit in a plain <div>, so they never match and keep native anchor
-          // behavior. (issue #103)
-          if (anchor.classList.contains("narrating-step") && anchor.closest("summary")) {
+          // A click on an <a> inside a <summary> also fires that summary's native
+          // disclosure toggle — the footgun the in-summary disposition controls guard
+          // against. The file-level narration link (issue #103) lives there, so suppress
+          // the toggle and scroll to the target ourselves (preventDefault cancels the
+          // native anchor jump) — the same reveal-and-scroll idiom the Map's file rows
+          // use. Hunk-level margins sit in a plain <div>, so they keep native behavior.
+          if (anchor.closest("summary")) {
             event.preventDefault();
             event.stopPropagation();
-            if (location.hash === "#" + id) {
-              revealHashTarget();
-            } else {
-              location.hash = "#" + id;
+            if (typeof target.scrollIntoView === "function") {
+              target.scrollIntoView();
             }
           }
         }

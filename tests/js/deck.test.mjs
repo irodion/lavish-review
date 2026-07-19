@@ -163,16 +163,23 @@ test("a relates_to link stages its Review Step target across threads", () => {
   assert.ok(document.body.classList.contains("deck-active"), "the jump stays in Deck Mode");
 });
 
-// Splice a narrated-margin link (the reverse hunk→step join, issue #103) into a hunk,
-// naming the step `stepId` — the renderer emits these inside each L3 hunk section.
-function injectHunkNarration(doc, hunkId, stepId) {
-  const hunk = doc.getElementById(hunkId);
-  const margin = doc.createElement("div");
-  margin.className = "hunk-narration";
+// The renderer's narrated-margin link (issue #103): <a class="narrating-step" href="#id">.
+// Shared by the hunk-margin and file-header narration fixtures below.
+function narratingStepLink(doc, stepId) {
   const link = doc.createElement("a");
   link.className = "narrating-step";
   link.setAttribute("href", "#" + stepId);
   link.appendChild(doc.createTextNode(stepId));
+  return link;
+}
+
+// Splice a narrated-margin link into a hunk, naming the step `stepId` — the renderer
+// emits these inside each L3 hunk section.
+function injectHunkNarration(doc, hunkId, stepId) {
+  const hunk = doc.getElementById(hunkId);
+  const margin = doc.createElement("div");
+  margin.className = "hunk-narration";
+  const link = narratingStepLink(doc, stepId);
   margin.appendChild(link);
   hunk.insertBefore(margin, hunk.childNodes[0]);
   return link;
@@ -215,10 +222,7 @@ test("a file-level narration link reveals its step and suppresses the summary to
   const summary = doc.getElementById("file-f1").querySelector("summary");
   const span = doc.createElement("span");
   span.className = "file-narration";
-  const link = doc.createElement("a");
-  link.className = "narrating-step";
-  link.setAttribute("href", "#t2.s1");
-  link.appendChild(doc.createTextNode("t2.s1"));
+  const link = narratingStepLink(doc, "t2.s1");
   span.appendChild(link);
   summary.appendChild(span);
   const { document } = loadCockpit({ doc, protocol: "file:" });
