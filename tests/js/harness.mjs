@@ -13,6 +13,11 @@ const APP_JS = fileURLToPath(
   new URL("../../.claude/skills/branch-review-cockpit/assets/app.js", import.meta.url)
 );
 
+// The Q&A Log the presenter counts for the resume recap's answered tally (issue #102).
+const QA_LOG_NAME = "qa.jsonl";
+// The session file carrying the recap's resume signal (`resume_seq`, issue #102).
+const SESSION_NAME = "session.json";
+
 // A tiny builder: h(doc, "tag.class#id", { attr: value }, [children | "text"]).
 // The `#id` may appear anywhere after the tag and is split off first, so ids that
 // contain no `.` work regardless of class order (step ids, which carry a dot, are
@@ -270,6 +275,8 @@ export function loadCockpit({
   protocol = "http:",
   doc = buildFixtureDocument(),
   dispositions = null,
+  qaLog = null,
+  resumeSeq = null,
   sessionStorage = null,
   run = "run-1",
 } = {}) {
@@ -289,15 +296,42 @@ export function loadCockpit({
     meta.setAttribute("content", run);
     doc.documentElement.appendChild(meta);
   }
-  // The presenter never fetches on file://; on http:// loadDispositions() calls
-  // fetch. Serve the given dispositions store back (a resumed review), or an
-  // not-ok response so it no-ops without a network (a fresh review).
-  const fetch = () =>
-    Promise.resolve(
+  // The presenter never fetches on file://; on http:// it fetches the sidecars beside
+  // the cockpit. `dispositions.json` restores tints and seeds the resume recap (issue
+  // #102); `qa.jsonl` (the Q&A Log) is counted for the recap's answered-question tally.
+  // `qaLog` is a list of records (or a raw JSONL string); absent → a not-ok response so
+  // the count no-ops without a network, matching a review with no questions yet. Absent
+  // `dispositions` likewise no-ops the tint/recap store (a fresh review).
+  const qaText =
+    qaLog == null
+      ? null
+      : typeof qaLog === "string"
+        ? qaLog
+        : qaLog.map((record) => JSON.stringify(record)).join("\n") + "\n";
+  const fetch = (url) => {
+    const name = String(url);
+    if (name.indexOf(QA_LOG_NAME) !== -1) {
+      return Promise.resolve(
+        qaText != null
+          ? { ok: true, text: () => Promise.resolve(qaText) }
+          : { ok: false, text: () => Promise.resolve("") }
+      );
+    }
+    // session.json carries the recap's resume signal (issue #102). `resumeSeq` absent →
+    // a not-ok response so the seq reads 0 (a review never resumed); a number serves it.
+    if (name.indexOf(SESSION_NAME) !== -1) {
+      return Promise.resolve(
+        resumeSeq != null
+          ? { ok: true, json: () => Promise.resolve({ resume_seq: resumeSeq }) }
+          : { ok: false, json: () => Promise.resolve(null) }
+      );
+    }
+    return Promise.resolve(
       dispositions
         ? { ok: true, json: () => Promise.resolve({ dispositions }) }
         : { ok: false, json: () => Promise.resolve(null) }
     );
+  };
 
   const sandbox = { window, document: doc, location, fetch, console, Promise };
   window.document = doc;

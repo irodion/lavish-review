@@ -2,8 +2,11 @@
 
 A reviewer can step away mid-review and come back. To make that safe the skill
 persists one ``session.json`` per Review — ``{status, base, branch, head_sha,
-merge_base, analysis_schema, started_at}`` — when it opens a cockpit, and consults it the next time
-``/review-branch`` runs. At the centre of that lifecycle is a **deep core of pure
+merge_base, analysis_schema, started_at, resume_seq}`` — when it opens a cockpit, and
+consults it the next time ``/review-branch`` runs. ``resume_seq`` is a monotonic counter
+the resume lifecycle bumps (:func:`bump_resume`) so the served recap can tell a page
+reload that *follows* a resume from a mid-review injection reload (issue #102). At the
+centre of that lifecycle is a **deep core of pure
 policy**: given the persisted :class:`Session` and the *current* git HEAD and branch,
 :func:`evaluate` decides how the new run relates to the old one. A thin shell around
 it persists the session and a small CLI (``evaluate``/``start``/``end``) gathers the
@@ -58,10 +61,14 @@ from branch_review.config import ConfigError, resolve_config
 SESSION_NAME = "session.json"
 ANALYSIS_NAME = "analysis.json"  # the analyst's testimony, beside the context/session
 
-# ``0.3`` adds ``analysis_schema`` — the ``review-analysis`` version the cockpit was
-# generated against, so the evaluator can catch a session whose analysis this code can
-# no longer read (ADR-0016's clean break) and refuse to resume it.
-_SCHEMA = "review-session/0.3"
+# ``0.4`` adds ``resume_seq`` — a monotonic counter the resume lifecycle bumps each time
+# the review is re-attached (``/review-resume``, or a step-0 ``fresh`` restore), so the
+# served "previously on…" recap (issue #102) can tell a page reload that *follows* a resume
+# (stage the card) from a mid-sitting injection reload (do not). ``0.3`` added
+# ``analysis_schema`` — the ``review-analysis`` version the cockpit was generated against,
+# so the evaluator can catch a session whose analysis this code can no longer read
+# (ADR-0016's clean break) and refuse to resume it.
+_SCHEMA = "review-session/0.4"
 
 
 class SessionError(RuntimeError):
@@ -144,8 +151,10 @@ class Session:
     is the ``review-analysis`` version the cockpit was authored against, so a session whose
     analysis this code can no longer read (ADR-0016's clean break) is caught and refused for
     resume. ``started_at`` is the ISO-8601 timestamp the review began; ``status`` tracks
-    open → ended. ``schema`` versions the on-disk shape so a future field change is detectable
-    rather than silently misread.
+    open → ended. ``resume_seq`` counts how many times the review has been re-attached (the
+    recap's explicit resume signal — :func:`bump_resume`); it starts at 0 and only the
+    resume lifecycle advances it. ``schema`` versions the on-disk shape so a future field
+    change is detectable rather than silently misread.
     """
 
     schema: str
@@ -156,6 +165,7 @@ class Session:
     merge_base: str
     analysis_schema: str
     started_at: str
+    resume_seq: int = 0
 
     def to_dict(self) -> dict[str, object]:
         """The plain-dict form (status as its string value) — what gets serialised.
@@ -196,6 +206,12 @@ class Session:
         analysis_schema = data.get("analysis_schema", "")
         if not isinstance(analysis_schema, str):
             raise SessionError("session.json field 'analysis_schema' must be a string")
+        # ``resume_seq`` was added in 0.4; a session written before it has none, so its
+        # absence resolves to 0 (never resumed). A present value must be a non-negative
+        # int (``bool`` is an ``int`` subclass, so it is excluded explicitly).
+        resume_seq = data.get("resume_seq", 0)
+        if isinstance(resume_seq, bool) or not isinstance(resume_seq, int) or resume_seq < 0:
+            raise SessionError("session.json field 'resume_seq' must be a non-negative integer")
         try:
             status = SessionStatus(data["status"])
         except ValueError as exc:
@@ -209,6 +225,7 @@ class Session:
             merge_base=data["merge_base"],
             analysis_schema=analysis_schema,
             started_at=data["started_at"],
+            resume_seq=resume_seq,
         )
 
 
@@ -280,6 +297,18 @@ def end_session(session: Session) -> Session:
     if session.status is SessionStatus.ENDED:
         return session
     return replace(session, status=SessionStatus.ENDED)
+
+
+def bump_resume(session: Session) -> Session:
+    """Return ``session`` with its resume counter advanced by one — one resume cycle.
+
+    The served recap (issue #102) reads ``resume_seq`` to tell a page reload that *follows*
+    a resume (stage the "previously on…" card) from a mid-sitting injection reload (do not).
+    The two resume entry points — ``/review-resume`` and the step-0 ``fresh`` restore —
+    bump it before re-entering the answer loop; a normal per-poll iteration never does, so
+    the counter marks resumes, not polls. Pure, like :func:`end_session`.
+    """
+    return replace(session, resume_seq=session.resume_seq + 1)
 
 
 def _read_json_object(path: Path) -> dict[str, object]:
@@ -477,6 +506,29 @@ def _cmd_end(repo: Path, out: Path | None) -> int:
     return 0
 
 
+def _cmd_resume(repo: Path, out: Path | None) -> int:
+    """Advance the resume counter — the recap's explicit resume signal (issue #102).
+
+    Wired into the two resume entry points (``/review-resume`` and the step-0 ``fresh``
+    restore) so a returning reviewer's next page reload can stage the recap. Best-effort:
+    a missing or corrupt session, or a finished one, is a no-op (never blocks a resume —
+    the recap is an orientation aid, not part of the loop's correctness).
+    """
+    _root, out_dir = _state_dir(repo, out)
+    try:
+        session = load_session(out_dir)
+    except SessionError as exc:
+        print(f"warning: not bumping the recap resume signal ({exc})", file=sys.stderr)
+        return 0
+    if session is None or not session.status.is_resumable:
+        print("No open session to resume.")
+        return 0
+    bumped = bump_resume(session)
+    save_session(out_dir, bumped)
+    print(f"Resume signal bumped (resume_seq={bumped.resume_seq}) for branch={bumped.branch}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for the skill's ``session.py`` (evaluate / start / end)."""
     parser = argparse.ArgumentParser(
@@ -499,6 +551,7 @@ def main(argv: list[str] | None = None) -> int:
         "/review-branch was invoked, so a different base is seen as stale.",
     )
     sub.add_parser("start", help="Record the open session from context.json.")
+    sub.add_parser("resume", help="Bump the recap resume signal (/review-resume, fresh restore).")
     sub.add_parser("end", help="Mark the session ended (/review-close).")
     args = parser.parse_args(argv)
 
@@ -509,6 +562,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_evaluate(args.repo, args.out, args.base)
         if args.command == "start":
             return _cmd_start(args.repo, args.out)
+        if args.command == "resume":
+            return _cmd_resume(args.repo, args.out)
         return _cmd_end(args.repo, args.out)
     except (SessionError, GitError, BaseResolutionError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)

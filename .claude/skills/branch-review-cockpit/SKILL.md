@@ -149,9 +149,17 @@ of one you should have restored**:
   step 1 and generate.
 - `fresh` — an unfinished review for **this** branch at **this** HEAD **and** the same
   `base...HEAD` diff already exists. **Offer to restore it (the default).** Restoring
-  re-attaches without regenerating: skip steps 1–7 and go straight to the answer loop
-  (step 8) on the existing `.review-agent/review.html` — `session.json` stays as is.
-  Only if the user asks for a clean rebuild do you fall through to step 1.
+  re-attaches without regenerating: bump the recap's resume signal, then skip steps 1–7
+  and go straight to the answer loop (step 8) on the existing `.review-agent/review.html`:
+
+  ```sh
+  python3 .claude/skills/branch-review-cockpit/scripts/session.py resume
+  ```
+
+  That advances `session.json`'s `resume_seq` so a reload of the cockpit stages a
+  "previously on…" recap of where the reviewer left off (issue #102); nothing else in
+  `session.json` changes and the page is never rewritten. Only if the user asks for a
+  clean rebuild do you fall through to step 1.
 - `stale` — an unfinished review exists, but the diff it was generated for is no longer
   what `/review-branch` would produce: `head_sha` advanced, the requested base differs,
   or the base's merge-base moved (a base switched or advanced under a fixed HEAD changes

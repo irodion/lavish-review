@@ -23,9 +23,11 @@ from branch_review.session import (
     SessionDisposition,
     SessionError,
     SessionStatus,
+    bump_resume,
     end_session,
     evaluate,
     load_session,
+    main,
     save_session,
     session_from_context,
 )
@@ -48,9 +50,10 @@ def _session(
     base: str = _BASE,
     merge_base: str = _MERGE_BASE,
     analysis_schema: str = ANALYSIS_SCHEMA,
+    resume_seq: int = 0,
 ) -> Session:
     return Session(
-        schema="review-session/0.3",
+        schema="review-session/0.4",
         status=status,
         base=base,
         branch=branch,
@@ -58,6 +61,7 @@ def _session(
         merge_base=merge_base,
         analysis_schema=analysis_schema,
         started_at=_NOW.isoformat(),
+        resume_seq=resume_seq,
     )
 
 
@@ -304,6 +308,19 @@ def test_end_session_is_idempotent() -> None:
     assert end_session(once) == once
 
 
+def test_bump_resume_advances_only_the_counter() -> None:
+    original = _session(resume_seq=2)
+    bumped = bump_resume(original)
+    assert bumped.resume_seq == 3
+    # ONLY resume_seq changes — every other field is carried through verbatim.
+    assert bumped == replace(original, resume_seq=3)
+
+
+def test_resume_seq_round_trips() -> None:
+    original = _session(resume_seq=5)
+    assert Session.from_mapping(json.loads(original.to_json())) == original
+
+
 def test_json_round_trip() -> None:
     original = _session()
     restored = Session.from_mapping(json.loads(original.to_json()))
@@ -404,6 +421,44 @@ def test_load_session_legacy_without_analysis_schema(tmp_path: Path) -> None:
         )
         is SessionDisposition.STALE_SCHEMA
     )
+
+
+def test_load_session_legacy_without_resume_seq(tmp_path: Path) -> None:
+    # A session.json written before 0.4 has no ``resume_seq``. It loads leniently
+    # (absence → 0, "never resumed"), so an old session never crashes a resume.
+    legacy = {
+        "schema": "review-session/0.3",
+        "status": "open",
+        "base": _BASE,
+        "branch": "feat/x",
+        "head_sha": _HEAD,
+        "merge_base": _MERGE_BASE,
+        "analysis_schema": ANALYSIS_SCHEMA,
+        "started_at": _NOW.isoformat(),
+    }
+    (tmp_path / "session.json").write_text(json.dumps(legacy), encoding="utf-8")
+    session = load_session(tmp_path)
+    assert session is not None and session.resume_seq == 0
+
+
+@pytest.mark.parametrize("bad_seq", [-1, "3", 1.5, True])
+def test_load_session_invalid_resume_seq_raises(tmp_path: Path, bad_seq: object) -> None:
+    # A present resume_seq must be a non-negative int — a negative, a string, a float, or
+    # a bool (an int subclass, excluded explicitly) is rejected, not silently coerced.
+    bad = {
+        "schema": "review-session/0.4",
+        "status": "open",
+        "base": _BASE,
+        "branch": "feat/x",
+        "head_sha": _HEAD,
+        "merge_base": _MERGE_BASE,
+        "analysis_schema": ANALYSIS_SCHEMA,
+        "started_at": _NOW.isoformat(),
+        "resume_seq": bad_seq,
+    }
+    (tmp_path / "session.json").write_text(json.dumps(bad), encoding="utf-8")
+    with pytest.raises(SessionError, match="resume_seq"):
+        load_session(tmp_path)
 
 
 def test_load_session_non_string_analysis_schema_raises(tmp_path: Path) -> None:
@@ -509,3 +564,25 @@ def test_session_from_context_non_string_field_raises(tmp_path: Path) -> None:
 def test_session_from_context_absent_file_raises(tmp_path: Path) -> None:
     with pytest.raises(SessionError):
         session_from_context(tmp_path / "context.json")
+
+
+def test_cli_resume_bumps_the_open_session(tmp_path: Path) -> None:
+    save_session(tmp_path, _session(resume_seq=0))
+    assert main(["--out", str(tmp_path), "resume"]) == 0
+    first = load_session(tmp_path)
+    assert first is not None and first.resume_seq == 1
+    # Monotonic across repeated resumes.
+    assert main(["--out", str(tmp_path), "resume"]) == 0
+    second = load_session(tmp_path)
+    assert second is not None and second.resume_seq == 2
+
+
+def test_cli_resume_is_a_noop_without_an_open_session(tmp_path: Path) -> None:
+    # No session, and an ended one, both no-op — a resume signal never blocks the resume,
+    # and an ended review has nothing to re-attach to.
+    assert main(["--out", str(tmp_path), "resume"]) == 0
+    assert load_session(tmp_path) is None
+    save_session(tmp_path, _session(status=SessionStatus.ENDED, resume_seq=4))
+    assert main(["--out", str(tmp_path), "resume"]) == 0
+    ended = load_session(tmp_path)
+    assert ended is not None and ended.resume_seq == 4  # untouched

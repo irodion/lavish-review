@@ -195,6 +195,9 @@
   // not an approval stamp (ADR-0016; CONTEXT "avoid checkmark/verdict").
   const STEP_ID = /^t\d+\.s\d+$/;
   const SETTABLE = ["looks-right", "concern", "follow-up", "skipped"];
+  // The run-scoped store the loop agent maintains beside the cockpit (dispositions.py);
+  // the tint restore and the resume recap both read it. One name, one source.
+  const DISPOSITIONS_NAME = "dispositions.json";
   const LABELS = {
     "looks-right": "● looks right",
     concern: "⚠ concern",
@@ -341,32 +344,20 @@
     summary.appendChild(group);
   }
 
-  // Restore persisted state (Esc → /review-resume → reload): the loop agent
-  // maintains dispositions.json beside the cockpit; only well-shaped entries are
-  // applied — a hostile or corrupt store can at most select an enum value.
+  // Restore persisted tints (Esc → /review-resume → reload): apply the store's settable
+  // states to the steps. Reads the one memoized dispositions fetch the resume recap also
+  // uses (fetchDispositionEntries), and the one settable filter (settableFor) — only
+  // well-shaped entries apply, so a hostile or corrupt store can at most select an enum
+  // value. An absent store (fresh review) resolves to `{}`: everything stays unreviewed.
   function loadDispositions() {
-    fetch("dispositions.json", { cache: "no-store" })
-      .then(function (response) {
-        return response.ok ? response.json() : null;
-      })
-      .then(function (payload) {
-        if (!payload || typeof payload !== "object") {
-          return;
+    fetchDispositionEntries().then(function (entries) {
+      stepElements().forEach(function (step) {
+        const value = settableFor(entries, step.id);
+        if (value) {
+          applyDisposition(step, value);
         }
-        const entries = payload.dispositions;
-        if (!entries || typeof entries !== "object") {
-          return;
-        }
-        stepElements().forEach(function (step) {
-          const value = entries[step.id];
-          if (typeof value === "string" && SETTABLE.indexOf(value) !== -1) {
-            applyDisposition(step, value);
-          }
-        });
-      })
-      .catch(function (_err) {
-        // No store yet (fresh review) or no fetch permission — everything unreviewed.
       });
+    });
   }
 
   function setupDispositions() {
@@ -629,20 +620,28 @@
     return totals;
   }
 
-  // A thread heading's title text, with the id/chip/impacts/progress spans stripped
-  // — read off a detached clone so the live heading is never disturbed. text only.
-  function threadTitleText(heading) {
-    if (!heading) {
-      return "";
+  // Clone `node` and strip every element matching `selector`, returning the remaining
+  // text trimmed (or `fallback` when the node is absent or strips to empty). Read off a
+  // detached clone so the live node is never disturbed; text only (already-escaped
+  // narrator prose). The shared clone-and-strip both title readers below use.
+  function strippedText(node, selector, fallback) {
+    if (!node) {
+      return fallback;
     }
-    const clone = heading.cloneNode(true);
-    Array.prototype.forEach.call(
-      clone.querySelectorAll(".thread-id, .chip, .thread-impacts, .thread-weight, .thread-progress"),
-      function (node) {
-        node.remove();
-      }
+    const clone = node.cloneNode(true);
+    Array.prototype.forEach.call(clone.querySelectorAll(selector), function (child) {
+      child.remove();
+    });
+    return clone.textContent.trim() || fallback;
+  }
+
+  // A thread heading's title text, with the id/chip/impacts/progress spans stripped.
+  function threadTitleText(heading) {
+    return strippedText(
+      heading,
+      ".thread-id, .chip, .thread-impacts, .thread-weight, .thread-progress",
+      ""
     );
-    return clone.textContent.trim();
   }
 
   // A tinted count fragment for the progress line: a fixed glyph + number, its
@@ -1343,6 +1342,12 @@
   // own build-time staging (setMode → stageOrientation) can't clobber stored state
   // before it is read back.
   let uiReady = false;
+  // The highest `resume_seq` (session.json) this tab has acknowledged — the recap's
+  // explicit resume signal (issue #102). Persisted in the UI-store blob and restored on
+  // load; -1 until known (a fresh tab has seen nothing). The recap stages only when the
+  // server's resume_seq has advanced beyond it, so a same-tab reload that follows a
+  // resume shows the card while a mid-review injection reload (same seq) does not.
+  let resumeSeen = -1;
 
   function runIdentity() {
     const meta = document.querySelector('meta[name="brc-run"]');
@@ -1488,6 +1493,7 @@
       drafts: snapshotDrafts(),
       open: snapshotOpen(),
       ticks: snapshotTicks(),
+      resumeSeen: resumeSeen, // the resume signal this tab has acknowledged (#102)
     });
   }
 
@@ -1503,6 +1509,11 @@
     }
     const state = readUiState();
     if (state) {
+      // The resume signal this tab last acknowledged (#102); a fresh tab (no state) leaves
+      // it at -1, so the first observed resume_seq counts as an advance.
+      if (typeof state.resumeSeen === "number") {
+        resumeSeen = state.resumeSeen;
+      }
       // Restore the chosen route first, so the Map (selector, dual progress, off-route
       // dots) and every budget reflect it before the stop is staged. Ignored unless the
       // review abridges and the value is a known route — a stale/foreign value is discarded.
@@ -1564,6 +1575,353 @@
     // subsequent reload has a fresh record even if the reviewer changes nothing.
     uiReady = true;
     persistUiState();
+
+    // With the deck restored (or freshly built), decide whether the served page should
+    // stage a "previously on…" recap (issue #102) — gated on the explicit resume signal,
+    // not on tab state, so a same-tab reload after a resume shows it.
+    setupRecap();
+  }
+
+  // --- Resume recap card ("previously on…", issue #102) ----------------------
+  //
+  // When a reviewer RESUMES a review they already worked and the served page reloads, a
+  // deterministic recap is staged before the route: coverage so far (per thread), their
+  // concerns and follow-ups (each linked to its step), the next unreviewed stop in Review
+  // Route order, and a cumulative count of their answered questions. It is built PURELY
+  // from the persisted run-scoped state — dispositions.json (the store the tints come
+  // from) and qa.jsonl (the Q&A Log) — with no narrator involvement and no page
+  // regeneration.
+  //
+  // Served-only, and gated on the EXPLICIT resume signal — session.json's `resume_seq`,
+  // which the resume lifecycle bumps on each re-attach (`/review-resume`, the step-0
+  // `fresh` restore). The page reloads on a manual refresh, a fresh-tab reopen, or the
+  // host's SSE reload; setupRecap stages the recap only when `resume_seq` has advanced
+  // beyond what this browser tab has acknowledged (remembered per-tab in the run-scoped UI
+  // store). So a reload that FOLLOWS a resume shows the card, while a mid-review injection
+  // reload (same seq) does not — the signal is explicit, never inferred from tab state. A
+  // working UI store is required to remember the acknowledged seq, so file:// (no store)
+  // and a degraded no-run-identity render both fail safe to no recap; and the persisted
+  // state still has the final say — a first open (no dispositions, no answered questions)
+  // yields nothing to recap. The card is DOM built at runtime, never written into
+  // review.html, so the post-write lint and the bake never see it.
+  //
+  // The recap never echoes reviewer free-text: coverage and the answered tally are counts,
+  // and a concern/follow-up/next line shows its step's id (a closed vocabulary) and the
+  // narrator's already-escaped summary read off the DOM — all via createElement/textContent,
+  // so (like every other injected control) a hostile string can only ever render as
+  // characters. The Q&A Log is read ONLY to count answered exchanges; a question's text is
+  // never rendered, and the TOON inside `feedback_raw` is never parsed here (that one
+  // extractor lives in Python — ADR-0007).
+
+  const QA_LOG_NAME = "qa.jsonl";
+  // The resume lifecycle's session file; the recap reads only its `resume_seq` (#102).
+  const SESSION_NAME = "session.json";
+
+  // A step summary's title text — its chips and injected controls stripped, falling back
+  // to the step id when the summary is absent or strips to empty so a line always has a
+  // readable label (strippedText is the shared clone-and-strip, above).
+  function stepTitleText(step) {
+    return strippedText(step.querySelector("summary"), ".chip, .disposition-controls", step.id);
+  }
+
+  // The reviewer's disposition for a step id from a fetched dispositions payload — only
+  // a settable value counts (unreviewed is absence), the same filter the tint restore
+  // applies. A missing, hostile, or `unreviewed` value reads as unset (null).
+  function settableFor(entries, id) {
+    return SETTABLE.indexOf(entries[id]) !== -1 ? entries[id] : null;
+  }
+
+  // Fetch + shape-validate the run-scoped dispositions store, memoized for the page load:
+  // the tint restore (loadDispositions) and the resume recap read the SAME snapshot, so
+  // the file is fetched and parsed once, not per consumer. Resolves to the `{stepId:
+  // state}` map, or `{}` on any failure (absent, no permission, corrupt) — best-effort,
+  // never fatal. A fresh page load (the host's injection reload resets the iframe and this
+  // module) re-fetches, so the "no-store" freshness the tints rely on still holds.
+  let dispositionEntriesRequest = null;
+  function fetchDispositionEntries() {
+    if (!dispositionEntriesRequest) {
+      dispositionEntriesRequest = fetch(DISPOSITIONS_NAME, { cache: "no-store" })
+        .then(function (response) {
+          return response && response.ok ? response.json() : null;
+        })
+        .then(function (payload) {
+          const entries = payload && typeof payload === "object" ? payload.dispositions : null;
+          return entries && typeof entries === "object" ? entries : {};
+        })
+        .catch(function (_err) {
+          return {};
+        });
+    }
+    return dispositionEntriesRequest;
+  }
+
+  // Count the reviewer's answered questions in the Q&A Log (qa.jsonl). Each line is one
+  // delivered exchange `{seq, ts, feedback_raw, answer, disposition_only}`. A disposition
+  // click rides the same channel as a question, so a disposition-only poll also lands here
+  // — with a "Recorded." ack answer — and the bake drops those from the Q&A Log
+  // (_without_disposition_prompts). The Python writer already stamped `disposition_only`
+  // for exactly that (feedback.py), so an answered question is a record with a non-empty
+  // answer that is NOT disposition-only. Counting records reads the log as JSON data; the
+  // TOON inside `feedback_raw` is never parsed here (that extractor is Python's — ADR-0007).
+  // Resolves to 0 on any failure (no log yet, unreadable).
+  function fetchAnsweredCount() {
+    return fetch(QA_LOG_NAME, { cache: "no-store" })
+      .then(function (response) {
+        return response && response.ok ? response.text() : "";
+      })
+      .then(function (text) {
+        let count = 0;
+        text.split("\n").forEach(function (line) {
+          if (!line.trim()) {
+            return;
+          }
+          let record;
+          try {
+            record = JSON.parse(line);
+          } catch (_err) {
+            return; // a corrupt line is skipped, never trusted
+          }
+          if (
+            record &&
+            record.disposition_only !== true && // a state-only ack is not an answered question
+            typeof record.answer === "string" &&
+            record.answer.trim()
+          ) {
+            count++;
+          }
+        });
+        return count;
+      })
+      .catch(function (_err) {
+        return 0;
+      });
+  }
+
+  // The server's resume signal (session.json `resume_seq`, issue #102): a monotonic count
+  // the resume lifecycle bumps on each re-attach. Resolves to 0 on any failure or an
+  // absent/ill-shaped value (a review that has never been resumed). Read only — app.js
+  // never writes session.json.
+  function fetchResumeSeq() {
+    return fetch(SESSION_NAME, { cache: "no-store" })
+      .then(function (response) {
+        return response && response.ok ? response.json() : null;
+      })
+      .then(function (payload) {
+        const seq = payload && typeof payload === "object" ? payload.resume_seq : null;
+        return typeof seq === "number" && seq >= 0 ? seq : 0;
+      })
+      .catch(function (_err) {
+        return 0;
+      });
+  }
+
+  // Derive the recap's data from the persisted state, or null when there is nothing to
+  // recap (no disposition set AND no answered question — a first open). Pure over the
+  // deck's stable grouping + the fetched dispositions entries + the answered count, so
+  // it is directly unit-testable. Every string it carries is a step/thread id (closed
+  // vocabulary) or a DOM-read, already-escaped title — never reviewer free-text.
+  function buildRecapData(entries, answered) {
+    const map = entries && typeof entries === "object" ? entries : {};
+    let reviewed = 0;
+    const concerns = [];
+    const followUps = [];
+    const threads = [];
+    let nextStep = null;
+    // One walk of the route, thread by thread. deck.steps is exactly these groups
+    // flattened in order, so iterating groups → steps visits the route in the same order
+    // while also yielding each thread's total in the same pass — no second traversal, and
+    // no reliance on the two staying in sync.
+    deck.groups.forEach(function (group) {
+      if (!group.steps.length) {
+        return;
+      }
+      let done = 0;
+      group.steps.forEach(function (step) {
+        const state = settableFor(map, step.id);
+        if (state) {
+          reviewed++;
+          done++;
+          if (state === "concern") {
+            concerns.push({ id: step.id, title: stepTitleText(step) });
+          } else if (state === "follow-up") {
+            followUps.push({ id: step.id, title: stepTitleText(step) });
+          }
+        } else if (!nextStep) {
+          // The next unreviewed stop in Review Route order — the first undisposed step.
+          nextStep = { id: step.id, title: stepTitleText(step) };
+        }
+      });
+      threads.push({ id: group.threadId, title: group.title, reviewed: done, total: group.steps.length });
+    });
+    if (reviewed === 0 && answered === 0) {
+      return null; // nothing happened before this sitting → a first open, no recap
+    }
+    return {
+      reviewed: reviewed,
+      total: deck.steps.length,
+      threads: threads,
+      concerns: concerns,
+      followUps: followUps,
+      nextStep: nextStep,
+      answered: answered,
+    };
+  }
+
+  // A list of step links (concerns / follow-ups): each `<a href="#tN.sM">` carries the
+  // step id (closed vocabulary) and its DOM-read escaped title, both via textContent. A
+  // click stages that step in the deck, so the recap is a jumping-off point into the
+  // route, not a dead end.
+  function recapStepList(items) {
+    const list = cell("ul", "deck-recap-list", null);
+    items.forEach(function (item) {
+      const li = document.createElement("li");
+      const link = document.createElement("a");
+      link.setAttribute("href", "#" + item.id); // item.id ∈ t\d+.s\d+ — inert as a hash
+      link.appendChild(cell("span", "deck-recap-step-id", item.id));
+      link.appendChild(cell("span", "deck-recap-step-title", item.title));
+      link.addEventListener("click", function (event) {
+        const target = document.getElementById(item.id);
+        if (target && deck.steps.indexOf(target) !== -1) {
+          event.preventDefault();
+          event.stopPropagation();
+          stageStep(target);
+        }
+      });
+      li.appendChild(link);
+      list.appendChild(li);
+    });
+    return list;
+  }
+
+  // Build the recap card element from its data — closed-vocabulary structure with every
+  // reviewer-adjacent value set as text (counts, ids, DOM-read titles). Never innerHTML.
+  function renderRecapCard(data) {
+    const card = cell("section", "deck-recap", null);
+    card.setAttribute("role", "region");
+    card.setAttribute("aria-label", "Where you left off");
+    card.appendChild(cell("p", "deck-recap-label", "Previously on this review"));
+    card.appendChild(
+      cell("p", "deck-recap-coverage", "You reviewed " + data.reviewed + " of " + data.total + " steps.")
+    );
+
+    if (data.threads.length) {
+      const threads = cell("ul", "deck-recap-threads", null);
+      data.threads.forEach(function (thread) {
+        const li = document.createElement("li");
+        li.appendChild(cell("span", "deck-recap-thread-id", thread.id));
+        li.appendChild(cell("span", "deck-recap-thread-title", thread.title));
+        li.appendChild(cell("span", "deck-recap-thread-frac", thread.reviewed + "/" + thread.total));
+        threads.appendChild(li);
+      });
+      card.appendChild(threads);
+    }
+
+    // The reviewer's own concerns and follow-ups, each a list of links back to its step.
+    // The glyph matches the disposition vocabulary (⚠ / ?) so a flag never reads by colour.
+    function appendFlagSection(items, className, heading) {
+      if (!items.length) {
+        return;
+      }
+      card.appendChild(cell("p", "deck-recap-flag " + className, heading + " (" + items.length + ")"));
+      card.appendChild(recapStepList(items));
+    }
+    appendFlagSection(data.concerns, "concern", "⚠ Concerns");
+    appendFlagSection(data.followUps, "follow-up", "? Follow-ups");
+
+    // How many of the reviewer's questions have been answered — a cumulative count over
+    // the run's whole Q&A Log, never the question text. Deliberately NOT "while you were
+    // away": qa.jsonl is not partitioned by sitting, so a question answered before the
+    // reviewer detached would be miscounted as answered during their absence.
+    if (data.answered > 0) {
+      const noun = data.answered === 1 ? "question" : "questions";
+      card.appendChild(
+        cell("p", "deck-recap-answered", data.answered + " " + noun + " answered so far.")
+      );
+    }
+
+    // The next unreviewed stop, offered as the primary way back into the route.
+    const row = cell("div", "deck-recap-continue-row", null);
+    if (data.nextStep) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "deck-recap-continue";
+      btn.setAttribute("aria-label", "Resume review at step " + data.nextStep.id);
+      btn.appendChild(cell("span", "deck-recap-continue-label", "Continue where you left off"));
+      btn.appendChild(cell("span", "deck-recap-continue-step", data.nextStep.id));
+      btn.addEventListener("click", function () {
+        const target = document.getElementById(data.nextStep.id);
+        if (target && deck.steps.indexOf(target) !== -1) {
+          stageStep(target);
+        }
+      });
+      row.appendChild(btn);
+    } else {
+      // Every step already carries a disposition — there is no next unreviewed stop.
+      row.appendChild(cell("p", "deck-recap-done", "Every step has been reviewed."));
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "deck-recap-continue";
+      btn.textContent = "Back to orientation";
+      btn.addEventListener("click", function () {
+        stageOrientation();
+      });
+      row.appendChild(btn);
+    }
+    card.appendChild(row);
+    return card;
+  }
+
+  // Put the recap on the Stage as the resume view before the route. It is transient — not
+  // a route stop and not remembered as one (lastStop stays where it was) — so the first
+  // stage or toggle away discards it (stageStep/stageOrientation clear the Stage) and
+  // normal navigation resumes. Built after the deck, so unstaging the build-time
+  // orientation returns it whole to the document first.
+  function stageRecap(card) {
+    unstageCurrent();
+    deck.stage.textContent = "";
+    deck.stage.appendChild(card);
+    showDeck();
+    renderMap();
+  }
+
+  // Gate and stage the resume recap (issue #102). The sole caller (restoreUiState) has
+  // already guaranteed a live deck and store (it returns early otherwise). The recap
+  // stages only when the server's resume signal has advanced beyond what this tab has
+  // acknowledged — an explicit resume, not tab state — so a same-tab reload that follows a
+  // /review-resume shows the card while a mid-review injection reload (same seq) does not.
+  // The tab acknowledges the observed seq either way, so the card never re-shows for a seq
+  // it has already handled. When a resume IS observed, the persisted state still has the
+  // final say: a first open yields null from buildRecapData and nothing is staged.
+  function setupRecap() {
+    // Snapshot the pristine post-build position. The state fetches are real network
+    // round-trips, so a reviewer can toggle to the document, navigate, or switch the
+    // Core/Full route while they are in flight; if the deck has moved from where the build
+    // left it by the time they resolve, the reviewer is already reviewing — leave them
+    // there rather than yank them back to a recap. mode + stop + route are the three
+    // position axes persistUiState itself tracks.
+    const modeAtStart = deck.mode;
+    const stopAtStart = deck.lastStop;
+    const routeAtStart = deck.route;
+    Promise.all([fetchDispositionEntries(), fetchAnsweredCount(), fetchResumeSeq()]).then(
+      function (results) {
+        const resumeSeq = results[2];
+        // Did a resume happen since this tab last synced? Acknowledge the observed seq
+        // regardless, and persist it, so a later same-seq reload knows it has been handled.
+        const resumed = resumeSeq > resumeSeen;
+        resumeSeen = resumeSeq;
+        persistUiState();
+        if (!resumed) {
+          return; // no resume beyond what this tab has seen → not a return, no recap
+        }
+        if (deck.mode !== modeAtStart || deck.lastStop !== stopAtStart || deck.route !== routeAtStart) {
+          return; // the reviewer acted during the fetch — do not stage over their choice
+        }
+        const data = buildRecapData(results[0], results[1]);
+        if (data) {
+          stageRecap(renderRecapCard(data));
+        }
+      }
+    );
   }
 
   function buildDeck() {
