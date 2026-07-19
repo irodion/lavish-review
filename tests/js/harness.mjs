@@ -318,3 +318,32 @@ export function typeDraft(document, stepId, text) {
   input.dispatchEvent(new DomEvent("input", { bubbles: true }));
   return input;
 }
+
+// The `<li>` for prompt `index` of step `stepId` (issue #99), or null when the step
+// or that prompt does not exist. The single lookup path the tick helpers share.
+function promptLi(document, stepId, index) {
+  const step = document.getElementById(stepId);
+  if (!step) return null;
+  return step.querySelectorAll(".review-prompts li")[index] || null;
+}
+
+// The injected tick <button> for prompt `index` of step `stepId`, or null when there
+// is none — e.g. on file://, where the prompts stay plain list items.
+export function promptTick(document, stepId, index) {
+  const li = promptLi(document, stepId, index);
+  return li ? li.querySelector(".prompt-tick") : null;
+}
+
+// Whether prompt `index` of step `stepId` is currently ticked (its li carries `ticked`).
+export function promptTicked(document, stepId, index) {
+  const li = promptLi(document, stepId, index);
+  return !!(li && li.classList.contains("ticked"));
+}
+
+// Click the tick affordance on prompt `index` of step `stepId` the way a reviewer
+// would. Returns the button clicked, or null if there is none (file:// record).
+export function tickPrompt(document, stepId, index) {
+  const btn = promptTick(document, stepId, index);
+  if (btn) click(btn);
+  return btn;
+}
