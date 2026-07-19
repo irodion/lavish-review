@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Element } from "./dom.mjs";
-import { loadCockpit, click, press } from "./harness.mjs";
+import { loadCockpit, click, press, buildFixtureDocument } from "./harness.mjs";
 
 const dot = (document, stepId) =>
   document.querySelectorAll(".deck-dot").find((d) => d.dataset.step === stepId);
@@ -82,6 +82,51 @@ test("the Map reuses each thread's renderer-derived impact summary", () => {
       .querySelectorAll(".deck-thread .thread-impacts")[0]
       .classList.contains("attention-unknown-impact"),
     "the renderer's attention class is preserved"
+  );
+});
+
+test("the Map relays each step's renderer-derived size tier onto its dot (issue #100)", () => {
+  const { document } = loadCockpit();
+
+  // The renderer stamps the size tier (weight.py's weight_bucket); the deck relays it
+  // verbatim, exactly like data-impact — so a heavy stop reads as a longer bar than a
+  // trivial one. The width policy is the stylesheet's; the tier is never derived in JS.
+  assert.equal(dot(document, "t1.s1").getAttribute("data-weight-bucket"), "w1", "small");
+  assert.equal(dot(document, "t1.s2").getAttribute("data-weight-bucket"), "w2", "medium");
+  assert.equal(dot(document, "t2.s1").getAttribute("data-weight-bucket"), "w4", "large");
+  // Size is emphasis only — the dot's colour still carries impact, never its weight.
+  assert.equal(dot(document, "t1.s1").getAttribute("data-impact"), "behavior-change");
+});
+
+test("the Map reuses each thread's renderer-derived reading weight (issue #100)", () => {
+  const { document } = loadCockpit();
+
+  const weights = document
+    .querySelectorAll(".deck-thread .thread-weight")
+    .map((weight) => weight.textContent);
+  assert.deepEqual(weights, ["~2 min", "~8 min"], "the thread budget is cloned into the Map");
+  assert.equal(
+    document.querySelectorAll(".deck-thread .thread-weight")[1].getAttribute("data-weight"),
+    "200",
+    "the rendered data-weight rides along, not a JS re-sum"
+  );
+  // The weight label is stripped from the thread title (like impacts), never leaking in.
+  const titles = document.querySelectorAll(".deck-thread-title").map((t) => t.textContent);
+  assert.deepEqual(titles, ["First thread", "Second thread"]);
+});
+
+test("a step with no size tier leaves its Map dot unbucketed (older/degraded page)", () => {
+  // An older page (or degraded render) may carry no data-weight-bucket; the deck must
+  // still build and the dot simply carries no tier (CSS falls back to the default width)
+  // rather than throwing or inventing one.
+  const doc = buildFixtureDocument();
+  doc.getElementById("t1.s1").removeAttribute("data-weight-bucket");
+  const { document } = loadCockpit({ doc });
+
+  assert.equal(
+    dot(document, "t1.s1").getAttribute("data-weight-bucket"),
+    null,
+    "no tier is relayed without a data-weight-bucket"
   );
 });
 

@@ -357,6 +357,11 @@ def test_file_diff_fragment_splits_each_hunk_into_an_anchored_section() -> None:
     # header_html is the @@ line crossed through the boundary (escaped, marker-wrapped).
     assert hunks[0]["header_html"] == fragment("@@ -1,3 +1,3 @@ def head():")
     assert hunks[1]["header_html"] == fragment("@@ -20,2 +20,3 @@ def tail():")
+    # `lines` is the exact rendered diff-body count for the reading weight (issue #100),
+    # header excluded. Hunk 1 modifies in place (1 context + 1 removed + 1 added + 1
+    # context = 4) — the header's max(3, 3) = 3 would undercount it; hunk 2 is a pure
+    # addition (2 context + 1 added = 3), which the header would size the same.
+    assert [h["lines"] for h in hunks] == [4, 3]
     # Each hunk is an individually anchored <pre>, and the preamble leads separately.
     assert html.startswith('<div class="file-diff">')
     assert html.count('<section class="hunk"') == 2

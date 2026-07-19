@@ -131,7 +131,26 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
     assert "&lt;style&gt;body{display:none}&lt;/style&gt;" in html
     assert '<span class="thread-impacts attention-behavior-change">' in html
     assert "1 behavior-change · 1 test" in html
-    assert '<details class="step" id="t1.s1" data-impact="behavior-change">' in html
+    # Every step carries a derived reading weight on its panel (a number + its Map-dot
+    # size tier) and a chip in its summary (document + Stage). This fixture's hunk header
+    # is degenerate ("@@") and t1.s2 is note-only, so nothing is measurable: the weight is
+    # an approximate floor of 0, shown as "unsized" — never a "~0 lines · <1 min" budget
+    # that would read as negligible, and its dot is bucketed "unsized", not the w1 smallest.
+    assert (
+        '<details class="step" id="t1.s1" data-impact="behavior-change"'
+        ' data-weight="0" data-weight-bucket="unsized">' in html
+    )
+    assert '<span class="chip weight weight-approx"' in html
+    assert ">unsized</span>" in html
+    assert "~0 lines" not in html and "<1 min" not in html
+    # Thread + route rollups: nothing measurable → an honest "not sized", no faked time.
+    assert '<section class="thread" id="t1" data-weight="0">' in html
+    assert '<span class="thread-weight" data-weight="0"' in html
+    assert ">unknown</span>" in html
+    assert (
+        '<li class="route-weight">Reading weight: not sized — '
+        "the cited evidence carries no measurable lines</li>" in html
+    )
     assert '<aside class="attention-note">' in html
     assert 'href="#hunk-' in html
     assert '<details class="file"' in html
@@ -143,6 +162,40 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
         )
         == []
     )
+
+
+def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)
+    # Give the cited hunk a real header AND the collector's exact line count. The exact
+    # count (24) intentionally differs from the header's max(18, 21) = 21, proving the
+    # renderer uses the exact count, not the undercounting header (issue #100).
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["hunks"][0]["header_html"] = fragment("@@ -1,18 +1,21 @@")
+    manifest["files"][0]["hunks"][0]["lines"] = 24
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # t1.s1 is sized exactly from its hunk — a plain (non-floor) chip showing 24, not 21 —
+    # and 24 lines lands in the w2 size tier (the Python-owned bucket policy).
+    s1_tag = (
+        '<details class="step" id="t1.s1" data-impact="behavior-change"'
+        ' data-weight="24" data-weight-bucket="w2">'
+    )
+    assert s1_tag in html
+    assert '<span class="chip weight" title=' in html
+    assert "24 lines" in html
+    # t1.s2 is note-only, so the line count becomes an explicit floor (≥ the 24 measured,
+    # with the unmeasured note on top) while the time stays a rough "~" estimate — never a
+    # rounded-up "≥ min" bound.
+    assert '<section class="thread" id="t1" data-weight="24">' in html
+    assert '<span class="thread-weight" data-weight="24"' in html
+    # The thread tooltip states the reading-pace heuristic too, like the L0 route estimate.
+    assert 'title="≥24 lines to read (~25 lines/min)">~1 min</span>' in html
+    assert "Reading weight: ≥24 lines · ~1 min at reading pace (~25 lines/min)" in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 
 def test_render_cockpit_stamps_run_identity_meta(tmp_path: Path) -> None:

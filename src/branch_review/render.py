@@ -25,6 +25,15 @@ from branch_review.escape import (
     fragment,
 )
 from branch_review.lint import lint_cockpit
+from branch_review.weight import (
+    LINES_PER_MINUTE,
+    StepWeight,
+    dot_bucket,
+    lines_label,
+    minutes_label,
+    rollup,
+    step_weight,
+)
 
 DEFAULT_RUN_DIR = Path(".review-agent")
 RENDER_CONTEXT_NAME = "render-context.json"
@@ -259,20 +268,47 @@ def _render_attention_notes(
     return "".join(rendered)
 
 
+def _weight_chip(weight: StepWeight) -> str:
+    """The neutral reading-weight chip for a step summary (derived, never authored).
+
+    Weight is emphasis, not verdict: the chip stays muted and carries its own glyph,
+    so it never reads by colour and never competes with the impact/confidence chips.
+    An approximate weight is a floor — its title says so.
+    """
+    approx = " weight-approx" if weight.approximate else ""
+    title = (
+        "Estimated reading weight — a floor; some cited evidence could not be sized precisely"
+        if weight.approximate
+        else "Estimated reading weight, derived from this step's evidence"
+    )
+    return (
+        f'<span class="chip weight{approx}" title="{escape_text(title)}">'
+        f"{escape_text(lines_label(weight))}</span>"
+    )
+
+
 def _render_step(
     step: Mapping[str, object], files_by_path: Mapping[str, Mapping[str, object]]
 ) -> str:
     sid = _text(step.get("id"))
     impact = _text(step.get("impact"))
     confidence = _text(step.get("confidence"))
+    # Derived at render time from the step's evidence — the narrator never authors it.
+    # `data-weight` (the number) and `data-weight-bucket` (its Map-dot size tier, a
+    # Python-owned policy) ride on the panel so Deck Mode relays the tier onto its dot
+    # verbatim — the same way it relays data-impact; the visible chip travels with the
+    # relocated step onto the Stage.
+    weight = step_weight(step.get("evidence"), files_by_path)
     parts = [
-        f'<details class="step" id="{escape_text(sid)}" data-impact="{escape_text(impact)}">',
+        f'<details class="step" id="{escape_text(sid)}" data-impact="{escape_text(impact)}"'
+        f' data-weight="{weight.lines}" data-weight-bucket="{dot_bucket(weight)}">',
         "<summary>",
         f'<span class="chip impact-{escape_text(impact)}">{escape_text(impact)}</span> ',
         fragment(_text(step.get("summary"))),
         " ",
         f'<span class="chip confidence-{escape_text(confidence)}">confidence: '
-        f"{escape_text(confidence)}</span>",
+        f"{escape_text(confidence)}</span> ",
+        _weight_chip(weight),
         "</summary>",
         '<div class="step-body">',
     ]
@@ -325,15 +361,29 @@ def _render_thread(
         if path not in files_by_path:
             raise RenderError(f"thread {tid!r} path {path!r} is not in fragments.json")
         paths.append(_path_html(files_by_path[path]))
+    # Reading cost rolled up from the thread's steps — a per-thread total the Map reuses
+    # (the derived-over-authored rule: no thread weight is ever in the analysis).
+    weight = rollup(step_weight(step.get("evidence"), files_by_path) for step in steps)
+    # The Map shows this thread rollup as a bare minute figure, so its tooltip states the
+    # reading-pace heuristic too — a rollup is never a bare number the reviewer can't
+    # recalibrate (weight.py's contract), matching the L0 route estimate.
+    weight_title = (
+        "reading time unknown — cited evidence carries no measurable lines"
+        if weight.approximate and weight.lines == 0
+        else f"{lines_label(weight)} to read (~{LINES_PER_MINUTE} lines/min)"
+    )
     return "\n".join(
         [
-            f'<section class="thread" id="{escape_text(tid)}">',
+            f'<section class="thread" id="{escape_text(tid)}" data-weight="{weight.lines}">',
             "<h2>",
             f'<span class="thread-id">{escape_text(tid)}</span> ',
             fragment(_text(thread.get("title"))),
             drive_by_chip,
             f'<span class="thread-impacts{impact_class}">'
             f"{escape_text(_impact_summary(steps))}</span>",
+            f'<span class="thread-weight" data-weight="{weight.lines}"'
+            f' title="{escape_text(weight_title)}">'
+            f"{escape_text(minutes_label(weight))}</span>",
             "</h2>",
             f'<p class="thread-summary">{fragment(_text(thread.get("summary")))}</p>',
             f'<p class="thread-paths">{" · ".join(paths)}</p>',
@@ -348,9 +398,22 @@ def _render_orientation(
     goal_html: str,
     isolation_note: str,
     files: Sequence[Mapping[str, object]],
+    files_by_path: Mapping[str, Mapping[str, object]],
 ) -> str:
     threads = _items(analysis.get("threads"))
     all_steps = [step for thread in threads for step in _items(thread.get("steps"))]
+    route_weight = rollup(step_weight(step.get("evidence"), files_by_path) for step in all_steps)
+    if route_weight.approximate and route_weight.lines == 0:
+        # Nothing across the route was measurable (all note-only/unsized evidence): a time
+        # would misread as "negligible", so state the unknown instead of "~0 lines · <1 min".
+        route_estimate = (
+            "Reading weight: not sized — the cited evidence carries no measurable lines"
+        )
+    else:
+        route_estimate = (
+            f"Reading weight: {lines_label(route_weight)} · "
+            f"{minutes_label(route_weight)} at reading pace (~{LINES_PER_MINUTE} lines/min)"
+        )
     links = "".join(
         f'<li><a href="#{escape_text(_text(thread.get("id")))}">'
         f"{fragment(_text(thread.get('title')))}</a></li>"
@@ -375,6 +438,7 @@ def _render_orientation(
             *([links] if links else []),
             f"<li>{len(files)} changed file(s)</li>",
             f"<li>{escape_text(_impact_summary(all_steps))}</li>",
+            f'<li class="route-weight">{escape_text(route_estimate)}</li>',
             f"<li>{escape_text(alignment_text)}</li>",
             "</ul>",
             "</section>",
@@ -472,7 +536,7 @@ def _document(
             "<body>",
             f'<header class="cockpit-head">{title_html}\n{meta_html}</header>',
             "<main>",
-            _render_orientation(analysis, goal_html, isolation_note, files),
+            _render_orientation(analysis, goal_html, isolation_note, files, files_by_path),
             *[_render_thread(thread, files_by_path, drive_by) for thread in threads],
             _render_files(run_dir, files, manifest),
             _render_runner(analysis),

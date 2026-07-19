@@ -585,7 +585,7 @@
     }
     const clone = heading.cloneNode(true);
     Array.prototype.forEach.call(
-      clone.querySelectorAll(".thread-id, .chip, .thread-impacts, .thread-progress"),
+      clone.querySelectorAll(".thread-id, .chip, .thread-impacts, .thread-weight, .thread-progress"),
       function (node) {
         node.remove();
       }
@@ -636,6 +636,11 @@
         // text and attention class instead of deriving a second count in JS.
         threadButton.appendChild(group.impactSummary.cloneNode(true));
       }
+      if (group.threadWeight) {
+        // Per-thread reading weight is renderer-derived too — clone the rendered node
+        // (its time label + title) rather than re-summing step weights in JS.
+        threadButton.appendChild(group.threadWeight.cloneNode(true));
+      }
       const counts = dispositionCounts(steps);
       threadButton.appendChild(cell("span", "deck-thread-frac", counts.reviewed + "/" + steps.length));
       // Staging a thread lands on its first step — the entry to that leg of the route.
@@ -659,6 +664,13 @@
         const impact = step.getAttribute("data-impact");
         if (impact) {
           dot.setAttribute("data-impact", impact);
+        }
+        // Relay the renderer's Map-dot size tier verbatim (issue #100), the same way
+        // data-impact is relayed above — the size-bucket policy lives in the renderer
+        // (weight.py), never re-derived here. Absent (an older page) → default width.
+        const weightBucket = step.getAttribute("data-weight-bucket");
+        if (weightBucket) {
+          dot.setAttribute("data-weight-bucket", weightBucket);
         }
         if (step === deck.staged) {
           dot.classList.add("current");
@@ -1411,6 +1423,9 @@
         threadId: idSource ? idSource.textContent : thread.id || "",
         title: threadTitleText(heading),
         impactSummary: heading ? heading.querySelector(".thread-impacts") : null,
+        // The renderer-derived per-thread reading weight (issue #100), reused in the
+        // Map rather than re-summed in JS — the same posture as the impact summary.
+        threadWeight: heading ? heading.querySelector(".thread-weight") : null,
       };
     });
     const steps = [];
