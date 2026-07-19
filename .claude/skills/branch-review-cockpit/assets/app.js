@@ -596,6 +596,21 @@
     return coreRouteActive() ? "core " : "";
   }
 
+  // The thread's entry on the active route: its first step the current route walks. In
+  // full mode that is group.steps[0]; in Core mode it is the thread's first core step, so
+  // a heading click never lands on an off-route step ahead of the route. A thread with no
+  // active-route step (e.g. an all-test thread while Core is active) falls back to its
+  // first step, so the heading still navigates into the thread (off-route, nothing hidden).
+  function threadEntryStep(group) {
+    const active = new Set(routeSteps());
+    for (let i = 0; i < group.steps.length; i++) {
+      if (active.has(group.steps[i])) {
+        return group.steps[i];
+      }
+    }
+    return group.steps[0];
+  }
+
   // Disposition tallies over a set of steps — reviewed + one count per settable state.
   function dispositionCounts(steps) {
     const totals = { reviewed: 0 };
@@ -753,9 +768,12 @@
       }
       const counts = dispositionCounts(steps);
       threadButton.appendChild(cell("span", "deck-thread-frac", counts.reviewed + "/" + steps.length));
-      // Staging a thread lands on its first step — the entry to that leg of the route.
+      // Staging a thread lands on its entry on the ACTIVE route — its first step the route
+      // walks (issue #101). In full mode that is steps[0]; in Core mode it is the thread's
+      // first core step, so a heading whose thread opens with an off-route (test/mechanical)
+      // step never drops onto that step ahead of the route.
       threadButton.addEventListener("click", function () {
-        stageStep(steps[0]);
+        stageStep(threadEntryStep(group));
       });
       block.appendChild(threadButton);
 

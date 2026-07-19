@@ -20,6 +20,11 @@ const stagedStepId = (document) => {
 };
 const routeBtn = (document, route) =>
   document.querySelectorAll(".deck-route-btn").find((b) => b.dataset.route === route);
+const threadBtn = (document, threadId) =>
+  document.querySelectorAll(".deck-thread").find((b) => {
+    const id = b.querySelector(".deck-thread-id");
+    return id && id.textContent === threadId;
+  });
 const tallyText = (document) => document.querySelector(".deck-tally").textContent;
 
 // A window.lavish stub so Stage dispositions have a channel to queue to (the local tint —
@@ -128,6 +133,33 @@ test("off-route dots are dimmed only while the core route is active", () => {
 
   click(routeBtn(document, "full"));
   assert.ok(!dot(document, "t2.s1").classList.contains("off-route"), "back to full — nothing dimmed");
+});
+
+test("in Core mode a thread heading stages the thread's first core step, not an off-route lead", () => {
+  // Make t1 open with a non-core step (t1.s1) followed by a core one (t1.s2), the case the
+  // heading must not mishandle: staging steps[0] blindly would drop onto the off-route lead.
+  const doc = buildFixtureDocument();
+  doc.getElementById("t1.s1").removeAttribute("data-core");
+  const { document } = loadCockpit({ doc });
+
+  // Full route: the heading lands on the thread's first step, exactly as before.
+  click(threadBtn(document, "t1"));
+  assert.equal(stagedStepId(document), "t1.s1");
+
+  // Core route: the heading enters the active route at t1.s2 — the thread's first core
+  // step — never the off-route t1.s1 ahead of it.
+  click(routeBtn(document, "core"));
+  click(threadBtn(document, "t1"));
+  assert.equal(stagedStepId(document), "t1.s2", "thread heading enters the active route");
+});
+
+test("in Core mode a thread with no core step still navigates from its heading (fallback)", () => {
+  const { document } = loadCockpit();
+  click(routeBtn(document, "core"));
+  // t2 is entirely non-core (its only step is a test-change). The heading falls back to the
+  // thread's first step, so the thread stays reachable (off-route — nothing is hidden).
+  click(threadBtn(document, "t2"));
+  assert.equal(stagedStepId(document), "t2.s1");
 });
 
 test("switching routes keeps the staged step when it belongs to both", () => {
