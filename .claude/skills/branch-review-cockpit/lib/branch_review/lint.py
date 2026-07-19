@@ -41,6 +41,10 @@ unchanged without it. Given that set, the lint also fails when:
 * **Dangling evidence anchor.** An in-page link (``<a href="#…">``) points at a
   fragment that no element ``id`` in the document carries — a deep link that would
   land nowhere.
+* **Unknown narrated-margin step.** A narrated-margin link (``<a class="narrating-step"
+  href="#…">``, the reverse hunk→step join, issue #103) points at a fragment that is not
+  a Review Step id — a tighter bar than the dangling check: it catches a margin link that
+  resolves to some *non-step* element (a file/hunk anchor) as well as one to no element.
 * **Step id set mismatch.** The step ids in the DOM (the ids of
   ``<details class="step">`` elements) are not *exactly* the analysis's step id set:
   a step present in the analysis but missing from the page, one on the page that the
@@ -256,6 +260,11 @@ class _TagAuditor(HTMLParser):
         self.element_ids: set[str] = set()
         self.step_ids: list[str] = []
         self.anchor_fragments: list[str] = []
+        # The fragments of the narrated-margin links (``<a class="narrating-step"
+        # href="#…">``, the reverse hunk→step join, issue #103) — a subset of
+        # anchor_fragments the structural pass holds to a tighter bar: they must resolve
+        # to a real *step* id, not merely some element id.
+        self.margin_step_fragments: list[str] = []
         # A stack of currently-open <details> elements — each entry is the element's
         # step id if it is a <details class="step">, else None — so a live-evidence
         # seam comment can be attributed to the step panel that encloses it (an
@@ -320,6 +329,10 @@ class _TagAuditor(HTMLParser):
 
     def _audit(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {name.lower(): (value or "") for name, value in attrs}
+        # A narrated-margin link is flagged by its class; read it once (first-wins, like
+        # the id/class reads below) so the in-page-anchor branch can tag its fragment.
+        link_classes = (_first_attr(attrs, "class") or "").split() if tag == "a" else []
+        is_margin_link = "narrating-step" in link_classes
 
         # Audit the RAW (name, value) pairs, not the collapsed dict: when a tag
         # carries duplicate attributes the browser keeps the FIRST, so
@@ -350,6 +363,8 @@ class _TagAuditor(HTMLParser):
                 # an element id. Bare "#" (scroll-to-top) carries no fragment to check.
                 if tag == "a" and name == "href" and value.startswith("#") and len(value) > 1:
                     self.anchor_fragments.append(value[1:])
+                    if is_margin_link:
+                        self.margin_step_fragments.append(value[1:])
 
         # Element id (an anchor target) and, when the element is a step panel, its
         # step id — the DOM side of the analysis↔page set check. Read id/class with
@@ -498,10 +513,11 @@ def _check_structure(html: str, auditor: _TagAuditor, step_ids: Iterable[str]) -
     Given the analysis's step id set, checks that the authored DOM matches it and
     carries the seams the bake and live-evidence injection depend on: exact step id
     correspondence (no missing, extra, or duplicated ids), every in-page anchor
-    resolving to a real element id, and the Q&A seam plus each step's live-evidence
-    seam being present. Each message names the offending id, anchor, or seam so a
-    failure points straight at what to fix. These are separate from — and never
-    substitute for — the escape/CSP rules: this returns its own list, appended after.
+    resolving to a real element id, every narrated-margin link resolving to a real step
+    id (issue #103), and the Q&A seam plus each step's live-evidence seam being present.
+    Each message names the offending id, anchor, or seam so a failure points straight at
+    what to fix. These are separate from — and never substitute for — the escape/CSP
+    rules: this returns its own list, appended after.
     """
     errors: list[LintError] = []
 
@@ -548,6 +564,21 @@ def _check_structure(html: str, auditor: _TagAuditor, step_ids: Iterable[str]) -
                 LintError(
                     "dangling-anchor",
                     f"in-page link '#{fragment_id}' resolves to no element id",
+                )
+            )
+
+    # Narrated-margin links (the reverse hunk→step join, issue #103) must land on a real
+    # Review Step, not merely some element: dangling-anchor already fails a target that is
+    # no element at all, so this tightens it to the DOM step-id set (``seen``). A margin
+    # link pointing at a non-step element id (a file/hunk anchor) or a stale step id still
+    # fails here — the deck stages the target *as a step* and document mode reveals its
+    # panel, so anything but a real step id is a dead cross-reference.
+    for fragment_id in auditor.margin_step_fragments:
+        if fragment_id not in seen:
+            errors.append(
+                LintError(
+                    "margin-step-unknown",
+                    f"narrated-margin link '#{fragment_id}' resolves to no Review Step",
                 )
             )
 

@@ -451,6 +451,24 @@ _STRUCTURAL_CASES = [
         _ANALYSIS_IDS,
         None,
     ),
+    # A narrated-margin link (issue #103) that lands on a real step passes; one that lands
+    # on a non-step element id fails margin-step-unknown WITHOUT tripping dangling-anchor
+    # (the element exists), proving the new rule is a genuine tightening of the resolution.
+    (
+        "margin-step-resolves-ok",
+        {"body_extra": '<a class="narrating-step" href="#t1.s2">t1.s2</a>'},
+        _ANALYSIS_IDS,
+        None,
+    ),
+    (
+        "margin-step-non-step-element",
+        {
+            "body_extra": '<span id="notastep"></span>'
+            '<a class="narrating-step" href="#notastep">x</a>'
+        },
+        _ANALYSIS_IDS,
+        "margin-step-unknown",
+    ),
     (
         "bare-hash-anchor-ok",
         {"body_extra": '<a href="#">top</a>'},
@@ -543,13 +561,25 @@ _STRUCTURAL_CASES = [
 ]
 
 
+def test_margin_link_to_absent_step_trips_both_rules() -> None:
+    # A narrated-margin link to a step id that is no element at all fails BOTH the general
+    # dangling-anchor (no element) and the tighter margin-step-unknown (no step) — the new
+    # rule tightens the resolution, it never replaces the dangling-anchor guarantee.
+    html = _structured_cockpit(body_extra='<a class="narrating-step" href="#t9.s9">gone</a>')
+    rules = _rules(lint_cockpit(html, csp_mode="interactive", step_ids=_ANALYSIS_IDS))
+    assert "dangling-anchor" in rules
+    assert "margin-step-unknown" in rules
+
+
 @pytest.mark.parametrize(("label", "kwargs", "ids", "expected"), _STRUCTURAL_CASES, ids=lambda c: c)
 def test_structural_rules(
     label: str, kwargs: dict[str, str], ids: list[str], expected: str | None
 ) -> None:
     errors = lint_cockpit(_structured_cockpit(**kwargs), csp_mode="interactive", step_ids=ids)
     struct_rules = {
-        r for r in _rules(errors) if r.startswith(("step-id-", "dangling-anchor", "seam-"))
+        r
+        for r in _rules(errors)
+        if r.startswith(("step-id-", "dangling-anchor", "seam-", "margin-step-"))
     }
     if expected is None:
         assert struct_rules == set(), f"{label}: unexpected {struct_rules}"

@@ -163,6 +163,71 @@ test("a relates_to link stages its Review Step target across threads", () => {
   assert.ok(document.body.classList.contains("deck-active"), "the jump stays in Deck Mode");
 });
 
+// Splice a narrated-margin link (the reverse hunk→step join, issue #103) into a hunk,
+// naming the step `stepId` — the renderer emits these inside each L3 hunk section.
+function injectHunkNarration(doc, hunkId, stepId) {
+  const hunk = doc.getElementById(hunkId);
+  const margin = doc.createElement("div");
+  margin.className = "hunk-narration";
+  const link = doc.createElement("a");
+  link.className = "narrating-step";
+  link.setAttribute("href", "#" + stepId);
+  link.appendChild(doc.createTextNode(stepId));
+  margin.appendChild(link);
+  hunk.insertBefore(margin, hunk.childNodes[0]);
+  return link;
+}
+
+test("a narrated-margin link stages its step in Deck Mode", () => {
+  const doc = buildFixtureDocument();
+  // hunk-a1 is t1.s1's cited evidence; give its margin a link naming t2.s1 (another thread).
+  injectHunkNarration(doc, "hunk-a1", "t2.s1");
+  const { document } = loadCockpit({ doc });
+
+  press(document, "j"); // stage t1.s1 → its hunk-a1 evidence clones inline, margin included
+  const marginLink = document
+    .querySelectorAll(".deck-stage .hunk-narration a")
+    .find((anchor) => anchor.getAttribute("href") === "#t2.s1");
+  assert.ok(marginLink, "the staged step's inline evidence carries the hunk's narration margin");
+
+  click(marginLink);
+  assert.equal(stagedStepId(document), "t2.s1", "the margin link stages its narrating step");
+  assert.ok(dot(document, "t2.s1").classList.contains("current"));
+  assert.ok(document.body.classList.contains("deck-active"), "the jump stays in Deck Mode");
+});
+
+test("a narrated-margin link reveals its step in document mode", () => {
+  const doc = buildFixtureDocument();
+  const link = injectHunkNarration(doc, "hunk-a1", "t2.s1");
+  const { document } = loadCockpit({ doc, protocol: "file:" }); // file:// → no deck
+
+  assert.equal(document.getElementById("t2.s1").open, false, "the step panel starts closed");
+  const event = click(link);
+  assert.equal(document.getElementById("t2.s1").open, true, "the margin link reveals the step panel");
+  assert.equal(event.defaultPrevented, false, "document mode keeps normal anchor navigation");
+});
+
+test("a file-level narration link reveals its step and suppresses the summary toggle", () => {
+  const doc = buildFixtureDocument();
+  // The renderer puts a file-level ref's narration inside the file <summary>. A bare
+  // click on an <a> there would also fire the summary's disclosure toggle, so app.js
+  // must preventDefault — unlike a hunk-margin link, which keeps native anchor behavior.
+  const summary = doc.getElementById("file-f1").querySelector("summary");
+  const span = doc.createElement("span");
+  span.className = "file-narration";
+  const link = doc.createElement("a");
+  link.className = "narrating-step";
+  link.setAttribute("href", "#t2.s1");
+  link.appendChild(doc.createTextNode("t2.s1"));
+  span.appendChild(link);
+  summary.appendChild(span);
+  const { document } = loadCockpit({ doc, protocol: "file:" });
+
+  const event = click(link);
+  assert.equal(document.getElementById("t2.s1").open, true, "the narrating step is revealed");
+  assert.equal(event.defaultPrevented, true, "the file's own disclosure toggle is suppressed");
+});
+
 test("a non-step relation anchor keeps normal document reveal behavior", () => {
   const { document } = loadCockpit();
   press(document, "j");

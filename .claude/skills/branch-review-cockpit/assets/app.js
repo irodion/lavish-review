@@ -2042,13 +2042,16 @@
         }
         const id = anchor.getAttribute("href").slice(1);
         const target = id && document.getElementById(id);
-        // A renderer-authored relates_to link is a Deck navigation affordance:
-        // stage that already-rendered Review Step directly, even across threads.
-        // All other anchors keep the document's normal reveal behavior below.
+        // A renderer-authored step-navigation link is a Deck affordance: stage that
+        // already-rendered Review Step directly, even across threads. Two kinds qualify —
+        // a relates_to link (`.step-relations`) and a narrated-margin link
+        // (`.narrating-step`, the reverse hunk→step join, issue #103). All other anchors
+        // keep the document's normal reveal behavior below (in document mode, and in Deck
+        // Mode both kinds fall through to `revealElement` when their target isn't a step).
         if (
           deck &&
           deck.mode === "deck" &&
-          anchor.closest(".step-relations") &&
+          (anchor.closest(".step-relations") || anchor.classList.contains("narrating-step")) &&
           STEP_ID.test(id) &&
           target &&
           deck.steps.indexOf(target) !== -1
@@ -2060,6 +2063,22 @@
         }
         if (target) {
           revealElement(target);
+          // The file-level narration link lives inside a file's <summary>, where a bare
+          // click also fires that summary's disclosure toggle — the same footgun the
+          // in-summary disposition controls guard against. Suppress it so jumping to the
+          // narrating step never flips the file panel as a side effect, and drive the
+          // scroll through the hash the prevented default would have set. Hunk-level
+          // margins sit in a plain <div>, so they never match and keep native anchor
+          // behavior. (issue #103)
+          if (anchor.classList.contains("narrating-step") && anchor.closest("summary")) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (location.hash === "#" + id) {
+              revealHashTarget();
+            } else {
+              location.hash = "#" + id;
+            }
+          }
         }
       },
       true

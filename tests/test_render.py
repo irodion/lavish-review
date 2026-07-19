@@ -363,6 +363,174 @@ def test_render_cockpit_keeps_omitted_files_visible(tmp_path: Path) -> None:
     assert "2 changed file(s)" in html
 
 
+_S1_MARGIN = (
+    '<div class="hunk-narration"><span class="narration-label">narrated by</span> '
+    '<a class="narrating-step" href="#t1.s1">t1.s1</a></div>'
+)
+_UNNARRATED_MARGIN = (
+    '<div class="hunk-narration hunk-unnarrated">'
+    '<span class="unnarrated-marker">un-narrated</span></div>'
+)
+
+
+def _rewrite_app_fragment(run_dir: Path, sections: str) -> str:
+    """Rewrite the src/app.py diff fragment with the given hunk ``<section>``s; return fid."""
+    fid = file_fragment_id("src/app.py")
+    (run_dir / "fragments" / f"{fid}.html").write_text(
+        f'<div class="file-diff">{sections}</div>\n', encoding="utf-8"
+    )
+    return fid
+
+
+def test_render_cockpit_narrates_hunks_in_the_margin(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)  # t1.s1 anchors src/app.py hunk 1
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # The hunk the step anchors names its narrating step in the margin, linked to the
+    # step panel — the reverse of the forward evidence link (issue #103).
+    fid = file_fragment_id("src/app.py")
+    assert f'<section class="hunk" id="hunk-{fid}-1">{_S1_MARGIN}' in html
+    # The lone narrated hunk carries no un-narrated marker.
+    assert "hunk-unnarrated" not in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_marks_un_narrated_hunks_neutrally(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)
+    # Add a second hunk to src/app.py that no step anchors — it stays visibly bare.
+    fid = file_fragment_id("src/app.py")
+    diff_html = fragment("@@ -1 +1 @@\n-old\n+new\n")
+    _rewrite_app_fragment(
+        run_dir,
+        f'<section class="hunk" id="hunk-{fid}-1"><pre class="diff">{diff_html}</pre></section>'
+        f'<section class="hunk" id="hunk-{fid}-2"><pre class="diff">{diff_html}</pre></section>',
+    )
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["hunks"].append(
+        {"index": 2, "anchor": f"hunk-{fid}-2", "header_html": fragment("@@")}
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert f'<section class="hunk" id="hunk-{fid}-1">{_S1_MARGIN}' in html
+    # Hunk 2 has no narrating step → the neutral un-narrated marker (not a warn/diff colour).
+    assert f'<section class="hunk" id="hunk-{fid}-2">{_UNNARRATED_MARGIN}' in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_lists_every_step_that_narrates_one_hunk(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    # Make t1.s2 also anchor src/app.py hunk 1, so two steps narrate the one hunk.
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    analysis["threads"][0]["steps"][1]["evidence"] = [
+        {"note": "test assertion in the same hunk"},
+        {"path": "src/app.py", "hunk": 1},
+    ]
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # Both narrating steps are listed, in Review Route (first-appearance) order.
+    fid = file_fragment_id("src/app.py")
+    assert (
+        f'<section class="hunk" id="hunk-{fid}-1"><div class="hunk-narration">'
+        '<span class="narration-label">narrated by</span> '
+        '<a class="narrating-step" href="#t1.s1">t1.s1</a> '
+        '<a class="narrating-step" href="#t1.s2">t1.s2</a></div>' in html
+    )
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_counts_attention_note_evidence_as_narration(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    # A step whose ONLY hunk citation lives in an attention note. That evidence renders as
+    # a working `.evidence-list` link and clones into the deck, so the hunk is narrated —
+    # it must not read "un-narrated" beside the note that links it (ADR-0016 evidence).
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    step = analysis["threads"][0]["steps"][0]
+    step["evidence"] = [{"note": "no hunk cited directly"}]
+    step["attention_notes"] = [
+        {"text": "flagged here", "evidence": [{"path": "src/app.py", "hunk": 1}]}
+    ]
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    fid = file_fragment_id("src/app.py")
+    assert f'<section class="hunk" id="hunk-{fid}-1">{_S1_MARGIN}' in html
+    assert "hunk-unnarrated" not in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_annotates_file_level_refs_on_the_header(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    # Repoint t1.s2 at a file-level ref (no hunk) — it narrates the file, not a hunk.
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    analysis["threads"][0]["steps"][1]["evidence"] = [{"path": "src/app.py"}]
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # The file-level ref annotates the file-fragment header, not any hunk…
+    assert (
+        '<span class="file-narration"><span class="narration-label">narrated by</span> '
+        '<a class="narrating-step" href="#t1.s2">t1.s2</a></span>' in html
+    )
+    # …and hunk 1's own margin still lists only its hunk-level narrator (t1.s1), never t1.s2.
+    fid = file_fragment_id("src/app.py")
+    assert f'<section class="hunk" id="hunk-{fid}-1">{_S1_MARGIN}' in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_annotates_file_level_ref_on_an_omitted_file(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"].append(
+        {
+            "path": "uv.lock",
+            "path_html": fragment("uv.lock"),
+            "status": "M",
+            "id": file_fragment_id("uv.lock"),
+            "omitted": True,
+            "reason": "lockfile body omitted",
+            "added": 20,
+            "deleted": 10,
+            "binary": False,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    # A step file-level-refs the omitted file — an omitted body has no hunks, so it can
+    # only be annotated at the file-fragment level (never a per-hunk marker).
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    analysis["threads"][0]["steps"][1]["evidence"] = [{"path": "uv.lock"}]
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert (
+        '<span class="file-narration"><span class="narration-label">narrated by</span> '
+        '<a class="narrating-step" href="#t1.s2">t1.s2</a></span>' in html
+    )
+    # The omitted file has no hunk, so it never carries an un-narrated hunk marker.
+    omitted_fid = file_fragment_id("uv.lock")
+    assert f'id="hunk-{omitted_fid}-' not in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
 def test_render_cockpit_explains_total_diff_fallback(tmp_path: Path) -> None:
     run_dir = tmp_path / ".review-agent"
     _write_run(run_dir)
