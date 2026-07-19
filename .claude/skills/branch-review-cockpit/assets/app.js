@@ -585,7 +585,7 @@
     }
     const clone = heading.cloneNode(true);
     Array.prototype.forEach.call(
-      clone.querySelectorAll(".thread-id, .chip, .thread-impacts, .thread-progress"),
+      clone.querySelectorAll(".thread-id, .chip, .thread-impacts, .thread-weight, .thread-progress"),
       function (node) {
         node.remove();
       }
@@ -597,6 +597,33 @@
   // colour carried by the class (never colour alone — ADR-0014). text only.
   function countBadge(className, glyph, value) {
     return cell("span", "deck-count " + className, glyph + " " + value);
+  }
+
+  // Bucket a step's renderer-derived reading weight (issue #100) into a Map-dot size
+  // class, so a heavy stop reads as a longer bar than a trivial one. This maps an
+  // already-derived number to a display size — like the dot's data-impact/disposition
+  // reads — it does NOT re-derive the weight. Size is emphasis only; the dot's colour
+  // still carries disposition/impact (judgment-color discipline). Absent or unparseable
+  // weight → null (the default dot width), so an old page never breaks.
+  function dotWeightClass(step) {
+    const raw = step.getAttribute("data-weight");
+    if (raw === null) {
+      return null;
+    }
+    const lines = parseInt(raw, 10);
+    if (!(lines >= 0)) {
+      return null; // NaN or negative → leave the dot at its default size
+    }
+    if (lines < 15) {
+      return "deck-dot--w1";
+    }
+    if (lines < 50) {
+      return "deck-dot--w2";
+    }
+    if (lines < 150) {
+      return "deck-dot--w3";
+    }
+    return "deck-dot--w4";
   }
 
   // (Re)draw the Map's dynamic parts — the overall progress, and each thread's dots
@@ -636,6 +663,11 @@
         // text and attention class instead of deriving a second count in JS.
         threadButton.appendChild(group.impactSummary.cloneNode(true));
       }
+      if (group.threadWeight) {
+        // Per-thread reading weight is renderer-derived too — clone the rendered node
+        // (its time label + title) rather than re-summing step weights in JS.
+        threadButton.appendChild(group.threadWeight.cloneNode(true));
+      }
       const counts = dispositionCounts(steps);
       threadButton.appendChild(cell("span", "deck-thread-frac", counts.reviewed + "/" + steps.length));
       // Staging a thread lands on its first step — the entry to that leg of the route.
@@ -659,6 +691,11 @@
         const impact = step.getAttribute("data-impact");
         if (impact) {
           dot.setAttribute("data-impact", impact);
+        }
+        // Size the dot by its step's reading weight (issue #100) — emphasis, not colour.
+        const weightClass = dotWeightClass(step);
+        if (weightClass) {
+          dot.classList.add(weightClass);
         }
         if (step === deck.staged) {
           dot.classList.add("current");
@@ -1411,6 +1448,9 @@
         threadId: idSource ? idSource.textContent : thread.id || "",
         title: threadTitleText(heading),
         impactSummary: heading ? heading.querySelector(".thread-impacts") : null,
+        // The renderer-derived per-thread reading weight (issue #100), reused in the
+        // Map rather than re-summed in JS — the same posture as the impact summary.
+        threadWeight: heading ? heading.querySelector(".thread-weight") : null,
       };
     });
     const steps = [];

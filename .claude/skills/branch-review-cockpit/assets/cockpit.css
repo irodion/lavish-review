@@ -275,6 +275,10 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
   border-radius: 8px;
   padding: 0.3rem 0.8rem;
 }
+/* The route reading-weight budget (issue #100) is the reviewer's sitting-length signal,
+   so it reads a touch stronger than the other orientation facts — foreground text, not
+   a colour spend; still a neutral pill. */
+.orientation > li.route-weight { color: var(--fg); }
 /* Nested detail (the thread route, goal-alignment links) renders as plain rows
    inside its parent item — never a pill-in-pill. */
 .orientation li ul {
@@ -347,6 +351,16 @@ section.l0 .intent-read { font-size: 1.05rem; margin: 0 0 0.75rem; }
 .flag-drive-by { color: var(--muted); }
 .flag-drive-by::before { content: "\2691"; margin-right: 0.3em; } /* ⚑ */
 
+/* Derived reading weight (issue #100): a per-step reading-cost signal, derived at
+   render time from the step's evidence — never authored. Weight is EMPHASIS, not a
+   verdict, so the chip stays neutral (--muted) and carries its own ≡ glyph — it never
+   reads by colour and never competes with the impact/confidence chips. An approximate
+   weight is a floor (some evidence could not be sized precisely); its dashed border
+   reads as "at least this" without spending a colour. */
+.chip.weight { color: var(--muted); }
+.chip.weight::before { content: "\2261"; margin-right: 0.3em; } /* ≡ */
+.chip.weight.weight-approx { border-style: dashed; }
+
 /* L1 — one card per narrative thread, in descent (route) order. */
 section.thread {
   background: var(--panel);
@@ -385,6 +399,16 @@ section.thread > h2 .thread-id {
 }
 .thread-impacts.attention-unknown-impact { color: var(--warn); }
 .thread-impacts.attention-behavior-change { color: var(--fg); }
+/* Derived per-thread reading weight (issue #100): the thread's rollup shown as a time
+   budget. A cost cue, so it stays neutral like the impact counts — never a judgment. */
+.thread-weight {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 0.6rem;
+}
+.thread-weight::before { content: "\29D6"; margin-right: 0.3em; } /* ⧖ */
 .thread-summary { margin: 0 0 0.5rem; }
 .thread-paths {
   margin: 0 0 0.75rem;
@@ -846,11 +870,20 @@ body.deck-active .deck {
 .deck-thread-id { color: var(--accent); font-family: var(--mono); font-size: 0.72rem; }
 .deck-thread-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .deck-thread .thread-impacts {
-  grid-column: 2 / -1;
+  grid-column: 2 / 3;
   grid-row: 2;
   margin-left: 0;
   font-size: 0.66rem;
   white-space: normal;
+}
+/* The thread's reading-weight rollup, reused from the renderer (never re-summed in JS),
+   sits under the fraction so a leg's cost sits beside its progress. */
+.deck-thread .thread-weight {
+  grid-column: 3;
+  grid-row: 2;
+  justify-self: end;
+  margin-left: 0;
+  font-size: 0.66rem;
 }
 .deck-thread-frac {
   grid-column: 3;
@@ -861,9 +894,10 @@ body.deck-active .deck {
   font-variant-numeric: tabular-nums;
 }
 
-.deck-dots { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.15rem 0 0 0.35rem; }
+.deck-dots { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.15rem 0 0 0.35rem; align-items: center; }
 .deck-dot {
-  width: 20px;
+  --dot-w: 20px; /* sized by reading weight below (issue #100) — a bucket sets this var */
+  width: var(--dot-w);
   height: 11px;
   padding: 0;
   border: 1px solid var(--border);
@@ -871,6 +905,14 @@ body.deck-active .deck {
   background: var(--bg);
   cursor: pointer;
 }
+/* Reading-weight dot width (issue #100): a heavy stop reads as a longer bar than a
+   trivial one, so the Map no longer looks the same for a 3-line tweak and a 500-line
+   rewrite. Width is EMPHASIS only — the dot's colour still carries disposition/impact,
+   never its weight (judgment-color discipline). Absent weight → the default width. */
+.deck-dot--w1 { --dot-w: 12px; }
+.deck-dot--w2 { --dot-w: 20px; }
+.deck-dot--w3 { --dot-w: 32px; }
+.deck-dot--w4 { --dot-w: 46px; }
 /* An unreviewed dot hints its step's Behavior Impact (ADR-0016): the attention-worthy
    impacts get a tinted border so the Map reads by change-character before any
    disposition is set. A set disposition (below) fills the dot and wins. */
@@ -994,5 +1036,10 @@ body.deck-active .deck {
   body.deck-active .deck { grid-template-columns: 1fr; }
   .deck-map { position: static; max-height: none; }
   .deck-dots { gap: 6px; }
-  .deck-dot { width: 24px; height: 13px; }
+  /* Bigger touch targets, but keep the weight bucketing (a larger floor, not a flat size). */
+  .deck-dot { height: 13px; }
+  .deck-dot--w1 { --dot-w: 18px; }
+  .deck-dot--w2 { --dot-w: 26px; }
+  .deck-dot--w3 { --dot-w: 38px; }
+  .deck-dot--w4 { --dot-w: 52px; }
 }

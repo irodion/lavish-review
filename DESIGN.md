@@ -42,9 +42,9 @@ See [CONTEXT.md](./CONTEXT.md) for the glossary and [docs/adr/](./docs/adr/) for
 
 The surface is four pre-authored layers, each answering "why should I believe the layer above?", descended at the reviewer's pace by client-side disclosure (native `<details>` — no agent round-trip):
 
-- **L0 — Goal alignment.** The Goal Evidence (or its degraded "no stated goal found" notice), the intent summary, and the `alignment` partition: which threads serve the goal, which are drive-bys.
-- **L1 — Threads.** The changeset decomposed into narrative threads (semantic sub-changes, not files), each with per-thread review progress. Threads are the unit of the Review Route.
-- **L2 — Claims.** Per thread, the assertions to judge — `behavior | risk | omission | verify` — each with the agent's confidence, ≥1 challenge question, evidence links, in-page Reviewer Disposition controls, and a pre-planted live-evidence seam.
+- **L0 — Goal alignment.** The Goal Evidence (or its degraded "no stated goal found" notice), the intent summary, the `alignment` partition (which threads serve the goal, which are drive-bys), and a **derived route reading-weight budget** ("~90 min at reading pace", heuristic stated).
+- **L1 — Threads.** The changeset decomposed into narrative threads (semantic sub-changes, not files), each with per-thread review progress and a rolled-up reading-weight total. Threads are the unit of the Review Route.
+- **L2 — Claims.** Per thread, the assertions to judge — `behavior | risk | omission | verify` — each with the agent's confidence, ≥1 challenge question, evidence links, in-page Reviewer Disposition controls, a pre-planted live-evidence seam, and a **derived reading weight** (issue #100): a per-step reading-cost chip, never authored. It is derived at render time from the step's own evidence — a hunk-anchored ref contributes that hunk's line count, a file-level ref contributes the file's changed lines capped at a bound, note-only evidence marks the weight an approximate floor — rolled up per thread and for the whole route. The contribution rule lives in `src/branch_review/weight.py`; the Map sizes each dot by its step's weight (emphasis via size, never colour — judgment-color discipline holds).
 - **L3 — Evidence.** Pre-escaped hunks, excerpts, and caller references per claim; the unified diff is leaf evidence, never the spine. Every changed file stays reachable here (nothing-hidden invariant), omitted bodies listed with reasons.
 
 Mapping from the v1 section names (for older issues/ADRs):

@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Element } from "./dom.mjs";
-import { loadCockpit, click, press } from "./harness.mjs";
+import { loadCockpit, click, press, buildFixtureDocument } from "./harness.mjs";
 
 const dot = (document, stepId) =>
   document.querySelectorAll(".deck-dot").find((d) => d.dataset.step === stepId);
@@ -82,6 +82,51 @@ test("the Map reuses each thread's renderer-derived impact summary", () => {
       .querySelectorAll(".deck-thread .thread-impacts")[0]
       .classList.contains("attention-unknown-impact"),
     "the renderer's attention class is preserved"
+  );
+});
+
+test("the Map sizes each dot by its step's derived reading weight (issue #100)", () => {
+  const { document } = loadCockpit();
+
+  // The fixture weights (8 / 40 / 200 lines) fall in distinct size buckets, so a heavy
+  // stop reads as a longer bar than a trivial one — the Map is no longer weight-blind.
+  assert.ok(dot(document, "t1.s1").classList.contains("deck-dot--w1"), "8 lines → smallest");
+  assert.ok(dot(document, "t1.s2").classList.contains("deck-dot--w2"), "40 lines → medium");
+  assert.ok(dot(document, "t2.s1").classList.contains("deck-dot--w4"), "200 lines → largest");
+  // Size is emphasis only — the dot's colour still carries impact, never its weight.
+  assert.equal(dot(document, "t1.s1").getAttribute("data-impact"), "behavior-change");
+});
+
+test("the Map reuses each thread's renderer-derived reading weight (issue #100)", () => {
+  const { document } = loadCockpit();
+
+  const weights = document
+    .querySelectorAll(".deck-thread .thread-weight")
+    .map((weight) => weight.textContent);
+  assert.deepEqual(weights, ["~2 min", "~8 min"], "the thread budget is cloned into the Map");
+  assert.equal(
+    document.querySelectorAll(".deck-thread .thread-weight")[1].getAttribute("data-weight"),
+    "200",
+    "the rendered data-weight rides along, not a JS re-sum"
+  );
+  // The weight label is stripped from the thread title (like impacts), never leaking in.
+  const titles = document.querySelectorAll(".deck-thread-title").map((t) => t.textContent);
+  assert.deepEqual(titles, ["First thread", "Second thread"]);
+});
+
+test("a step with no derived weight leaves its Map dot at the default size", () => {
+  // An older page (or degraded render) may carry no data-weight; the deck must still
+  // build and the dot simply takes no size bucket rather than throwing.
+  const doc = buildFixtureDocument();
+  doc.getElementById("t1.s1").removeAttribute("data-weight");
+  const { document } = loadCockpit({ doc });
+
+  const classes = dot(document, "t1.s1").classList;
+  assert.ok(
+    !["deck-dot--w1", "deck-dot--w2", "deck-dot--w3", "deck-dot--w4"].some((c) =>
+      classes.contains(c)
+    ),
+    "no weight bucket is applied without a data-weight"
   );
 });
 
