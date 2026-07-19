@@ -11,17 +11,21 @@ fragments always produce the same weight (deterministic, unit-tested here).
 
 The contribution rule, per evidence ref:
 
-* **Hunk-anchored ref** (``{path, hunk}``) — contributes that hunk's line count, read
-  off the hunk header in the fragments manifest (``@@ -a,b +c,d @@`` → ``max(b, d)``, the
-  larger of the two sides; a missing count means the single-line form and counts as 1).
-  This is a precise, per-hunk signal: the step points at an exact region, so it is sized
-  by exactly that region.
+* **Hunk-anchored ref** (``{path, hunk}``) — contributes that hunk's line count. The
+  precise source is the collector's exact per-hunk ``lines`` (the count of rendered
+  diff-body lines it measured from the raw bytes). When only the ``@@ -a,b +c,d @@``
+  header is available (an older manifest), it falls back to ``max(b, d)`` — a true
+  **lower bound**, since a modify-in-place hunk shares context in both sides and the
+  header's larger side drops the ``min(added, removed)`` overlap — and flags the weight
+  approximate. If the same file is also cited at file level in the same step, the hunk
+  refs supersede that file-level ref (below), so the file's lines are never double-counted.
 * **File-level ref** (``{path}`` with no ``hunk``) — contributes the file's changed-line
   count (``added + deleted``), **capped at** :data:`FILE_LEVEL_CAP`. A file-level ref is
   imprecise (it points at the whole file, not a region), and an unbounded whole-file
   citation of a large or generated file would swamp the route estimate the way a precise
   hunk citation legitimately should not. The cap makes a whole-file citation count as
-  *some* reading without letting it dominate.
+  *some* reading without letting it dominate. A file-level ref is **dropped** when the
+  same step also cites specific hunks of that file — the hunks are the precise evidence.
 * **Note-only ref** (``{note}`` with no ``path``) — contributes nothing and marks the
   step's weight :attr:`~StepWeight.approximate`: it is prose evidence with nothing to
   size.
@@ -29,9 +33,15 @@ The contribution rule, per evidence ref:
 Two degrade-gracefully cases both mark the weight approximate rather than crash or
 mislead (acceptance criterion): an **omitted-body** file cited at file level (its body
 is gone, but its ``added``/``deleted`` stats survive the omission, so it is still sized
-from those and flagged), and a hunk header that cannot be parsed (contributes nothing,
-flagged). :attr:`~StepWeight.approximate` means the shown number is a **floor** — there
-is evidence the derivation could not size precisely.
+from those and flagged), and a hunk sized from the header floor rather than an exact
+count (as above). :attr:`~StepWeight.approximate` means the shown number is a **floor** —
+there is evidence the derivation could not size precisely.
+
+Rollups (:func:`rollup`) sum **per step-visit**: thread and route totals add each step's
+own reading load, so evidence re-cited across two steps is counted at each stop the
+reviewer visits — a route budget measures reading stops, not unique lines. Within a
+single step, exact-duplicate refs collapse and a file-level ref superseded by hunk refs
+is dropped, so a step never double-counts its own lines.
 
 The time heuristic is stated wherever a rollup is shown (never a bare number the reviewer
 cannot recalibrate): weight in lines ÷ :data:`LINES_PER_MINUTE` at reading pace.
@@ -98,11 +108,15 @@ def _parse_hunk_counts(header_html: str) -> tuple[int, int] | None:
     return old, new
 
 
-def hunk_line_count(entry: Mapping[str, object], index: object) -> int | None:
-    """Lines in the ``index``-th hunk of a file entry (``max`` of the two sides), or None.
+def hunk_reading_size(entry: Mapping[str, object], index: object) -> tuple[int, bool] | None:
+    """``(lines, exact)`` for the ``index``-th hunk of a file entry, or ``None``.
 
-    ``None`` — the hunk is absent from the manifest, or its header cannot be parsed —
-    is the caller's signal to flag the step's weight approximate.
+    Prefers the collector's exact per-hunk ``lines`` (``exact=True``). Falls back to the
+    header's larger side ``max(old, new)`` (``exact=False``) — a true lower bound, since
+    a modify-in-place hunk's shared context is dropped by taking the max — so the caller
+    flags the weight approximate. ``None`` — the hunk is absent, or has neither a valid
+    ``lines`` nor a parseable header — signals the caller to flag it approximate with no
+    contribution.
     """
     hunks = entry.get("hunks")
     if not isinstance(hunks, list):
@@ -113,11 +127,15 @@ def hunk_line_count(entry: Mapping[str, object], index: object) -> int | None:
         hunk_index = hunk.get("index")
         if isinstance(hunk_index, bool) or hunk_index != index:
             continue
+        lines = hunk.get("lines")
+        if isinstance(lines, int) and not isinstance(lines, bool) and lines >= 0:
+            return lines, True
         header = hunk.get("header_html")
-        if not isinstance(header, str):
-            return None
-        counts = _parse_hunk_counts(header)
-        return None if counts is None else max(counts)
+        if isinstance(header, str):
+            counts = _parse_hunk_counts(header)
+            if counts is not None:
+                return max(counts), False  # a lower bound — see the docstring
+        return None
     return None
 
 
@@ -148,10 +166,14 @@ def step_weight(
     total = 0
     approximate = False
     seen: set[tuple[str, object]] = set()
-    refs = evidence if isinstance(evidence, Sequence) and not isinstance(evidence, str) else []
+    raw = evidence if isinstance(evidence, Sequence) and not isinstance(evidence, str) else []
+    refs = [ref for ref in raw if isinstance(ref, Mapping)]
+    # A file cited at hunk level is sized by those hunks; a same-step file-level ref to it
+    # is then redundant and would double-count the file's lines, so it is dropped.
+    hunk_cited: set[str] = {
+        ref["path"] for ref in refs if isinstance(ref.get("path"), str) and "hunk" in ref
+    }
     for ref in refs:
-        if not isinstance(ref, Mapping):
-            continue
         path = ref.get("path")
         if not isinstance(path, str):
             # Note-only (or malformed) evidence: nothing to size, but its presence
@@ -168,12 +190,17 @@ def step_weight(
             if key in seen:
                 continue
             seen.add(key)
-            count = hunk_line_count(entry, ref["hunk"])
-            if count is None:
+            result = hunk_reading_size(entry, ref["hunk"])
+            if result is None:
                 approximate = True
             else:
-                total += count
+                lines, exact = result
+                total += lines
+                if not exact:
+                    approximate = True
         else:
+            if path in hunk_cited:
+                continue  # superseded by this step's own hunk refs to the same file
             key = (path, "file")
             if key in seen:
                 continue

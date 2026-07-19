@@ -114,6 +114,8 @@ test("the Map reuses each thread's renderer-derived reading weight (issue #100)"
   assert.deepEqual(titles, ["First thread", "Second thread"]);
 });
 
+const WEIGHT_BUCKETS = ["deck-dot--w1", "deck-dot--w2", "deck-dot--w3", "deck-dot--w4"];
+
 test("a step with no derived weight leaves its Map dot at the default size", () => {
   // An older page (or degraded render) may carry no data-weight; the deck must still
   // build and the dot simply takes no size bucket rather than throwing.
@@ -123,11 +125,25 @@ test("a step with no derived weight leaves its Map dot at the default size", () 
 
   const classes = dot(document, "t1.s1").classList;
   assert.ok(
-    !["deck-dot--w1", "deck-dot--w2", "deck-dot--w3", "deck-dot--w4"].some((c) =>
-      classes.contains(c)
-    ),
+    !WEIGHT_BUCKETS.some((c) => classes.contains(c)),
     "no weight bucket is applied without a data-weight"
   );
+});
+
+test("a malformed or negative data-weight falls back to the default dot size", () => {
+  // A hand-edited or corrupt page could carry a non-numeric or negative weight; the
+  // bucket mapping must reject it (never a NaN/negative size) rather than mislead.
+  for (const bad of ["not-a-number", "-5", ""]) {
+    const doc = buildFixtureDocument();
+    doc.getElementById("t1.s1").setAttribute("data-weight", bad);
+    const { document } = loadCockpit({ doc });
+
+    const classes = dot(document, "t1.s1").classList;
+    assert.ok(
+      !WEIGHT_BUCKETS.some((c) => classes.contains(c)),
+      `data-weight="${bad}" must not map to a size bucket`
+    );
+  }
 });
 
 test("clicking a dot or a thread stages that step", () => {

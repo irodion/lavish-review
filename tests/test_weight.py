@@ -13,7 +13,7 @@ from branch_review.weight import (
     StepWeight,
     file_change_size,
     file_ref_weight,
-    hunk_line_count,
+    hunk_reading_size,
     lines_label,
     minutes_label,
     reading_minutes,
@@ -35,47 +35,70 @@ def _file(path: str, *, added: int = 0, deleted: int = 0, omitted: bool = False,
     return entry
 
 
-def _hunk(index: int, header: str):
-    """A manifest hunk entry — header crossed through the Escape Boundary like the real one."""
-    return {"index": index, "anchor": f"hunk-x-{index}", "header_html": fragment(header)}
+def _hunk(index: int, header: str, lines: int | None = None):
+    """A manifest hunk entry — header crossed through the Escape Boundary like the real one.
+
+    ``lines`` is the collector's exact per-hunk count (issue #100); omit it to model an
+    older manifest that carries only the header (the approximate floor fallback).
+    """
+    entry: dict[str, object] = {
+        "index": index,
+        "anchor": f"hunk-x-{index}",
+        "header_html": fragment(header),
+    }
+    if lines is not None:
+        entry["lines"] = lines
+    return entry
 
 
-# --- Hunk line counts ----------------------------------------------------------
+# --- Hunk reading size ---------------------------------------------------------
 
 
-def test_hunk_line_count_reads_the_larger_side_of_the_header() -> None:
+def test_hunk_reading_size_prefers_the_exact_collector_count() -> None:
+    # Exact `lines` wins over the header — and a modify-in-place hunk proves it matters:
+    # the header's max(18, 21) = 21 would undercount a 24-line body.
+    entry = _file("a.py", hunks=[_hunk(1, "@@ -1,18 +1,21 @@", lines=24)])
+    assert hunk_reading_size(entry, 1) == (24, True)
+
+
+def test_hunk_reading_size_falls_back_to_header_floor_when_no_exact_count() -> None:
+    # An older manifest carries only the header → max(18, 21) = 21, flagged inexact.
     entry = _file("a.py", hunks=[_hunk(1, "@@ -1,18 +1,21 @@")])
-    assert hunk_line_count(entry, 1) == 21
+    assert hunk_reading_size(entry, 1) == (21, False)
 
 
-def test_hunk_line_count_single_line_form_counts_as_one() -> None:
-    entry = _file("a.py", hunks=[_hunk(1, "@@ -5 +5 @@")])
-    assert hunk_line_count(entry, 1) == 1
+def test_hunk_reading_size_header_single_line_form_counts_as_one() -> None:
+    assert hunk_reading_size(_file("a.py", hunks=[_hunk(1, "@@ -5 +5 @@")]), 1) == (1, False)
 
 
-def test_hunk_line_count_new_file_hunk() -> None:
-    entry = _file("a.py", hunks=[_hunk(1, "@@ -0,0 +1,40 @@")])
-    assert hunk_line_count(entry, 1) == 40
+def test_hunk_reading_size_header_new_file_hunk() -> None:
+    assert hunk_reading_size(_file("a.py", hunks=[_hunk(1, "@@ -0,0 +1,40 @@")]), 1) == (40, False)
 
 
-def test_hunk_line_count_reads_header_with_a_function_heading_suffix() -> None:
+def test_hunk_reading_size_reads_header_with_a_function_heading_suffix() -> None:
     # git appends the enclosing function to the header; parsing must ignore the suffix.
     entry = _file("a.py", hunks=[_hunk(2, "@@ -10,3 +10,7 @@ def handler(self):")])
-    assert hunk_line_count(entry, 2) == 7
+    assert hunk_reading_size(entry, 2) == (7, False)
 
 
-def test_hunk_line_count_missing_hunk_is_none() -> None:
-    entry = _file("a.py", hunks=[_hunk(1, "@@ -1,2 +1,2 @@")])
-    assert hunk_line_count(entry, 3) is None
+def test_hunk_reading_size_zero_exact_count_is_honored() -> None:
+    # A valid 0-line hunk (exact) is not confused with "absent" — it returns (0, True).
+    entry = _file("a.py", hunks=[_hunk(1, "@@ -1,18 +1,21 @@", lines=0)])
+    assert hunk_reading_size(entry, 1) == (0, True)
 
 
-def test_hunk_line_count_unparseable_header_is_none() -> None:
-    entry = _file("a.py", hunks=[_hunk(1, "@@")])  # the degenerate header form
-    assert hunk_line_count(entry, 1) is None
+def test_hunk_reading_size_missing_hunk_is_none() -> None:
+    entry = _file("a.py", hunks=[_hunk(1, "@@ -1,2 +1,2 @@", lines=2)])
+    assert hunk_reading_size(entry, 3) is None
 
 
-def test_hunk_line_count_no_hunks_key_is_none() -> None:
-    assert hunk_line_count(_file("a.py"), 1) is None
+def test_hunk_reading_size_unparseable_header_and_no_count_is_none() -> None:
+    entry = _file("a.py", hunks=[_hunk(1, "@@")])  # the degenerate header form, no lines
+    assert hunk_reading_size(entry, 1) is None
+
+
+def test_hunk_reading_size_no_hunks_key_is_none() -> None:
+    assert hunk_reading_size(_file("a.py"), 1) is None
 
 
 # --- File-level contribution ---------------------------------------------------
@@ -100,8 +123,14 @@ def test_file_ref_weight_caps_large_files() -> None:
 
 
 def test_step_weight_from_a_hunk_ref_is_exact() -> None:
+    files = {"a.py": _file("a.py", hunks=[_hunk(1, "@@ -1,18 +1,21 @@", lines=24)])}
+    assert step_weight([{"path": "a.py", "hunk": 1}], files) == StepWeight(24, False)
+
+
+def test_step_weight_header_only_hunk_is_a_flagged_floor() -> None:
+    # No exact `lines` (older manifest) → the header's max(18, 21) = 21, marked a floor.
     files = {"a.py": _file("a.py", hunks=[_hunk(1, "@@ -1,18 +1,21 @@")])}
-    assert step_weight([{"path": "a.py", "hunk": 1}], files) == StepWeight(21, False)
+    assert step_weight([{"path": "a.py", "hunk": 1}], files) == StepWeight(21, True)
 
 
 def test_step_weight_from_a_file_ref_is_capped_and_exact() -> None:
@@ -115,9 +144,9 @@ def test_step_weight_note_only_is_zero_and_approximate() -> None:
 
 def test_step_weight_hunk_with_a_note_is_sized_by_the_hunk_not_flagged() -> None:
     # The example fixture's shape: one ref carrying path + hunk + an explanatory note.
-    files = {"a.py": _file("a.py", hunks=[_hunk(1, "@@ -1,4 +1,10 @@")])}
+    files = {"a.py": _file("a.py", hunks=[_hunk(1, "@@ -1,4 +1,10 @@", lines=13)])}
     weight = step_weight([{"path": "a.py", "hunk": 1, "note": "the changed handler"}], files)
-    assert weight == StepWeight(10, False)
+    assert weight == StepWeight(13, False)
 
 
 def test_step_weight_omitted_body_file_is_sized_from_stats_and_flagged() -> None:
@@ -135,10 +164,19 @@ def test_step_weight_unparseable_hunk_flags_without_counting() -> None:
     assert step_weight([{"path": "a.py", "hunk": 1}], files) == StepWeight(0, True)
 
 
+def test_step_weight_file_level_ref_superseded_by_a_hunk_ref_to_the_same_file() -> None:
+    # A step that cites both the whole file and a specific hunk of it must not count the
+    # file's lines twice — the precise hunk supersedes the file-level ref (finding #2).
+    files = {"a.py": _file("a.py", added=30, deleted=10, hunks=[_hunk(1, "@@", lines=12)])}
+    weight = step_weight([{"path": "a.py"}, {"path": "a.py", "hunk": 1}], files)
+    assert weight == StepWeight(12, False)  # only the hunk's 12 lines, not 12 + capped-40
+
+
 def test_step_weight_sums_multiple_refs_and_dedupes() -> None:
     files = {
         "a.py": _file(
-            "a.py", hunks=[_hunk(1, "@@ -1,5 +1,5 @@"), _hunk(2, "@@ -20,2 +20,9 @@")]
+            "a.py",
+            hunks=[_hunk(1, "@@ -1,5 +1,5 @@", lines=5), _hunk(2, "@@ -20,2 +20,9 @@", lines=9)],
         ),
         "b.py": _file("b.py", added=4, deleted=0),
     }
@@ -164,6 +202,15 @@ def test_rollup_sums_and_is_approximate_if_any_part_is() -> None:
     assert rollup([StepWeight(10, False), StepWeight(5, False)]) == StepWeight(15, False)
     assert rollup([StepWeight(10, False), StepWeight(5, True)]) == StepWeight(15, True)
     assert rollup([]) == StepWeight(0, False)
+
+
+def test_rollup_counts_evidence_re_cited_across_steps_per_visit() -> None:
+    # Two steps citing the same hunk each carry its reading load: a route budget sums per
+    # step-visit (the reviewer reads it at each stop), so this is by design, not a bug —
+    # the cross-step total is not deduped, and it is still exact (not a floor).
+    files = {"a.py": _file("a.py", hunks=[_hunk(1, "@@", lines=20)])}
+    ref = [{"path": "a.py", "hunk": 1}]
+    assert rollup([step_weight(ref, files), step_weight(ref, files)]) == StepWeight(40, False)
 
 
 def test_reading_minutes_rounds_up_from_the_stated_pace() -> None:

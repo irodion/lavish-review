@@ -318,12 +318,13 @@ def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict
     per hunk).
 
     Returns ``(html, hunks)`` where each ``hunks`` entry is
-    ``{index, anchor, header_html}`` — the 1-based index, the :func:`hunk_anchor_id`
-    element id, and the ``@@`` header line **crossed through the boundary** (escaped,
-    marker-wrapped) — the per-file hunk index the manifest carries and the cockpit
-    links evidence to. A diff with no hunk (a pure rename or a mode-only change) yields
-    just its preamble and an empty index; an empty ``diff_text`` (never written for an
-    omitted body) degrades to the trusted empty notice with no hunks.
+    ``{index, anchor, header_html, lines}`` — the 1-based index, the :func:`hunk_anchor_id`
+    element id, the ``@@`` header line **crossed through the boundary** (escaped,
+    marker-wrapped), and ``lines`` (the count of rendered diff-body lines, for the
+    derived reading weight — issue #100) — the per-file hunk index the manifest carries
+    and the cockpit links evidence to. A diff with no hunk (a pure rename or a mode-only
+    change) yields just its preamble and an empty index; an empty ``diff_text`` (never
+    written for an omitted body) degrades to the trusted empty notice with no hunks.
     """
     if not diff_text:
         return diff_fragment(diff_text), []
@@ -350,7 +351,18 @@ def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict
         # so an author who labels a hunk card has a safe-by-construction value. The raw
         # line is never handed out (the escaped ``<pre>`` body already shows it verbatim).
         header_html = fragment(hunk_text.split("\n", 1)[0])
-        hunks.append({"index": index, "anchor": anchor, "header_html": header_html})
+        # The reviewer's reading load for this hunk (issue #100): the diff body lines it
+        # renders — context + added + removed — excluding the ``@@`` header itself and
+        # git's ``\ No newline at end of file`` meta lines. Counted here from the raw
+        # bytes because the header's ``-a,b +c,d`` counts cannot recover it: a modify-in-
+        # place hunk shares context in both sides, so ``max(b, d)`` drops the overlap and
+        # undercounts. This exact count is what the derived reading weight consumes.
+        lines = sum(
+            1 for line in hunk_text.splitlines()[1:] if not line.startswith("\\")
+        )
+        hunks.append(
+            {"index": index, "anchor": anchor, "header_html": header_html, "lines": lines}
+        )
         parts.append(
             f'<section class="hunk" id="{anchor}">'
             f'<pre class="diff">{fragment(hunk_text)}</pre>'
