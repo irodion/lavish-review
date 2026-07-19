@@ -68,6 +68,14 @@ LINES_PER_MINUTE = 25
 # — possibly enormous — changed-line count.
 FILE_LEVEL_CAP = 40
 
+# Map-dot size tiers (issue #100): a reading weight in lines → one of four width buckets,
+# so the Map reads a heavy stop as a longer bar than a trivial one. This boundary policy
+# is Python-owned and unit-tested here, like every weight derivation; the vendored Deck JS
+# only relays the chosen bucket verbatim onto the dot, exactly as it relays the renderer-
+# derived ``data-impact``/``data-disposition``. The dot's *width* is the emphasis, never
+# its colour — the judgment-color discipline stays the stylesheet's concern.
+_WEIGHT_BUCKET_BOUNDS = ((15, "w1"), (50, "w2"), (150, "w3"))
+
 # A unified-diff hunk header: ``@@ -a[,b] +c[,d] @@``. The two optional groups are the
 # old-side and new-side line counts; when a side omits its count it is the single-line
 # form (count 1). Searched (not fully matched) so it is found inside the manifest's
@@ -165,7 +173,8 @@ def step_weight(
     """
     total = 0
     approximate = False
-    seen: set[tuple[str, object]] = set()
+    seen_hunks: set[tuple[str, object]] = set()
+    seen_files: set[str] = set()
     raw = evidence if isinstance(evidence, Sequence) and not isinstance(evidence, str) else []
     refs = [ref for ref in raw if isinstance(ref, Mapping)]
     # A file cited at hunk level is sized by those hunks; a same-step file-level ref to it
@@ -186,10 +195,10 @@ def step_weight(
             approximate = True
             continue
         if "hunk" in ref:
-            key: tuple[str, object] = (path, ("hunk", ref["hunk"]))
-            if key in seen:
+            hunk_key = (path, ref["hunk"])
+            if hunk_key in seen_hunks:
                 continue
-            seen.add(key)
+            seen_hunks.add(hunk_key)
             result = hunk_reading_size(entry, ref["hunk"])
             if result is None:
                 approximate = True
@@ -199,12 +208,9 @@ def step_weight(
                 if not exact:
                     approximate = True
         else:
-            if path in hunk_cited:
-                continue  # superseded by this step's own hunk refs to the same file
-            key = (path, "file")
-            if key in seen:
-                continue
-            seen.add(key)
+            if path in hunk_cited or path in seen_files:
+                continue  # superseded by this step's hunk refs, or an already-counted file
+            seen_files.add(path)
             if entry.get("omitted") is True:
                 # Body gone; sized from surviving stats only, so flag it a floor.
                 approximate = True
@@ -240,3 +246,16 @@ def minutes_label(lines: int) -> str:
     """A compact time label at reading pace: ``~5 min``, or ``<1 min`` for a tiny load."""
     minutes = reading_minutes(lines)
     return f"~{minutes} min" if minutes >= 1 else "<1 min"
+
+
+def weight_bucket(lines: int) -> str:
+    """The Map-dot size tier (``w1``..``w4``) for a reading weight of ``lines``.
+
+    See :data:`_WEIGHT_BUCKET_BOUNDS`: the renderer stamps this on the step so the Deck
+    JS relays it verbatim onto the dot — the size policy is owned and tested here, not
+    re-derived in the vendored script.
+    """
+    for bound, bucket in _WEIGHT_BUCKET_BOUNDS:
+        if lines < bound:
+            return bucket
+    return "w4"

@@ -131,10 +131,13 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
     assert "&lt;style&gt;body{display:none}&lt;/style&gt;" in html
     assert '<span class="thread-impacts attention-behavior-change">' in html
     assert "1 behavior-change · 1 test" in html
-    # Every step carries a derived reading weight on its panel (Map dot sizing) and a
-    # chip in its summary (document + Stage). This fixture's hunk header is degenerate
-    # ("@@") and t1.s2 is note-only, so both weights are an approximate floor of 0.
-    assert '<details class="step" id="t1.s1" data-impact="behavior-change" data-weight="0">' in html
+    # Every step carries a derived reading weight on its panel (a number + its Map-dot
+    # size tier) and a chip in its summary (document + Stage). This fixture's hunk header
+    # is degenerate ("@@") and t1.s2 is note-only, so both weights are a floor of 0 (→ w1).
+    assert (
+        '<details class="step" id="t1.s1" data-impact="behavior-change"'
+        ' data-weight="0" data-weight-bucket="w1">' in html
+    )
     assert '<span class="chip weight weight-approx"' in html
     assert "~0 lines" in html
     # Thread + route rollups, with the time heuristic stated at L0.
@@ -169,8 +172,12 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
 
     html = render_cockpit(run_dir).read_text(encoding="utf-8")
 
-    # t1.s1 is sized exactly from its hunk — a plain (non-floor) chip showing 24, not 21.
-    s1_tag = '<details class="step" id="t1.s1" data-impact="behavior-change" data-weight="24">'
+    # t1.s1 is sized exactly from its hunk — a plain (non-floor) chip showing 24, not 21 —
+    # and 24 lines lands in the w2 size tier (the Python-owned bucket policy).
+    s1_tag = (
+        '<details class="step" id="t1.s1" data-impact="behavior-change"'
+        ' data-weight="24" data-weight-bucket="w2">'
+    )
     assert s1_tag in html
     assert '<span class="chip weight" title=' in html
     assert "24 lines" in html

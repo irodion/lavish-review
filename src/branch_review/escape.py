@@ -352,14 +352,14 @@ def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict
         # line is never handed out (the escaped ``<pre>`` body already shows it verbatim).
         header_html = fragment(hunk_text.split("\n", 1)[0])
         # The reviewer's reading load for this hunk (issue #100): the diff body lines it
-        # renders — context + added + removed — excluding the ``@@`` header itself and
-        # git's ``\ No newline at end of file`` meta lines. Counted here from the raw
-        # bytes because the header's ``-a,b +c,d`` counts cannot recover it: a modify-in-
-        # place hunk shares context in both sides, so ``max(b, d)`` drops the overlap and
-        # undercounts. This exact count is what the derived reading weight consumes.
-        lines = sum(
-            1 for line in hunk_text.splitlines()[1:] if not line.startswith("\\")
-        )
+        # renders — context, added, removed (prefixes `` ``/``+``/``-``) — excluding the
+        # ``@@`` header itself and git's ``\ No newline at end of file`` meta lines.
+        # Counted from the raw bytes because the header's ``-a,b +c,d`` counts cannot
+        # recover it: a modify-in-place hunk shares context in both sides, so ``max(b, d)``
+        # drops the overlap and undercounts. Split on ``\n`` alone — never ``str.splitlines``
+        # (see the module note above) — so a ``\r`` or Unicode separator embedded in a hunk
+        # body cannot forge an extra line and inflate this otherwise-exact count.
+        lines = sum(1 for line in hunk_text.split("\n")[1:] if line[:1] in (" ", "+", "-"))
         hunks.append(
             {"index": index, "anchor": anchor, "header_html": header_html, "lines": lines}
         )

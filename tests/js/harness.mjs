@@ -40,7 +40,7 @@ function h(doc, spec, attrs, children) {
 // One L2 Review Step panel: <details class="step" id data-impact>… summary chips +
 // summary text, body with detail, why_now, review prompts, evidence links, and any
 // attention notes (muted asides, never counted).
-function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence, notes, relations, weight }) {
+function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence, notes, relations, weight, bucket }) {
   const summaryEl = h(doc, "summary", null, [
     h(doc, "span.chip.impact-" + impact, null, [impact]),
     " " + summary + " ",
@@ -80,10 +80,14 @@ function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence,
   const body = h(doc, "div.step-body", null, bodyChildren);
   // The step id carries a dot (t1.s1) — set it directly, not through the dotted
   // `.class` spec syntax of h(). data-impact drives the derived thread/Map character;
-  // data-weight (issue #100) is the renderer-derived reading weight the Map sizes dots by.
+  // data-weight + data-weight-bucket (issue #100) are the renderer-derived reading weight
+  // and its Map-dot size tier the deck relays onto the dot.
   const attrs = { "data-impact": impact };
   if (weight !== undefined) {
     attrs["data-weight"] = String(weight);
+  }
+  if (bucket !== undefined) {
+    attrs["data-weight-bucket"] = bucket;
   }
   const panel = h(doc, "details.step", attrs, [summaryEl, body]);
   panel.id = id;
@@ -148,7 +152,8 @@ export function buildFixtureDocument() {
         { href: "#t2.s1", label: "test for this behavior → t2.s1" },
         { href: "#hunk-a1", label: "supporting evidence anchor" },
       ],
-      weight: 8, // small — a w1 dot
+      weight: 8,
+      bucket: "w1", // small
     }),
     step(doc, {
       id: "t1.s2",
@@ -158,7 +163,8 @@ export function buildFixtureDocument() {
       whyNow: "Read right after the change it depends on.",
       prompts: ["Check the caller's timeout — does the cap ever bite?"],
       evidence: [{ href: "#file-f2", label: "src/two.py" }],
-      weight: 40, // a w2 dot
+      weight: 40,
+      bucket: "w2",
     }),
   ]);
 
@@ -179,7 +185,8 @@ export function buildFixtureDocument() {
       whyNow: "Read this once you understand t1.s1 — it pins the new behavior.",
       prompts: ["Does the test fail if the cap regresses?"],
       evidence: [{ href: "#hunk-b1", label: "src/three.py" }],
-      weight: 200, // large — a w4 dot
+      weight: 200,
+      bucket: "w4", // large
     }),
   ]);
 

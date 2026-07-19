@@ -32,6 +32,7 @@ from branch_review.weight import (
     minutes_label,
     rollup,
     step_weight,
+    weight_bucket,
 )
 
 DEFAULT_RUN_DIR = Path(".review-agent")
@@ -293,12 +294,14 @@ def _render_step(
     impact = _text(step.get("impact"))
     confidence = _text(step.get("confidence"))
     # Derived at render time from the step's evidence — the narrator never authors it.
-    # `data-weight` rides on the panel so Deck Mode's Map can size its dot by reading
-    # cost; the visible chip travels with the relocated step onto the Stage.
+    # `data-weight` (the number) and `data-weight-bucket` (its Map-dot size tier, a
+    # Python-owned policy) ride on the panel so Deck Mode relays the tier onto its dot
+    # verbatim — the same way it relays data-impact; the visible chip travels with the
+    # relocated step onto the Stage.
     weight = step_weight(step.get("evidence"), files_by_path)
     parts = [
         f'<details class="step" id="{escape_text(sid)}" data-impact="{escape_text(impact)}"'
-        f' data-weight="{weight.lines}">',
+        f' data-weight="{weight.lines}" data-weight-bucket="{weight_bucket(weight.lines)}">',
         "<summary>",
         f'<span class="chip impact-{escape_text(impact)}">{escape_text(impact)}</span> ',
         fragment(_text(step.get("summary"))),

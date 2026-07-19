@@ -85,14 +85,15 @@ test("the Map reuses each thread's renderer-derived impact summary", () => {
   );
 });
 
-test("the Map sizes each dot by its step's derived reading weight (issue #100)", () => {
+test("the Map relays each step's renderer-derived size tier onto its dot (issue #100)", () => {
   const { document } = loadCockpit();
 
-  // The fixture weights (8 / 40 / 200 lines) fall in distinct size buckets, so a heavy
-  // stop reads as a longer bar than a trivial one — the Map is no longer weight-blind.
-  assert.ok(dot(document, "t1.s1").classList.contains("deck-dot--w1"), "8 lines → smallest");
-  assert.ok(dot(document, "t1.s2").classList.contains("deck-dot--w2"), "40 lines → medium");
-  assert.ok(dot(document, "t2.s1").classList.contains("deck-dot--w4"), "200 lines → largest");
+  // The renderer stamps the size tier (weight.py's weight_bucket); the deck relays it
+  // verbatim, exactly like data-impact — so a heavy stop reads as a longer bar than a
+  // trivial one. The width policy is the stylesheet's; the tier is never derived in JS.
+  assert.equal(dot(document, "t1.s1").getAttribute("data-weight-bucket"), "w1", "small");
+  assert.equal(dot(document, "t1.s2").getAttribute("data-weight-bucket"), "w2", "medium");
+  assert.equal(dot(document, "t2.s1").getAttribute("data-weight-bucket"), "w4", "large");
   // Size is emphasis only — the dot's colour still carries impact, never its weight.
   assert.equal(dot(document, "t1.s1").getAttribute("data-impact"), "behavior-change");
 });
@@ -114,36 +115,19 @@ test("the Map reuses each thread's renderer-derived reading weight (issue #100)"
   assert.deepEqual(titles, ["First thread", "Second thread"]);
 });
 
-const WEIGHT_BUCKETS = ["deck-dot--w1", "deck-dot--w2", "deck-dot--w3", "deck-dot--w4"];
-
-test("a step with no derived weight leaves its Map dot at the default size", () => {
-  // An older page (or degraded render) may carry no data-weight; the deck must still
-  // build and the dot simply takes no size bucket rather than throwing.
+test("a step with no size tier leaves its Map dot unbucketed (older/degraded page)", () => {
+  // An older page (or degraded render) may carry no data-weight-bucket; the deck must
+  // still build and the dot simply carries no tier (CSS falls back to the default width)
+  // rather than throwing or inventing one.
   const doc = buildFixtureDocument();
-  doc.getElementById("t1.s1").removeAttribute("data-weight");
+  doc.getElementById("t1.s1").removeAttribute("data-weight-bucket");
   const { document } = loadCockpit({ doc });
 
-  const classes = dot(document, "t1.s1").classList;
-  assert.ok(
-    !WEIGHT_BUCKETS.some((c) => classes.contains(c)),
-    "no weight bucket is applied without a data-weight"
+  assert.equal(
+    dot(document, "t1.s1").getAttribute("data-weight-bucket"),
+    null,
+    "no tier is relayed without a data-weight-bucket"
   );
-});
-
-test("a malformed or negative data-weight falls back to the default dot size", () => {
-  // A hand-edited or corrupt page could carry a non-numeric or negative weight; the
-  // bucket mapping must reject it (never a NaN/negative size) rather than mislead.
-  for (const bad of ["not-a-number", "-5", ""]) {
-    const doc = buildFixtureDocument();
-    doc.getElementById("t1.s1").setAttribute("data-weight", bad);
-    const { document } = loadCockpit({ doc });
-
-    const classes = dot(document, "t1.s1").classList;
-    assert.ok(
-      !WEIGHT_BUCKETS.some((c) => classes.contains(c)),
-      `data-weight="${bad}" must not map to a size bucket`
-    );
-  }
 });
 
 test("clicking a dot or a thread stages that step", () => {

@@ -19,6 +19,7 @@ from branch_review.weight import (
     reading_minutes,
     rollup,
     step_weight,
+    weight_bucket,
 )
 
 
@@ -235,3 +236,18 @@ def test_minutes_label_floors_below_a_minute() -> None:
     assert minutes_label(0) == "<1 min"
     assert minutes_label(LINES_PER_MINUTE) == "~1 min"
     assert minutes_label(LINES_PER_MINUTE * 3 + 1) == "~4 min"
+
+
+# --- Map-dot size tier (Python-owned policy the Deck JS relays verbatim) -------
+
+
+def test_weight_bucket_maps_lines_to_a_size_tier() -> None:
+    # The boundary policy lives here (unit-tested) rather than in the vendored JS.
+    assert weight_bucket(0) == "w1"
+    assert weight_bucket(14) == "w1"
+    assert weight_bucket(15) == "w2"
+    assert weight_bucket(49) == "w2"
+    assert weight_bucket(50) == "w3"
+    assert weight_bucket(149) == "w3"
+    assert weight_bucket(150) == "w4"
+    assert weight_bucket(5000) == "w4"

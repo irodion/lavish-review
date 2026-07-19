@@ -599,33 +599,6 @@
     return cell("span", "deck-count " + className, glyph + " " + value);
   }
 
-  // Bucket a step's renderer-derived reading weight (issue #100) into a Map-dot size
-  // class, so a heavy stop reads as a longer bar than a trivial one. This maps an
-  // already-derived number to a display size — like the dot's data-impact/disposition
-  // reads — it does NOT re-derive the weight. Size is emphasis only; the dot's colour
-  // still carries disposition/impact (judgment-color discipline). Absent or unparseable
-  // weight → null (the default dot width), so an old page never breaks.
-  function dotWeightClass(step) {
-    const raw = step.getAttribute("data-weight");
-    if (raw === null) {
-      return null;
-    }
-    const lines = parseInt(raw, 10);
-    if (!(lines >= 0)) {
-      return null; // NaN or negative → leave the dot at its default size
-    }
-    if (lines < 15) {
-      return "deck-dot--w1";
-    }
-    if (lines < 50) {
-      return "deck-dot--w2";
-    }
-    if (lines < 150) {
-      return "deck-dot--w3";
-    }
-    return "deck-dot--w4";
-  }
-
   // (Re)draw the Map's dynamic parts — the overall progress, and each thread's dots
   // and fraction, which all move with the reviewer's dispositions. The static file
   // rail (built once at deck-build time) is simply re-appended. Iterating the
@@ -692,10 +665,12 @@
         if (impact) {
           dot.setAttribute("data-impact", impact);
         }
-        // Size the dot by its step's reading weight (issue #100) — emphasis, not colour.
-        const weightClass = dotWeightClass(step);
-        if (weightClass) {
-          dot.classList.add(weightClass);
+        // Relay the renderer's Map-dot size tier verbatim (issue #100), the same way
+        // data-impact is relayed above — the size-bucket policy lives in the renderer
+        // (weight.py), never re-derived here. Absent (an older page) → default width.
+        const weightBucket = step.getAttribute("data-weight-bucket");
+        if (weightBucket) {
+          dot.setAttribute("data-weight-bucket", weightBucket);
         }
         if (step === deck.staged) {
           dot.classList.add("current");

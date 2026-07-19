@@ -907,12 +907,14 @@ body.deck-active .deck {
 }
 /* Reading-weight dot width (issue #100): a heavy stop reads as a longer bar than a
    trivial one, so the Map no longer looks the same for a 3-line tweak and a 500-line
-   rewrite. Width is EMPHASIS only — the dot's colour still carries disposition/impact,
-   never its weight (judgment-color discipline). Absent weight → the default width. */
-.deck-dot--w1 { --dot-w: 12px; }
-.deck-dot--w2 { --dot-w: 20px; }
-.deck-dot--w3 { --dot-w: 32px; }
-.deck-dot--w4 { --dot-w: 46px; }
+   rewrite. The renderer stamps the size tier as data-weight-bucket (Python-owned policy,
+   weight.py) and the Deck relays it verbatim onto the dot — matched here exactly like
+   data-impact. Width is EMPHASIS only — the dot's colour still carries disposition/impact,
+   never its weight (judgment-color discipline). Absent bucket → the default width. */
+.deck-dot[data-weight-bucket="w1"] { --dot-w: 12px; }
+.deck-dot[data-weight-bucket="w2"] { --dot-w: 20px; }
+.deck-dot[data-weight-bucket="w3"] { --dot-w: 32px; }
+.deck-dot[data-weight-bucket="w4"] { --dot-w: 46px; }
 /* An unreviewed dot hints its step's Behavior Impact (ADR-0016): the attention-worthy
    impacts get a tinted border so the Map reads by change-character before any
    disposition is set. A set disposition (below) fills the dot and wins. */
@@ -1036,10 +1038,7 @@ body.deck-active .deck {
   body.deck-active .deck { grid-template-columns: 1fr; }
   .deck-map { position: static; max-height: none; }
   .deck-dots { gap: 6px; }
-  /* Bigger touch targets, but keep the weight bucketing (a larger floor, not a flat size). */
-  .deck-dot { height: 13px; }
-  .deck-dot--w1 { --dot-w: 18px; }
-  .deck-dot--w2 { --dot-w: 26px; }
-  .deck-dot--w3 { --dot-w: 38px; }
-  .deck-dot--w4 { --dot-w: 52px; }
+  /* Bigger touch targets while keeping the weight bucketing: a uniform +6px floor over
+     whichever bucket's --dot-w matched, not a flat size that would erase the weight cue. */
+  .deck-dot { height: 13px; width: calc(var(--dot-w) + 6px); }
 }
