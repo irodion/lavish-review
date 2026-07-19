@@ -83,6 +83,12 @@ function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence,
   // data-weight + data-weight-bucket (issue #100) are the renderer-derived reading weight
   // and its Map-dot size tier the deck relays onto the dot.
   const attrs = { "data-impact": impact };
+  // Mirror the renderer: it stamps data-core on behavior-change/unknown-impact steps
+  // (CORE_IMPACTS) so the deck relays core-route membership (issue #101) rather than
+  // re-deriving it — the harness fixture must carry the same flag.
+  if (impact === "behavior-change" || impact === "unknown-impact") {
+    attrs["data-core"] = "true";
+  }
   if (weight !== undefined) {
     attrs["data-weight"] = String(weight);
   }
@@ -119,8 +125,11 @@ export function buildFixtureDocument() {
   doc.body.appendChild(main);
 
   // L0 is the route's stop zero: deterministic renderer output that Deck Mode
-  // relocates whole onto the Stage before the first Review Step.
-  const l0 = h(doc, "section.l0", null, [
+  // relocates whole onto the Stage before the first Review Step. The renderer stamps
+  // the per-route reading budgets here (issue #101) — core = the two behavior-affecting
+  // steps (8 + 40 = 48 lines → ~2 min), full = all three (+200 → 248 lines → ~10 min) —
+  // which the Map's route selector relays verbatim.
+  const l0 = h(doc, "section.l0", { "data-core-budget": "~2 min", "data-full-budget": "~10 min" }, [
     h(doc, "h2", null, ["Orientation"]),
     h(doc, "blockquote.goal-text", null, ["Ship the narrated review route."]),
     h(doc, "h3.analysis-title", null, ["Guided Deck presentation"]),

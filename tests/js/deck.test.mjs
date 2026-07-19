@@ -28,7 +28,8 @@ test("served Deck starts at L0 stop zero and J advances into the Review Route", 
 
   assert.ok(document.querySelector(".deck-stage .l0"), "the rendered orientation is staged first");
   assert.equal(document.querySelector("main .l0"), null, "L0 is relocated rather than duplicated");
-  assert.match(document.querySelector(".deck-tally").textContent, /^0\/3 reviewed$/);
+  // The fixture abridges (2 core of 3), so progress reports both routes honestly (#101).
+  assert.equal(document.querySelector(".deck-tally").textContent, "core 0/2 · full 0/3 reviewed");
 
   press(document, "j");
   assert.equal(stagedStepId(document), "t1.s1", "forward navigation enters the first step");
@@ -58,8 +59,8 @@ test("builds the Map and Stage from the document when served", () => {
   assert.deepEqual(files, ["one.py", "two.py", "three.py"]);
   assert.equal(document.querySelectorAll(".deck-file .file-stats").length, 3);
 
-  // Overall progress: nothing reviewed yet.
-  assert.match(document.querySelector(".deck-tally").textContent, /^0\/3 reviewed$/);
+  // Overall progress: nothing reviewed yet, both routes shown (core-first, #101).
+  assert.equal(document.querySelector(".deck-tally").textContent, "core 0/2 · full 0/3 reviewed");
 
   press(document, "j"); // stop zero → first Review Step
   // The first step is staged, whole, with its review prompts and the exact hunk that

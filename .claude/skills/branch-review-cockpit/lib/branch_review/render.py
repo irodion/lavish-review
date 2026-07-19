@@ -47,6 +47,17 @@ _IMPACT_LABELS = {
 }
 _IMPACT_ORDER = tuple(_IMPACT_LABELS)
 
+# The Behavior Impacts that earn a first-pass read — an observable behavior change, or
+# an impact the narrator could not pin down. This one tuple is the single owner of that
+# partition: it drives the abridged "core-first" route (issue #101), the per-step
+# ``data-core`` flag the deck relays (never re-deriving the set in JS — the derived-over-
+# authored posture, exactly like ``data-weight-bucket``), and :func:`_attention_impact`'s
+# thread ranking. Ordered by attention priority (``unknown-impact`` outranks
+# ``behavior-change``) so it doubles as that ranking. Every other impact
+# (preserving/test/mechanical) waits in the full route, one toggle away — nothing is
+# hidden, only sequenced.
+CORE_IMPACTS = ("unknown-impact", "behavior-change")
+
 
 class RenderError(ValueError):
     """The collected run cannot be rendered into a valid cockpit."""
@@ -176,10 +187,10 @@ def _impact_summary(steps: Sequence[Mapping[str, object]]) -> str:
 
 def _attention_impact(steps: Sequence[Mapping[str, object]]) -> str | None:
     counts = _impact_counts(steps)
-    if counts["unknown-impact"]:
-        return "unknown-impact"
-    if counts["behavior-change"]:
-        return "behavior-change"
+    # CORE_IMPACTS is in attention-priority order, so the first present one wins.
+    for impact in CORE_IMPACTS:
+        if counts[impact]:
+            return impact
     return None
 
 
@@ -299,9 +310,13 @@ def _render_step(
     # verbatim — the same way it relays data-impact; the visible chip travels with the
     # relocated step onto the Stage.
     weight = step_weight(step.get("evidence"), files_by_path)
+    # `data-core` stamps this step's core-route membership (CORE_IMPACTS) so the deck
+    # relays it verbatim — the same Python-owned-policy/relay posture as data-weight-bucket;
+    # the JS never re-derives which impacts are core (issue #101). Present only when core.
+    core_flag = ' data-core="true"' if impact in CORE_IMPACTS else ""
     parts = [
         f'<details class="step" id="{escape_text(sid)}" data-impact="{escape_text(impact)}"'
-        f' data-weight="{weight.lines}" data-weight-bucket="{dot_bucket(weight)}">',
+        f'{core_flag} data-weight="{weight.lines}" data-weight-bucket="{dot_bucket(weight)}">',
         "<summary>",
         f'<span class="chip impact-{escape_text(impact)}">{escape_text(impact)}</span> ',
         fragment(_text(step.get("summary"))),
@@ -393,6 +408,50 @@ def _render_thread(
     )
 
 
+def _route_estimate(
+    route_weight: StepWeight, core_weight: StepWeight, abridged: bool
+) -> tuple[str, str]:
+    """The L0 reading-weight line and any deck route-budget data attributes.
+
+    Returns ``(text, attrs)``. ``text`` is the orientation line; ``attrs`` is the
+    ``data-core-budget``/``data-full-budget`` attribute string stamped on ``section.l0``
+    so the served deck's route selector can label each pass's budget without re-deriving
+    the reading-pace policy (weight.py owns it — the derived-over-authored rule). When the
+    whole route is unmeasurable, a subset of nothing is still nothing: one honest "not
+    sized" line, no per-route split, no attributes. When it is measurable but **not**
+    abridged (every step is core, or none is), there is a single budget — the original
+    line, unchanged. Only an abridged, measured review states both budgets and stamps the
+    attributes; a budget that itself sizes to "unknown" is not stamped, so the deck's
+    selector degrades to no sub-label rather than showing "unknown".
+    """
+    if route_weight.approximate and route_weight.lines == 0:
+        return (
+            "Reading weight: not sized — the cited evidence carries no measurable lines",
+            "",
+        )
+    full_detail = (
+        f"{lines_label(route_weight)} · {minutes_label(route_weight)} "
+        f"at reading pace (~{LINES_PER_MINUTE} lines/min)"
+    )
+    if not abridged:
+        return f"Reading weight: {full_detail}", ""
+    # Abridged: state the core-first budget beside the full one (issue #101). Core leads —
+    # it is the pass a reviewer facing a large change is meant to take first — with the
+    # full route's line count carried along so the abridgement never hides the true size.
+    core_minutes = minutes_label(core_weight)
+    full_minutes = minutes_label(route_weight)
+    text = (
+        f"Reading weight: {core_minutes} core · {full_minutes} full at reading pace "
+        f"(~{LINES_PER_MINUTE} lines/min; full is {lines_label(route_weight)})"
+    )
+    attrs = ""
+    if core_minutes != "unknown":
+        attrs += f' data-core-budget="{escape_text(core_minutes)}"'
+    if full_minutes != "unknown":
+        attrs += f' data-full-budget="{escape_text(full_minutes)}"'
+    return text, attrs
+
+
 def _render_orientation(
     analysis: Mapping[str, object],
     goal_html: str,
@@ -402,18 +461,21 @@ def _render_orientation(
 ) -> str:
     threads = _items(analysis.get("threads"))
     all_steps = [step for thread in threads for step in _items(thread.get("steps"))]
-    route_weight = rollup(step_weight(step.get("evidence"), files_by_path) for step in all_steps)
-    if route_weight.approximate and route_weight.lines == 0:
-        # Nothing across the route was measurable (all note-only/unsized evidence): a time
-        # would misread as "negligible", so state the unknown instead of "~0 lines · <1 min".
-        route_estimate = (
-            "Reading weight: not sized — the cited evidence carries no measurable lines"
-        )
-    else:
-        route_estimate = (
-            f"Reading weight: {lines_label(route_weight)} · "
-            f"{minutes_label(route_weight)} at reading pace (~{LINES_PER_MINUTE} lines/min)"
-        )
+    # Size every step once, then split the rollups — core is a subset of all, so a second
+    # step_weight pass over the core steps would just re-do work already done here.
+    weights = [step_weight(step.get("evidence"), files_by_path) for step in all_steps]
+    core_weights = [
+        weight
+        for step, weight in zip(all_steps, weights, strict=True)
+        if _text(step.get("impact")) in CORE_IMPACTS
+    ]
+    route_weight = rollup(weights)
+    core_weight = rollup(core_weights)
+    # The abridged core-first route (issue #101) is offered only when it genuinely
+    # abridges: some steps are behavior-affecting and some are not. When every step is
+    # core (or none is), core == full — there is nothing to select and one budget suffices.
+    abridged = 0 < len(core_weights) < len(all_steps)
+    route_estimate, l0_attrs = _route_estimate(route_weight, core_weight, abridged)
     links = "".join(
         f'<li><a href="#{escape_text(_text(thread.get("id")))}">'
         f"{fragment(_text(thread.get('title')))}</a></li>"
@@ -428,7 +490,7 @@ def _render_orientation(
         alignment_text = f"Serves goal: {serves or 'none'} · Drive-by: {drive_by or 'none'}"
     return "\n".join(
         [
-            '<section class="l0">',
+            f'<section class="l0"{l0_attrs}>',
             "<h2>Orientation</h2>",
             goal_html,
             isolation_note,

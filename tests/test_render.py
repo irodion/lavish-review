@@ -10,7 +10,8 @@ import pytest
 from branch_review.analysis import SCHEMA, step_ids
 from branch_review.escape import INTERACTIVE_CSP, file_fragment_id, fragment
 from branch_review.lint import lint_cockpit
-from branch_review.render import RenderError, main, render_cockpit
+from branch_review.render import RenderError, _route_estimate, main, render_cockpit
+from branch_review.weight import StepWeight
 
 
 def _write_run(run_dir: Path) -> dict[str, object]:
@@ -138,6 +139,11 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
     # that would read as negligible, and its dot is bucketed "unsized", not the w1 smallest.
     assert (
         '<details class="step" id="t1.s1" data-impact="behavior-change"'
+        ' data-core="true" data-weight="0" data-weight-bucket="unsized">' in html
+    )
+    # A non-core step (test-change) carries no data-core — the deck reads its absence.
+    assert (
+        '<details class="step" id="t1.s2" data-impact="test-change"'
         ' data-weight="0" data-weight-bucket="unsized">' in html
     )
     assert '<span class="chip weight weight-approx"' in html
@@ -151,6 +157,9 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
         '<li class="route-weight">Reading weight: not sized — '
         "the cited evidence carries no measurable lines</li>" in html
     )
+    # An unmeasurable route stamps no route-budget attributes — a subset of nothing is
+    # still nothing, so the deck's selector degrades rather than showing a faked budget.
+    assert "data-core-budget" not in html and "data-full-budget" not in html
     assert '<aside class="attention-note">' in html
     assert 'href="#hunk-' in html
     assert '<details class="file"' in html
@@ -182,7 +191,7 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
     # and 24 lines lands in the w2 size tier (the Python-owned bucket policy).
     s1_tag = (
         '<details class="step" id="t1.s1" data-impact="behavior-change"'
-        ' data-weight="24" data-weight-bucket="w2">'
+        ' data-core="true" data-weight="24" data-weight-bucket="w2">'
     )
     assert s1_tag in html
     assert '<span class="chip weight" title=' in html
@@ -194,7 +203,14 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
     assert '<span class="thread-weight" data-weight="24"' in html
     # The thread tooltip states the reading-pace heuristic too, like the L0 route estimate.
     assert 'title="≥24 lines to read (~25 lines/min)">~1 min</span>' in html
-    assert "Reading weight: ≥24 lines · ~1 min at reading pace (~25 lines/min)" in html
+    # This fixture abridges (t1.s1 is behavior-change/core, t1.s2 is test-change/non-core),
+    # so L0 states both budgets (core-first) with the full line count carried along, and the
+    # section stamps the per-route budgets the deck's route selector relays (issue #101).
+    assert (
+        "Reading weight: ~1 min core · ~1 min full at reading pace "
+        "(~25 lines/min; full is ≥24 lines)" in html
+    )
+    assert '<section class="l0" data-core-budget="~1 min" data-full-budget="~1 min">' in html
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 
@@ -360,3 +376,60 @@ def test_render_cockpit_explains_total_diff_fallback(tmp_path: Path) -> None:
 
     assert '<p class="too-large">' in html
     assert "Diff exceeds &lt;limit&gt;; bodies omitted." in html
+
+
+@pytest.mark.parametrize(
+    ("route_weight", "core_weight", "abridged", "expected_text", "expected_attrs"),
+    [
+        # Unmeasurable route → one honest "not sized" line, no per-route split, no attrs.
+        (
+            StepWeight(0, True),
+            StepWeight(0, True),
+            True,
+            "Reading weight: not sized — the cited evidence carries no measurable lines",
+            "",
+        ),
+        # Measured but not abridged (core == full) → the single original budget line.
+        (
+            StepWeight(100, False),
+            StepWeight(100, False),
+            False,
+            "Reading weight: 100 lines · ~4 min at reading pace (~25 lines/min)",
+            "",
+        ),
+        # Abridged + measured → both budgets (core-first) with the full line count carried
+        # along, plus the per-route data attributes the deck's route selector relays.
+        (
+            StepWeight(600, False),
+            StepWeight(200, False),
+            True,
+            "Reading weight: ~8 min core · ~24 min full at reading pace "
+            "(~25 lines/min; full is 600 lines)",
+            ' data-core-budget="~8 min" data-full-budget="~24 min"',
+        ),
+        # Abridged, route measurable, but the core subset alone is unsized (note-only core
+        # evidence beside measurable non-core steps): core reads honestly as "unknown" and
+        # no data-core-budget is stamped — the Core button degrades to no sub-label while
+        # Full keeps its budget, never a fabricated "unknown" attribute.
+        (
+            StepWeight(100, True),
+            StepWeight(0, True),
+            True,
+            "Reading weight: unknown core · ~4 min full at reading pace "
+            "(~25 lines/min; full is ≥100 lines)",
+            ' data-full-budget="~4 min"',
+        ),
+    ],
+    ids=["unsized-route", "not-abridged", "abridged-measured", "abridged-core-unsized"],
+)
+def test_route_estimate_states_budgets_honestly(
+    route_weight: StepWeight,
+    core_weight: StepWeight,
+    abridged: bool,
+    expected_text: str,
+    expected_attrs: str,
+) -> None:
+    """_route_estimate splits the L0 budget only for an abridged, measured review."""
+    text, attrs = _route_estimate(route_weight, core_weight, abridged)
+    assert text == expected_text
+    assert attrs == expected_attrs
