@@ -85,12 +85,21 @@ _TOON_DISPOSITION_ROW = (
 )
 # One tag:message prompt — a real question.
 _TOON_QUESTION_ROW = '  "8",what does the cap bound?,"",message,Freeform message\n'
+# A tag:choice prompt the strict recognizer does NOT accept (not a "Disposition set: …"
+# line, no disposition Context data) — some other structured choice. The bake keeps it as
+# Q&A, so the recap must count it, not silently drop it as state.
+_TOON_CHOICE_NON_DISPOSITION_ROW = (
+    '  "9","Pick a lens: security","summary > select",choice,lens:security\n'
+)
 _NEXT_STEP = 'next_step: "..."\n'
 
 _TOON_DISPOSITION_ONLY = (
     "prompts[1]{uid,prompt,selector,tag,text}:\n" + _TOON_DISPOSITION_ROW + _NEXT_STEP
 )
 _TOON_QUESTION = "prompts[1]{uid,prompt,selector,tag,text}:\n" + _TOON_QUESTION_ROW + _NEXT_STEP
+_TOON_CHOICE_NON_DISPOSITION = (
+    "prompts[1]{uid,prompt,selector,tag,text}:\n" + _TOON_CHOICE_NON_DISPOSITION_ROW + _NEXT_STEP
+)
 # A disposition and a question in the same poll — a mixed exchange, not disposition-only.
 _TOON_MIXED = (
     "prompts[2]{uid,prompt,selector,tag,text}:\n"
@@ -108,10 +117,13 @@ def test_append_exchange_flags_disposition_only_acks(tmp_path: Path) -> None:
     append_exchange(qa, feedback_raw=_TOON_DISPOSITION_ONLY, answer="Recorded.", now=_NOW)
     append_exchange(qa, feedback_raw=_TOON_QUESTION, answer="the cap bounds at 30s", now=_NOW)
     append_exchange(qa, feedback_raw=_TOON_MIXED, answer="the cap bounds at 30s", now=_NOW)
+    # A tag:choice prompt that is NOT a recognized disposition is kept as Q&A by the bake,
+    # so it must be counted (disposition_only False) — the recap uses the same recognizer.
+    append_exchange(qa, feedback_raw=_TOON_CHOICE_NON_DISPOSITION, answer="noted", now=_NOW)
 
     lines = qa.read_text(encoding="utf-8").splitlines()
     flags = [json.loads(line)["disposition_only"] for line in lines]
-    assert flags == [True, False, False]
+    assert flags == [True, False, False, False]
 
 
 def test_append_exchange_increments_seq_and_appends(tmp_path: Path) -> None:
