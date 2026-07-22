@@ -237,6 +237,25 @@ def _hunk_anchor(entry: Mapping[str, object], index: object) -> str:
     raise RenderError(f"{_text(entry.get('path'))!r} has no hunk {index}")
 
 
+def _step_evidence(step: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """All of a step's evidence refs — its main ``evidence`` plus each attention note's
+    own ``evidence`` (schema 0.4 / ADR-0016), in DOM order (main first, then the notes,
+    matching :func:`_render_step`).
+
+    This is the *whole* of what the step cites: attention-note evidence renders as the
+    same ``.evidence-list`` links, clones into the deck's inline evidence, and is folded
+    into the reverse narration index — so it must also be sized. Feeding this one set to
+    both :func:`_narration_index` and :func:`branch_review.weight.step_weight` keeps them
+    consistent: a hunk a step cites only through an attention note is narrated *and* sized,
+    never counted as narration while the weight reads ``unsized``. ``step_weight`` dedupes
+    within a step, so a hunk cited in both the main list and a note is sized once.
+    """
+    refs = list(_items(step.get("evidence")))
+    for note in _items(step.get("attention_notes")):
+        refs.extend(_items(note.get("evidence")))
+    return refs
+
+
 def _narration_index(
     threads: Sequence[Mapping[str, object]],
     files_by_path: Mapping[str, Mapping[str, object]],
@@ -256,13 +275,9 @@ def _narration_index(
       never on a hunk: a file-level ref narrates the file broadly, so it does not mark
       any one hunk as narrated (those hunks stay individually un-narrated).
 
-    A step's evidence is *all* of it: its main ``evidence`` list **and** each of its
-    ``attention_notes``' own ``evidence`` (schema 0.4 / ADR-0016 — validated like any
-    step's evidence, rendered as the same ``.evidence-list`` links, and cloned into the
-    deck's inline evidence). A hunk a step cites only through an attention note is still
-    narrated by that step, so it must not read "un-narrated" beside the very note that
-    links it — the reverse join folds both sources under the step, in DOM order (main
-    evidence first, then the notes, matching :func:`_render_step`).
+    A step's evidence is *all* of it (:func:`_step_evidence`): its main ``evidence`` and
+    each attention note's own ``evidence``, so a hunk a step cites only through a note is
+    narrated by that step — never read "un-narrated" beside the very note that links it.
 
     A ref that does not resolve (unknown path, or a hunk index the file never emitted)
     is skipped here: the forward render (:func:`_render_thread`) validates every ref and
@@ -276,10 +291,7 @@ def _narration_index(
             sid = _text(step.get("id"))
             if not sid:
                 continue
-            refs = list(_items(step.get("evidence")))
-            for note in _items(step.get("attention_notes")):
-                refs.extend(_items(note.get("evidence")))
-            for ref in refs:
+            for ref in _step_evidence(step):
                 path = ref.get("path")
                 if not isinstance(path, str):
                     continue
@@ -429,7 +441,7 @@ def _render_step(
     # Python-owned policy) ride on the panel so Deck Mode relays the tier onto its dot
     # verbatim — the same way it relays data-impact; the visible chip travels with the
     # relocated step onto the Stage.
-    weight = step_weight(step.get("evidence"), files_by_path)
+    weight = step_weight(_step_evidence(step), files_by_path)
     # `data-core` stamps this step's core-route membership (CORE_IMPACTS) so the deck
     # relays it verbatim — the same Python-owned-policy/relay posture as data-weight-bucket;
     # the JS never re-derives which impacts are core (issue #101). Present only when core.
@@ -498,7 +510,7 @@ def _render_thread(
         paths.append(_path_html(files_by_path[path]))
     # Reading cost rolled up from the thread's steps — a per-thread total the Map reuses
     # (the derived-over-authored rule: no thread weight is ever in the analysis).
-    weight = rollup(step_weight(step.get("evidence"), files_by_path) for step in steps)
+    weight = rollup(step_weight(_step_evidence(step), files_by_path) for step in steps)
     # The Map shows this thread rollup as a bare minute figure, so its tooltip states the
     # reading-pace heuristic too — a rollup is never a bare number the reviewer can't
     # recalibrate (weight.py's contract), matching the L0 route estimate.
@@ -583,7 +595,7 @@ def _render_orientation(
     all_steps = [step for thread in threads for step in _items(thread.get("steps"))]
     # Size every step once, then split the rollups — core is a subset of all, so a second
     # step_weight pass over the core steps would just re-do work already done here.
-    weights = [step_weight(step.get("evidence"), files_by_path) for step in all_steps]
+    weights = [step_weight(_step_evidence(step), files_by_path) for step in all_steps]
     core_weights = [
         weight
         for step, weight in zip(all_steps, weights, strict=True)

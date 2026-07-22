@@ -471,6 +471,37 @@ def test_render_cockpit_counts_attention_note_evidence_as_narration(tmp_path: Pa
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 
+def test_render_cockpit_sizes_attention_note_evidence_in_reading_weight(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    # Give the cited hunk a real line count, then move t1.s1's hunk citation into an
+    # attention note (main evidence left note-only). The reading weight must still size the
+    # attention-note hunk — the narration index counts it, so the weight must too (#103).
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["hunks"][0]["lines"] = 24
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    step = analysis["threads"][0]["steps"][0]
+    step["evidence"] = [{"note": "prose only"}]
+    step["attention_notes"] = [
+        {"text": "the real hunk", "evidence": [{"path": "src/app.py", "hunk": 1}]}
+    ]
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # The attention-note hunk contributes its 24 lines — no longer data-weight="0"/unsized;
+    # the note keeps it an approximate floor, so the chip reads "≥24 lines".
+    assert (
+        '<details class="step" id="t1.s1" data-impact="behavior-change"'
+        ' data-core="true" data-weight="24" data-weight-bucket="w2">' in html
+    )
+    assert "≥24 lines" in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
 def test_render_cockpit_annotates_file_level_refs_on_the_header(tmp_path: Path) -> None:
     run_dir = tmp_path / ".review-agent"
     _write_run(run_dir)
