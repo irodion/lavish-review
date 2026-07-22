@@ -299,15 +299,24 @@ def _is_disposition_only(feedback_raw: str) -> bool:
     from its answered-question tally **without re-parsing the poll TOON in the browser** —
     ADR-0007 keeps that one extractor in Python.
 
-    A disposition is the sole ``tag: choice`` prompt (the in-page controls' channel, and
-    ``dispositions.parse_disposition_prompt``'s own first gate), so an exchange with at
-    least one prompt, all of tag ``choice``, is disposition-only. A poll with no parseable
-    prompts is **not** disposition-only — there is no disposition to have filtered out,
-    matching the bake, which only drops an exchange when its prompts were present and all
-    dispositions.
+    "Disposition" here means exactly what the bake's filter means: a prompt
+    ``dispositions.parse_disposition_prompt`` **recognizes** — ``tag: choice`` *and* a
+    valid ``t<N>.s<N>`` step with an in-vocabulary disposition. Gating on the ``choice``
+    tag alone would diverge from the bake: a non-disposition or malformed ``choice`` prompt
+    (some other structured choice, or hostile text) is *kept* as Q&A by the bake
+    (``parse_disposition_prompt`` returns ``None`` → not filtered), yet the tag-only test
+    would mark the exchange disposition-only and drop it from the recap count —
+    undercounting answered questions. Sharing the strict recognizer keeps the two in step.
+    A poll with no parseable prompts is **not** disposition-only (there is nothing to have
+    filtered out), matching the bake, which drops an exchange only when its prompts were
+    present and *all* recognized dispositions.
     """
+    # Local import: dispositions imports from this module (Prompt/extract_prompts), so a
+    # module-level import here would cycle. The recap path is cold, so lazy is fine.
+    from branch_review.dispositions import parse_disposition_prompt
+
     prompts = extract_prompts(feedback_raw)
-    return bool(prompts) and all(prompt.tag == "choice" for prompt in prompts)
+    return bool(prompts) and all(parse_disposition_prompt(prompt) is not None for prompt in prompts)
 
 
 def append_exchange(
