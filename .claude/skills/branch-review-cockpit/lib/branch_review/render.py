@@ -656,6 +656,12 @@ def _render_orientation(
     # own meter — the Python-owned-policy/relay posture the route budgets already use, never
     # re-deriving the count in JS (issue #104).
     l0_attrs += f' data-coverage-label="{escape_text(coverage_headline(coverage))}"'
+    if coverage.total_hunks:
+        # The counting rule rides next to the Map's readout too, relayed from this one source
+        # as a title (the weight-chip convention) — so the file-level decision is stated at
+        # both meter instances, not only in the queue, which is absent on a fully-narrated
+        # diff (issue #104). Omitted when there are no hunks: the rule is then moot.
+        l0_attrs += f' data-coverage-rule="{escape_text(COVERAGE_RULE)}"'
     links = "".join(
         f'<li><a href="#{escape_text(_text(thread.get("id")))}">'
         f"{fragment(_text(thread.get('title')))}</a></li>"

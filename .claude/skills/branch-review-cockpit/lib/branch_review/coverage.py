@@ -40,7 +40,7 @@ shows, and :func:`COVERAGE_RULE` is the one home for the rule statement the UI p
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # The one-sentence statement of the counting rule, printed in the cockpit (the acceptance
 # criterion: the file-level rule is *stated in the UI*). Kept here so the rule and its
@@ -93,7 +93,7 @@ class Coverage:
     total_hunks: int
     narrated_hunks: int
     blanket_hunks: int
-    files: tuple[UnnarratedFile, ...] = field(default_factory=tuple)
+    files: tuple[UnnarratedFile, ...] = ()
 
     @property
     def unnarrated_hunks(self) -> int:

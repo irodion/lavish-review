@@ -144,6 +144,7 @@ export function buildFixtureDocument() {
       "data-core-budget": "~2 min",
       "data-full-budget": "~10 min",
       "data-coverage-label": "2 of 3 hunks narrated",
+      "data-coverage-rule": "Hunk-anchored refs narrate; file-level refs are counted separately.",
     },
     [
       h(doc, "h2", null, ["Orientation"]),

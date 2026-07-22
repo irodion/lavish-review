@@ -211,11 +211,11 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
         "Reading weight: ~1 min core · ~1 min full at reading pace "
         "(~25 lines/min; full is ≥24 lines)" in html
     )
-    # The coverage headline rides on L0 too (issue #104): this fixture's one hunk is
-    # anchored by t1.s1, so narration accounts for all of it.
+    # The coverage headline (and the rule, for the Map to relay) ride on L0 too (issue
+    # #104): this fixture's one hunk is anchored by t1.s1, so narration accounts for all of it.
     assert (
         '<section class="l0" data-core-budget="~1 min" data-full-budget="~1 min"'
-        ' data-coverage-label="1 of 1 hunk narrated">' in html
+        ' data-coverage-label="1 of 1 hunk narrated" data-coverage-rule=' in html
     )
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
@@ -610,6 +610,9 @@ def test_render_cockpit_shows_a_fully_narrated_coverage_meter(tmp_path: Path) ->
     # The headline is stamped on L0 for the Map to relay, and stated in the meter with the
     # every-hunk-narrated close. Nothing is bare → no queue, and no link that would dangle.
     assert 'data-coverage-label="1 of 1 hunk narrated"' in html
+    # The rule is stamped for the Map to relay even here — fully narrated → no queue, so the
+    # Map readout is where the counting decision would otherwise be undiscoverable.
+    assert f'data-coverage-rule="{COVERAGE_RULE}"' in html
     assert (
         '<li class="coverage-meter" title=' in html
         and "Narrated-hunk coverage: 1 of 1 hunk narrated (100%) — "

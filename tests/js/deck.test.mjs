@@ -330,6 +330,12 @@ test("the Map relays the narrated-hunk coverage headline and links into the queu
   assert.ok(readout, "the Map shows a coverage readout");
   assert.equal(document.querySelector(".deck-coverage-label").textContent, "2 of 3 hunks narrated");
 
+  // The counting rule is relayed from L0 as the readout's title (stated next to the meter).
+  assert.equal(
+    readout.getAttribute("title"),
+    "Hunk-anchored refs narrate; file-level refs are counted separately."
+  );
+
   // The generated queue exists → the readout is a button that returns to it in document mode.
   assert.equal(readout.tagName, "BUTTON");
   click(readout);

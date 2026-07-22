@@ -717,27 +717,36 @@
   // button that returns to document mode on that section (the file-rail idiom); otherwise —
   // full coverage, or an older page with no label — it is a static line, or absent.
   function buildCoverageReadout() {
-    const label = deck.orientation ? deck.orientation.getAttribute("data-coverage-label") : null;
+    const orientation = deck.orientation;
+    const label = orientation ? orientation.getAttribute("data-coverage-label") : null;
     if (!label) {
       return null;
     }
     const queue = document.getElementById("unnarrated-changes");
+    let readout;
     if (!queue) {
-      return cell("p", "deck-coverage", label);
+      readout = cell("p", "deck-coverage", label);
+    } else {
+      readout = document.createElement("button");
+      readout.type = "button";
+      readout.className = "deck-coverage deck-coverage-link";
+      readout.appendChild(cell("span", "deck-coverage-label", label));
+      readout.appendChild(cell("span", "deck-coverage-more", "un-narrated changes →"));
+      readout.addEventListener("click", function () {
+        setMode("document");
+        revealElement(queue);
+        if (typeof queue.scrollIntoView === "function") {
+          queue.scrollIntoView();
+        }
+      });
     }
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "deck-coverage deck-coverage-link";
-    button.appendChild(cell("span", "deck-coverage-label", label));
-    button.appendChild(cell("span", "deck-coverage-more", "un-narrated changes →"));
-    button.addEventListener("click", function () {
-      setMode("document");
-      revealElement(queue);
-      if (typeof queue.scrollIntoView === "function") {
-        queue.scrollIntoView();
-      }
-    });
-    return button;
+    // The counting rule, relayed from L0 as a title (the weight-chip convention) so the
+    // file-level decision is stated next to this meter too, not only in the queue (#104).
+    const rule = orientation ? orientation.getAttribute("data-coverage-rule") : null;
+    if (rule) {
+      readout.setAttribute("title", rule);
+    }
+    return readout;
   }
 
   function renderMap() {
