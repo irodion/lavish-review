@@ -23,6 +23,7 @@ from branch_review.escape import (
     escape_text,
     evidence_seam_markers,
     fragment,
+    hunk_section_open,
 )
 from branch_review.lint import lint_cockpit
 from branch_review.weight import (
@@ -236,6 +237,137 @@ def _hunk_anchor(entry: Mapping[str, object], index: object) -> str:
     raise RenderError(f"{_text(entry.get('path'))!r} has no hunk {index}")
 
 
+def _step_evidence(step: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """All of a step's evidence refs — its main ``evidence`` plus each attention note's
+    own ``evidence`` (schema 0.4 / ADR-0016), in DOM order (main first, then the notes,
+    matching :func:`_render_step`).
+
+    This is the *whole* of what the step cites: attention-note evidence renders as the
+    same ``.evidence-list`` links, clones into the deck's inline evidence, and is folded
+    into the reverse narration index — so it must also be sized. Feeding this one set to
+    both :func:`_narration_index` and :func:`branch_review.weight.step_weight` keeps them
+    consistent: a hunk a step cites only through an attention note is narrated *and* sized,
+    never counted as narration while the weight reads ``unsized``. ``step_weight`` dedupes
+    within a step, so a hunk cited in both the main list and a note is sized once.
+    """
+    refs = list(_items(step.get("evidence")))
+    for note in _items(step.get("attention_notes")):
+        refs.extend(_items(note.get("evidence")))
+    return refs
+
+
+def _narration_index(
+    threads: Sequence[Mapping[str, object]],
+    files_by_path: Mapping[str, Mapping[str, object]],
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """The reverse hunk↔step join (issue #103): which Review Step(s) narrate each hunk/file.
+
+    The forward direction (:func:`_render_evidence_ref`) points a step at its evidence;
+    this inverts it so an L3 hunk can name the step(s) that narrate it — upgrading the
+    nothing-hidden invariant from "reachable at L3" to "visibly accounted for by
+    narration". Returns ``(by_hunk, by_file)``:
+
+    * ``by_hunk`` maps a hunk element id (``hunk-<fid>-<n>``) to the step ids whose
+      evidence anchors *that exact hunk* (a ``{path, hunk}`` ref), in first-appearance
+      (Review Route) order, deduped.
+    * ``by_file`` maps a changed file's path to the step ids that reference it at the
+      *file* level (a ``{path}`` ref with no ``hunk``) — annotated on the file header,
+      never on a hunk: a file-level ref narrates the file broadly, so it does not mark
+      any one hunk as narrated (those hunks stay individually un-narrated).
+
+    A step's evidence is *all* of it (:func:`_step_evidence`): its main ``evidence`` and
+    each attention note's own ``evidence``, so a hunk a step cites only through a note is
+    narrated by that step — never read "un-narrated" beside the very note that links it.
+
+    A ref that does not resolve (unknown path, or a hunk index the file never emitted)
+    is skipped here: the forward render (:func:`_render_thread`) validates every ref and
+    raises before the files section renders, so a bad ref fails the build there — this
+    index only needs the refs that resolve.
+    """
+    by_hunk: dict[str, list[str]] = {}
+    by_file: dict[str, list[str]] = {}
+    for thread in threads:
+        for step in _items(thread.get("steps")):
+            sid = _text(step.get("id"))
+            if not sid:
+                continue
+            for ref in _step_evidence(step):
+                path = ref.get("path")
+                if not isinstance(path, str):
+                    continue
+                entry = files_by_path.get(path)
+                if entry is None:
+                    continue
+                if "hunk" in ref:
+                    try:
+                        key = _hunk_anchor(entry, ref["hunk"])
+                    except RenderError:
+                        continue
+                    bucket = by_hunk.setdefault(key, [])
+                else:
+                    bucket = by_file.setdefault(path, [])
+                if sid not in bucket:
+                    bucket.append(sid)
+    return by_hunk, by_file
+
+
+def _narrating_step_links(step_ids: Sequence[str]) -> str:
+    """``narrated by <step> · <step>`` — the linked names of a hunk's/file's narrators.
+
+    Each link carries ``class="narrating-step"``: the marker the served deck's click
+    handler stages on and the Cockpit Linter checks resolves to a real step id (#103).
+    The step id is both the jump target (``<details class="step" id=…>``) and its visible
+    label, exactly like a ``relates_to`` link.
+    """
+    links = " ".join(
+        f'<a class="narrating-step" href="#{escape_text(sid)}">{escape_text(sid)}</a>'
+        for sid in step_ids
+    )
+    return f'<span class="narration-label">narrated by</span> {links}'
+
+
+def _hunk_margin(step_ids: Sequence[str] | None) -> str:
+    """The margin for one L3 hunk: its narrating step(s), or the neutral un-narrated marker.
+
+    A hunk **no** step anchors carries a distinct ``un-narrated`` marker — visible
+    bareness, a narration *state* and never a judgment, so it stays in the muted palette
+    with a glyph+word (judgment-color discipline, ADR-0014/0016), never a warn/alarm tint.
+    """
+    if step_ids:
+        return f'<div class="hunk-narration">{_narrating_step_links(step_ids)}</div>'
+    return (
+        '<div class="hunk-narration hunk-unnarrated">'
+        '<span class="unnarrated-marker">un-narrated</span>'
+        "</div>"
+    )
+
+
+def _annotate_hunks(
+    fragment_html: str,
+    entry: Mapping[str, object],
+    by_hunk: Mapping[str, Sequence[str]],
+) -> str:
+    """Splice each hunk's narrating-step margin into a file's pre-escaped diff fragment.
+
+    The fragment is opaque escaped HTML the collector wrote; its one structured handle is
+    the per-hunk ``<section class="hunk" id=…>`` whose id the manifest also carries (the
+    Hunk Anchorer, :func:`branch_review.escape.file_diff_fragment`). For every hunk in the
+    manifest we insert a margin — the narrating step(s) or the neutral un-narrated marker —
+    directly after that section's opening tag, matched via the shared
+    :func:`branch_review.escape.hunk_section_open` so the writer and this splice can't
+    desync. The match is the collision-free hunk id (not a parse) and lands outside the
+    ``<pre>``'s untrusted region, so the Escape Boundary is untouched.
+    """
+    for hunk in _items(entry.get("hunks")):
+        anchor = _text(hunk.get("anchor"))
+        if not anchor:
+            continue
+        opening = hunk_section_open(anchor)
+        margin = _hunk_margin(by_hunk.get(anchor))
+        fragment_html = fragment_html.replace(opening, opening + margin, 1)
+    return fragment_html
+
+
 def _render_evidence_ref(
     ref: Mapping[str, object], files_by_path: Mapping[str, Mapping[str, object]]
 ) -> str:
@@ -309,7 +441,7 @@ def _render_step(
     # Python-owned policy) ride on the panel so Deck Mode relays the tier onto its dot
     # verbatim — the same way it relays data-impact; the visible chip travels with the
     # relocated step onto the Stage.
-    weight = step_weight(step.get("evidence"), files_by_path)
+    weight = step_weight(_step_evidence(step), files_by_path)
     # `data-core` stamps this step's core-route membership (CORE_IMPACTS) so the deck
     # relays it verbatim — the same Python-owned-policy/relay posture as data-weight-bucket;
     # the JS never re-derives which impacts are core (issue #101). Present only when core.
@@ -378,7 +510,7 @@ def _render_thread(
         paths.append(_path_html(files_by_path[path]))
     # Reading cost rolled up from the thread's steps — a per-thread total the Map reuses
     # (the derived-over-authored rule: no thread weight is ever in the analysis).
-    weight = rollup(step_weight(step.get("evidence"), files_by_path) for step in steps)
+    weight = rollup(step_weight(_step_evidence(step), files_by_path) for step in steps)
     # The Map shows this thread rollup as a bare minute figure, so its tooltip states the
     # reading-pace heuristic too — a rollup is never a bare number the reviewer can't
     # recalibrate (weight.py's contract), matching the L0 route estimate.
@@ -463,7 +595,7 @@ def _render_orientation(
     all_steps = [step for thread in threads for step in _items(thread.get("steps"))]
     # Size every step once, then split the rollups — core is a subset of all, so a second
     # step_weight pass over the core steps would just re-do work already done here.
-    weights = [step_weight(step.get("evidence"), files_by_path) for step in all_steps]
+    weights = [step_weight(_step_evidence(step), files_by_path) for step in all_steps]
     core_weights = [
         weight
         for step, weight in zip(all_steps, weights, strict=True)
@@ -512,6 +644,8 @@ def _render_files(
     run_dir: Path,
     files: Sequence[Mapping[str, object]],
     manifest: Mapping[str, object],
+    by_hunk: Mapping[str, Sequence[str]],
+    by_file: Mapping[str, Sequence[str]],
 ) -> str:
     rendered = ['<section class="evidence-files">', "<h2>Evidence</h2>"]
     if manifest.get("too_large") is True:
@@ -539,11 +673,20 @@ def _render_files(
                 fragment_html = fragment_path.read_text(encoding="utf-8")
             except OSError as exc:
                 raise RenderError(f"cannot read {fragment_path}: {exc}") from exc
-            body = fragment_html
+            # Splice each hunk's narrating-step margin into the pre-escaped diff (#103).
+            body = _annotate_hunks(fragment_html, entry, by_hunk)
+        # A file-level ``{path}`` ref annotates the file *header*, not any hunk — the
+        # reviewer sees which step narrates the file as a whole beside its path/stats.
+        file_steps = by_file.get(_text(entry.get("path")))
+        file_narration = (
+            f'<span class="file-narration">{_narrating_step_links(file_steps)}</span>'
+            if file_steps
+            else ""
+        )
         rendered.extend(
             [
                 f'<details class="file" id="{escape_text(anchor)}">',
-                f"<summary>{_path_html(entry)} {stats}</summary>",
+                f"<summary>{_path_html(entry)} {stats}{file_narration}</summary>",
                 f'<div class="file-body">{body}</div>',
                 "</details>",
             ]
@@ -583,6 +726,9 @@ def _document(
     isolation_note = _isolation_note(run_dir)
     run_meta = _run_meta(run_dir)
     threads = _items(analysis.get("threads"))
+    # The reverse hunk↔step join, computed once here where both the analysis (steps) and
+    # the manifest (hunk ids) are in hand, then handed to the L3 files section (#103).
+    by_hunk, by_file = _narration_index(threads, files_by_path)
     return "\n".join(
         [
             "<!doctype html>",
@@ -600,7 +746,7 @@ def _document(
             "<main>",
             _render_orientation(analysis, goal_html, isolation_note, files, files_by_path),
             *[_render_thread(thread, files_by_path, drive_by) for thread in threads],
-            _render_files(run_dir, files, manifest),
+            _render_files(run_dir, files, manifest, by_hunk, by_file),
             _render_runner(analysis),
             f"{QA_SEAM_OPEN}{QA_SEAM_CLOSE}",
             "</main>",

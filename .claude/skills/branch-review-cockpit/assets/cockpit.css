@@ -754,6 +754,32 @@ details.step:target > summary { outline: 2px solid var(--accent); border-radius:
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+/* Hunk↔step cross-index (issue #103): the L3 diff's reverse join. Every hunk names the
+   Review Step(s) that narrate it (linked — a click jumps to the step in document mode,
+   stages it in Deck Mode), and a hunk no step anchors carries a neutral `un-narrated`
+   marker. A file-level ref annotates the file header instead (`.file-narration`). This is
+   a narration STATE, never a judgment: it stays in the muted palette with a glyph+word
+   (judgment-color discipline, ADR-0014/0016) — visible bareness, not an alarm, so no warn
+   or diff colour is ever spent on it. */
+.hunk-narration,
+.file-narration {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.hunk-narration { margin: 0 0 0.35rem; }
+.file-narration { margin-left: auto; } /* trails the file summary's path + stats */
+.narration-label::before { content: "\21B3"; margin-right: 0.3em; } /* ↳ */
+a.narrating-step {
+  color: var(--muted);
+  text-decoration: none;
+  margin-left: 0.35em;
+}
+a.narrating-step:hover { color: var(--accent); text-decoration: underline; }
+/* Un-narrated: bareness, not alarm — a hollow ◦ glyph + the word, muted and italic. */
+.hunk-unnarrated { font-style: italic; }
+.hunk-unnarrated .unnarrated-marker::before { content: "\25E6"; margin-right: 0.3em; } /* ◦ */
+
 /* Test runner note — the suggested (never executed) runner. */
 .runner-note {
   font-family: var(--mono);
