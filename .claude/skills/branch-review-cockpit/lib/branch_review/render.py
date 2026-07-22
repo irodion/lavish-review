@@ -16,6 +16,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from branch_review.analysis import step_ids, validate_analysis
+from branch_review.coverage import (
+    COVERAGE_RULE,
+    Coverage,
+    compute_coverage,
+    coverage_headline,
+)
 from branch_review.escape import (
     INTERACTIVE_CSP,
     QA_SEAM_CLOSE,
@@ -311,19 +317,25 @@ def _narration_index(
     return by_hunk, by_file
 
 
-def _narrating_step_links(step_ids: Sequence[str]) -> str:
-    """``narrated by <step> · <step>`` — the linked names of a hunk's/file's narrators.
+def _step_links(step_ids: Sequence[str]) -> str:
+    """Space-joined ``<a class="narrating-step" href="#sid">sid</a>`` links — no label.
 
     Each link carries ``class="narrating-step"``: the marker the served deck's click
     handler stages on and the Cockpit Linter checks resolves to a real step id (#103).
     The step id is both the jump target (``<details class="step" id=…>``) and its visible
-    label, exactly like a ``relates_to`` link.
+    label, exactly like a ``relates_to`` link. Shared by the "narrated by" margin/header
+    (:func:`_narrating_step_links`) and the Un-narrated queue's file-blanket note (#104),
+    so both stage the same way and pass the same margin-step lint.
     """
-    links = " ".join(
+    return " ".join(
         f'<a class="narrating-step" href="#{escape_text(sid)}">{escape_text(sid)}</a>'
         for sid in step_ids
     )
-    return f'<span class="narration-label">narrated by</span> {links}'
+
+
+def _narrating_step_links(step_ids: Sequence[str]) -> str:
+    """``narrated by <step> · <step>`` — the linked names of a hunk's/file's narrators."""
+    return f'<span class="narration-label">narrated by</span> {_step_links(step_ids)}'
 
 
 def _hunk_margin(step_ids: Sequence[str] | None) -> str:
@@ -584,12 +596,44 @@ def _route_estimate(
     return text, attrs
 
 
+def _coverage_meter(coverage: Coverage) -> str:
+    """The L0 narrated-hunk coverage meter ``<li>`` (issue #104).
+
+    States what fraction of the changed hunks the narration anchors, and — when any hunk is
+    bare — the un-narrated remainder with the distinct file-blanket count and a link into
+    the generated queue. The counting rule (:data:`COVERAGE_RULE`) rides as the ``title`` so
+    the file-level decision is stated wherever the number is shown. A change with no hunks to
+    narrate says so plainly rather than showing a ``0 of 0``.
+    """
+    headline = coverage_headline(coverage)
+    if coverage.total_hunks == 0:
+        return f'<li class="coverage-meter">Narrated-hunk coverage: {escape_text(headline)}.</li>'
+    rule = escape_text(COVERAGE_RULE)
+    percent = f" ({coverage.percent_narrated}%)"
+    if not coverage.has_unnarrated:
+        return (
+            f'<li class="coverage-meter" title="{rule}">Narrated-hunk coverage: '
+            f"{escape_text(headline)}{percent} — every changed hunk is narrated.</li>"
+        )
+    blanket = (
+        f" ({coverage.blanket_hunks} under a file-level citation)"
+        if coverage.blanket_hunks
+        else ""
+    )
+    return (
+        f'<li class="coverage-meter" title="{rule}">Narrated-hunk coverage: '
+        f"{escape_text(headline)}{percent} · {coverage.unnarrated_hunks} un-narrated"
+        f'{escape_text(blanket)} — <a href="#unnarrated-changes">review</a></li>'
+    )
+
+
 def _render_orientation(
     analysis: Mapping[str, object],
     goal_html: str,
     isolation_note: str,
     files: Sequence[Mapping[str, object]],
     files_by_path: Mapping[str, Mapping[str, object]],
+    coverage: Coverage,
 ) -> str:
     threads = _items(analysis.get("threads"))
     all_steps = [step for thread in threads for step in _items(thread.get("steps"))]
@@ -608,6 +652,10 @@ def _render_orientation(
     # core (or none is), core == full — there is nothing to select and one budget suffices.
     abridged = 0 < len(core_weights) < len(all_steps)
     route_estimate, l0_attrs = _route_estimate(route_weight, core_weight, abridged)
+    # Stamp the coverage headline on section.l0 so the served Map relays it verbatim into its
+    # own meter — the Python-owned-policy/relay posture the route budgets already use, never
+    # re-deriving the count in JS (issue #104).
+    l0_attrs += f' data-coverage-label="{escape_text(coverage_headline(coverage))}"'
     links = "".join(
         f'<li><a href="#{escape_text(_text(thread.get("id")))}">'
         f"{fragment(_text(thread.get('title')))}</a></li>"
@@ -633,10 +681,24 @@ def _render_orientation(
             f"<li>{len(files)} changed file(s)</li>",
             f"<li>{escape_text(_impact_summary(all_steps))}</li>",
             f'<li class="route-weight">{escape_text(route_estimate)}</li>',
+            _coverage_meter(coverage),
             f"<li>{escape_text(alignment_text)}</li>",
             "</ul>",
             "</section>",
         ]
+    )
+
+
+def _file_stats_html(entry: Mapping[str, object]) -> str:
+    """The ``+N −M`` changed-line badge for a file — one source for the L3 header and the
+    Un-narrated queue's per-file line (#104), so both read a file's size identically."""
+    added = entry.get("added", 0)
+    deleted = entry.get("deleted", 0)
+    return (
+        '<span class="file-stats">'
+        f'<span class="added">+{int(added) if isinstance(added, int) else 0}</span> '
+        f'<span class="deleted">−{int(deleted) if isinstance(deleted, int) else 0}</span>'
+        "</span>"
     )
 
 
@@ -654,14 +716,7 @@ def _render_files(
         )
     for entry in files:
         anchor = _file_anchor(entry)
-        added = entry.get("added", 0)
-        deleted = entry.get("deleted", 0)
-        stats = (
-            '<span class="file-stats">'
-            f'<span class="added">+{int(added) if isinstance(added, int) else 0}</span> '
-            f'<span class="deleted">−{int(deleted) if isinstance(deleted, int) else 0}</span>'
-            "</span>"
-        )
+        stats = _file_stats_html(entry)
         if entry.get("omitted") is True:
             body = f'<p class="omitted">{fragment(_text(entry.get("reason")))}</p>'
         else:
@@ -693,6 +748,73 @@ def _render_files(
         )
     rendered.append("</section>")
     return "\n".join(rendered)
+
+
+def _hunk_headers(entry: Mapping[str, object]) -> dict[str, str]:
+    """A file's ``{hunk anchor: header_html}`` map — the escaped ``@@`` line the queue shows
+    beside each un-narrated hunk to identify it. Absent/blank headers map to ``""``."""
+    headers: dict[str, str] = {}
+    for hunk in _items(entry.get("hunks")):
+        anchor = _text(hunk.get("anchor"))
+        header = hunk.get("header_html")
+        if anchor:
+            headers[anchor] = header if isinstance(header, str) else ""
+    return headers
+
+
+def _render_unnarrated(
+    coverage: Coverage, files_by_path: Mapping[str, Mapping[str, object]]
+) -> str:
+    """The generated **Un-narrated changes** queue (issue #104), or ``""`` when none is bare.
+
+    Lists every hunk no Review Step anchors, grouped by file and linked to its exact L3 hunk
+    — the roll-up of the #103 per-hunk ``un-narrated`` markers, so the nothing-hidden
+    invariant is a sweepable list, not just scattered margins. A file cited only at file
+    level notes those blanket narrators beside its bare hunks (the file-level counting rule,
+    stated here via :data:`COVERAGE_RULE`), so a reviewer sees which bare hunks at least fall
+    under a whole-file citation. Rendered only when something is bare; the L0 meter links
+    here on exactly the same condition, so the anchor never dangles.
+    """
+    if not coverage.has_unnarrated:
+        return ""
+    blocks: list[str] = [
+        '<section class="unnarrated-changes" id="unnarrated-changes">',
+        "<h2>Un-narrated changes</h2>",
+        f'<p class="coverage-rule">{coverage.unnarrated_hunks} of {coverage.total_hunks} '
+        f"changed hunks are not anchored by any Review Step. {escape_text(COVERAGE_RULE)}</p>",
+    ]
+    for uf in coverage.files:
+        entry = files_by_path[uf.path]
+        headers = _hunk_headers(entry)
+        blanket = (
+            f' · <span class="file-blanket-note">file-level narration: '
+            f"{_step_links(uf.file_steps)}</span>"
+            if uf.file_steps
+            else ""
+        )
+        count = len(uf.hunks)
+        noun = "hunk" if count == 1 else "hunks"
+        items: list[str] = []
+        for hunk in uf.hunks:
+            header = headers.get(hunk.anchor, "")
+            header_html = f' <span class="hunk-header">{header}</span>' if header else ""
+            items.append(
+                f'<li><a href="#{escape_text(hunk.anchor)}">hunk {hunk.index}</a>{header_html}</li>'
+            )
+        blocks.extend(
+            [
+                '<div class="unnarrated-file">',
+                f'<p class="unnarrated-file-head"><a href="#{escape_text(_file_anchor(entry))}">'
+                f"{_path_html(entry)}</a> {_file_stats_html(entry)} — "
+                f"{count} un-narrated {noun}{blanket}</p>",
+                '<ul class="unnarrated-hunks">',
+                *items,
+                "</ul>",
+                "</div>",
+            ]
+        )
+    blocks.append("</section>")
+    return "\n".join(blocks)
 
 
 def _render_runner(analysis: Mapping[str, object]) -> str:
@@ -729,6 +851,9 @@ def _document(
     # The reverse hunk↔step join, computed once here where both the analysis (steps) and
     # the manifest (hunk ids) are in hand, then handed to the L3 files section (#103).
     by_hunk, by_file = _narration_index(threads, files_by_path)
+    # Narrated-hunk coverage rides on the same index: how much of the diff the narration
+    # accounts for (the L0/Map meter) and which hunks it doesn't (the queue) — issue #104.
+    coverage = compute_coverage(files, by_hunk, by_file)
     return "\n".join(
         [
             "<!doctype html>",
@@ -744,9 +869,12 @@ def _document(
             "<body>",
             f'<header class="cockpit-head">{title_html}\n{meta_html}</header>',
             "<main>",
-            _render_orientation(analysis, goal_html, isolation_note, files, files_by_path),
+            _render_orientation(
+                analysis, goal_html, isolation_note, files, files_by_path, coverage
+            ),
             *[_render_thread(thread, files_by_path, drive_by) for thread in threads],
             _render_files(run_dir, files, manifest, by_hunk, by_file),
+            _render_unnarrated(coverage, files_by_path),
             _render_runner(analysis),
             f"{QA_SEAM_OPEN}{QA_SEAM_CLOSE}",
             "</main>",

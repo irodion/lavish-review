@@ -780,6 +780,34 @@ a.narrating-step:hover { color: var(--accent); text-decoration: underline; }
 .hunk-unnarrated { font-style: italic; }
 .hunk-unnarrated .unnarrated-marker::before { content: "\25E6"; margin-right: 0.3em; } /* ◦ */
 
+/* Narrated-hunk coverage (issue #104): the L0 meter and the generated Un-narrated changes
+   queue. Coverage is emphasis, not a verdict — how much of the diff the narration reaches,
+   and which hunks it doesn't — so it stays in the neutral palette (fg/muted/accent), never
+   spending a warn or diff colour on bareness (judgment-color discipline, ADR-0014/0016). */
+.orientation > li.coverage-meter { color: var(--fg); }
+.unnarrated-changes .coverage-rule {
+  margin: 0 0 0.9rem;
+  max-width: 70ch;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+.unnarrated-file { margin: 0 0 0.75rem; }
+.unnarrated-file-head { margin: 0 0 0.25rem; font-size: 0.9rem; }
+.unnarrated-file-head a { color: var(--accent); text-decoration: none; }
+.unnarrated-file-head a:hover { text-decoration: underline; }
+.file-blanket-note { color: var(--muted); font-size: 0.82rem; }
+.unnarrated-hunks {
+  margin: 0 0 0 1.1rem;
+  padding: 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+.unnarrated-hunks li { margin: 0.15rem 0; }
+.unnarrated-hunks a { color: var(--accent); text-decoration: none; }
+.unnarrated-hunks a:hover { text-decoration: underline; }
+.unnarrated-hunks .hunk-header { color: var(--muted); margin-left: 0.4em; }
+
 /* Test runner note — the suggested (never executed) runner. */
 .runner-note {
   font-family: var(--mono);
@@ -873,6 +901,27 @@ body.deck-active .deck {
    colour meaning (judgment-color discipline). */
 .deck-frac { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .deck-frac.active { font-weight: 600; color: var(--fg); }
+
+/* Narrated-hunk coverage in the Map (issue #104): the headline relayed from L0, beneath the
+   disposition progress. A static line at full coverage; a button into the Un-narrated
+   changes queue otherwise. Neutral (coverage is emphasis, not judgment); the "→ queue"
+   affordance carries the one accent, like every other in-Map link. */
+.deck-coverage {
+  display: block;
+  width: 100%;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+button.deck-coverage { cursor: pointer; }
+button.deck-coverage:hover .deck-coverage-more { text-decoration: underline; }
+.deck-coverage-label { font-weight: 600; color: var(--fg); }
+.deck-coverage-more { margin-left: 0.4rem; color: var(--accent); }
 
 /* --- Route selector: the core-first pass vs the full route (issue #101) ---
    A small segmented control at the top of the Map. Neutral surface — the selection is

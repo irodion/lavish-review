@@ -710,6 +710,36 @@
     return wrap;
   }
 
+  // The narrated-hunk coverage readout for the Map (issue #104): how much of the diff the
+  // narration accounts for, relayed verbatim from the headline the renderer stamped on L0
+  // (data-coverage-label) — the deck never re-derives the count, exactly as it relays the
+  // route budgets. When the generated Un-narrated changes queue exists, the readout is a
+  // button that returns to document mode on that section (the file-rail idiom); otherwise —
+  // full coverage, or an older page with no label — it is a static line, or absent.
+  function buildCoverageReadout() {
+    const label = deck.orientation ? deck.orientation.getAttribute("data-coverage-label") : null;
+    if (!label) {
+      return null;
+    }
+    const queue = document.getElementById("unnarrated-changes");
+    if (!queue) {
+      return cell("p", "deck-coverage", label);
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "deck-coverage deck-coverage-link";
+    button.appendChild(cell("span", "deck-coverage-label", label));
+    button.appendChild(cell("span", "deck-coverage-more", "un-narrated changes →"));
+    button.addEventListener("click", function () {
+      setMode("document");
+      revealElement(queue);
+      if (typeof queue.scrollIntoView === "function") {
+        queue.scrollIntoView();
+      }
+    });
+    return button;
+  }
+
   function renderMap() {
     const map = deck.map;
     map.textContent = "";
@@ -729,6 +759,13 @@
     progress.appendChild(countBadge("follow-up", "?", overall["follow-up"]));
     progress.appendChild(countBadge("skipped", "↷", overall.skipped));
     map.appendChild(progress);
+
+    // Narrated-hunk coverage (issue #104): the fraction of the diff the narration accounts
+    // for, beneath the disposition progress — a static line or a button into the queue.
+    const coverage = buildCoverageReadout();
+    if (coverage) {
+      map.appendChild(coverage);
+    }
 
     // The route selector rides at the top of the Map, above the thread list, when the
     // review abridges — the whole change is still one selector click away.

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from branch_review.analysis import SCHEMA, step_ids
+from branch_review.coverage import COVERAGE_RULE
 from branch_review.escape import INTERACTIVE_CSP, file_fragment_id, fragment
 from branch_review.lint import lint_cockpit
 from branch_review.render import RenderError, _route_estimate, main, render_cockpit
@@ -210,7 +211,12 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
         "Reading weight: ~1 min core · ~1 min full at reading pace "
         "(~25 lines/min; full is ≥24 lines)" in html
     )
-    assert '<section class="l0" data-core-budget="~1 min" data-full-budget="~1 min">' in html
+    # The coverage headline rides on L0 too (issue #104): this fixture's one hunk is
+    # anchored by t1.s1, so narration accounts for all of it.
+    assert (
+        '<section class="l0" data-core-budget="~1 min" data-full-budget="~1 min"'
+        ' data-coverage-label="1 of 1 hunk narrated">' in html
+    )
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 
@@ -575,6 +581,128 @@ def test_render_cockpit_explains_total_diff_fallback(tmp_path: Path) -> None:
 
     assert '<p class="too-large">' in html
     assert "Diff exceeds &lt;limit&gt;; bodies omitted." in html
+
+
+def _add_second_bare_hunk(run_dir: Path, header: str = "@@ -5,2 +5,3 @@") -> str:
+    """Give src/app.py a second hunk (index 2) that no step anchors; return its anchor."""
+    fid = file_fragment_id("src/app.py")
+    diff_html = fragment("@@ -1 +1 @@\n-old\n+new\n")
+    _rewrite_app_fragment(
+        run_dir,
+        f'<section class="hunk" id="hunk-{fid}-1"><pre class="diff">{diff_html}</pre></section>'
+        f'<section class="hunk" id="hunk-{fid}-2"><pre class="diff">{diff_html}</pre></section>',
+    )
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["hunks"].append(
+        {"index": 2, "anchor": f"hunk-{fid}-2", "header_html": fragment(header)}
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return f"hunk-{fid}-2"
+
+
+def test_render_cockpit_shows_a_fully_narrated_coverage_meter(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)  # the one hunk is anchored by t1.s1 → nothing bare
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # The headline is stamped on L0 for the Map to relay, and stated in the meter with the
+    # every-hunk-narrated close. Nothing is bare → no queue, and no link that would dangle.
+    assert 'data-coverage-label="1 of 1 hunk narrated"' in html
+    assert (
+        '<li class="coverage-meter" title=' in html
+        and "Narrated-hunk coverage: 1 of 1 hunk narrated (100%) — "
+        "every changed hunk is narrated." in html
+    )
+    assert 'id="unnarrated-changes"' not in html
+    assert 'href="#unnarrated-changes"' not in html
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_generates_the_unnarrated_queue(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)
+    _add_second_bare_hunk(run_dir)  # hunk 1 narrated by t1.s1, hunk 2 bare
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    fid = file_fragment_id("src/app.py")
+    # The L0 meter reports the honest fraction and links into the queue (no file-blanket).
+    assert 'data-coverage-label="1 of 2 hunks narrated"' in html
+    assert (
+        "Narrated-hunk coverage: 1 of 2 hunks narrated (50%) · 1 un-narrated — "
+        '<a href="#unnarrated-changes">review</a>' in html
+    )
+    # The queue exists, states the rule, and lists the bare hunk grouped under its file with
+    # a working L3 link + its header; the narrated hunk 1 is not listed.
+    assert '<section class="unnarrated-changes" id="unnarrated-changes">' in html
+    assert COVERAGE_RULE in html  # the counting rule is stated in the UI
+    assert f'<li><a href="#hunk-{fid}-2">hunk 2</a> <span class="hunk-header">' in html
+    assert ">hunk 1</a>" not in html  # hunk 1 is narrated, never queued
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_notes_file_blanket_narration_in_the_queue(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _add_second_bare_hunk(run_dir)  # hunk 2 bare
+    # Repoint t1.s2 at a file-level ref: it blankets src/app.py, so hunk 2 is un-narrated
+    # but under a file-level citation — counted distinctly, and noted beside the bare hunk.
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    analysis["threads"][0]["steps"][1]["evidence"] = [{"path": "src/app.py"}]
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # The un-narrated count carries the distinct file-blanket refinement.
+    assert (
+        "1 of 2 hunks narrated (50%) · 1 un-narrated (1 under a file-level citation) — " in html
+    )
+    # The queue's file head notes the blanket narrator (a staging narrating-step link).
+    assert (
+        '<span class="file-blanket-note">file-level narration: '
+        '<a class="narrating-step" href="#t1.s2">t1.s2</a></span>' in html
+    )
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_never_counts_or_queues_an_omitted_file(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _add_second_bare_hunk(run_dir)  # src/app.py: hunk 1 narrated, hunk 2 bare
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"].append(
+        {
+            "path": "uv.lock",
+            "path_html": fragment("uv.lock"),
+            "status": "M",
+            "id": file_fragment_id("uv.lock"),
+            "omitted": True,
+            "reason": "lockfile body omitted",
+            "added": 400,
+            "deleted": 10,
+            "binary": False,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    # Even a file-level ref at the omitted file cannot count it — it has no hunks.
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    analysis["threads"][0]["steps"][1]["evidence"] = [{"path": "uv.lock"}]
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # Total counts only src/app.py's two real hunks; the lockfile is shown (existence +
+    # stats, nothing-hidden) but never counted and never queued.
+    assert 'data-coverage-label="1 of 2 hunks narrated"' in html
+    assert "uv.lock" in html and "lockfile body omitted" in html
+    unnarrated = html[html.index('id="unnarrated-changes"') :]
+    assert "uv.lock" not in unnarrated
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 
 @pytest.mark.parametrize(
