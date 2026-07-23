@@ -169,6 +169,16 @@
     }
   }
 
+  // Reveal a target's disclosure ancestors and scroll it into view — the recurring
+  // "jump to this element" idiom the Map's file rail and the coverage readout both use
+  // (scrollIntoView guarded for the file:// / test DOM that may not implement it).
+  function revealAndScrollTo(target) {
+    revealElement(target);
+    if (typeof target.scrollIntoView === "function") {
+      target.scrollIntoView();
+    }
+  }
+
   function revealHashTarget() {
     if (!location.hash || location.hash.length < 2) {
       return;
@@ -729,20 +739,18 @@
     } else {
       readout = document.createElement("button");
       readout.type = "button";
-      readout.className = "deck-coverage deck-coverage-link";
+      readout.className = "deck-coverage";
       readout.appendChild(cell("span", "deck-coverage-label", label));
       readout.appendChild(cell("span", "deck-coverage-more", "un-narrated changes →"));
       readout.addEventListener("click", function () {
         setMode("document");
-        revealElement(queue);
-        if (typeof queue.scrollIntoView === "function") {
-          queue.scrollIntoView();
-        }
+        revealAndScrollTo(queue);
       });
     }
     // The counting rule, relayed from L0 as a title (the weight-chip convention) so the
     // file-level decision is stated next to this meter too, not only in the queue (#104).
-    const rule = orientation ? orientation.getAttribute("data-coverage-rule") : null;
+    // `orientation` is already proven truthy above (a falsy one returns a null label).
+    const rule = orientation.getAttribute("data-coverage-rule");
     if (rule) {
       readout.setAttribute("title", rule);
     }
@@ -898,10 +906,7 @@
         setMode("document");
         const target = document.getElementById(file.id);
         if (target) {
-          revealElement(target);
-          if (typeof target.scrollIntoView === "function") {
-            target.scrollIntoView();
-          }
+          revealAndScrollTo(target);
         }
       });
       nodes.push(row);

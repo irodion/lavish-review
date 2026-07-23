@@ -119,14 +119,14 @@ def test_percent_narrated_is_none_when_there_are_no_hunks() -> None:
 
 
 def test_percent_narrated_rounds() -> None:
-    assert Coverage(397, 70, 0).percent_narrated == 18  # 17.6% → 18
-    assert Coverage(3, 1, 0).percent_narrated == 33
-    assert Coverage(1, 0, 0).percent_narrated == 0
+    assert Coverage(397, 70).percent_narrated == 18  # 17.6% → 18
+    assert Coverage(3, 1).percent_narrated == 33
+    assert Coverage(1, 0).percent_narrated == 0
 
 
 def test_coverage_headline_singular_and_plural() -> None:
-    assert coverage_headline(Coverage(1, 1, 0)) == "1 of 1 hunk narrated"
-    assert coverage_headline(Coverage(5, 2, 0)) == "2 of 5 hunks narrated"
+    assert coverage_headline(Coverage(1, 1)) == "1 of 1 hunk narrated"
+    assert coverage_headline(Coverage(5, 2)) == "2 of 5 hunks narrated"
 
 
 def test_files_are_grouped_in_manifest_order() -> None:

@@ -275,7 +275,11 @@ def _narration_index(
 
     * ``by_hunk`` maps a hunk element id (``hunk-<fid>-<n>``) to the step ids whose
       evidence anchors *that exact hunk* (a ``{path, hunk}`` ref), in first-appearance
-      (Review Route) order, deduped.
+      (Review Route) order, deduped. **A present key never maps to an empty list** — a
+      bucket is created only alongside the append that fills it — so "narrated" reads the
+      same whether by key membership (``anchor in by_hunk``, the coverage count) or by
+      truthiness (``by_hunk.get(anchor)``, the hunk margin); the two consumers cannot
+      diverge on what counts as narrated.
     * ``by_file`` maps a changed file's path to the step ids that reference it at the
       *file* level (a ``{path}`` ref with no ``hunk``) — annotated on the file header,
       never on a hunk: a file-level ref narrates the file broadly, so it does not mark
@@ -605,25 +609,27 @@ def _coverage_meter(coverage: Coverage) -> str:
     the file-level decision is stated wherever the number is shown. A change with no hunks to
     narrate says so plainly rather than showing a ``0 of 0``.
     """
-    headline = coverage_headline(coverage)
+    headline = escape_text(coverage_headline(coverage))
     if coverage.total_hunks == 0:
-        return f'<li class="coverage-meter">Narrated-hunk coverage: {escape_text(headline)}.</li>'
-    rule = escape_text(COVERAGE_RULE)
+        # No hunks to narrate: no fraction, no rule (both moot), just the honest line.
+        return f'<li class="coverage-meter">Narrated-hunk coverage: {headline}.</li>'
     percent = f" ({coverage.percent_narrated}%)"
     if not coverage.has_unnarrated:
-        return (
-            f'<li class="coverage-meter" title="{rule}">Narrated-hunk coverage: '
-            f"{escape_text(headline)}{percent} — every changed hunk is narrated.</li>"
+        tail = " — every changed hunk is narrated."
+    else:
+        blanket = (
+            f" ({coverage.blanket_hunks} under a file-level citation)"
+            if coverage.blanket_hunks
+            else ""
         )
-    blanket = (
-        f" ({coverage.blanket_hunks} under a file-level citation)"
-        if coverage.blanket_hunks
-        else ""
-    )
+        tail = (
+            f" · {coverage.unnarrated_hunks} un-narrated{escape_text(blanket)} — "
+            '<a href="#unnarrated-changes">review</a>'
+        )
+    rule = escape_text(COVERAGE_RULE)
     return (
-        f'<li class="coverage-meter" title="{rule}">Narrated-hunk coverage: '
-        f"{escape_text(headline)}{percent} · {coverage.unnarrated_hunks} un-narrated"
-        f'{escape_text(blanket)} — <a href="#unnarrated-changes">review</a></li>'
+        f'<li class="coverage-meter" title="{rule}">'
+        f"Narrated-hunk coverage: {headline}{percent}{tail}</li>"
     )
 
 

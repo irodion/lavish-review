@@ -85,20 +85,29 @@ class Coverage:
     """The derived narrated-hunk coverage of a change (issue #104).
 
     ``total_hunks`` is every hunk in an included (non-omitted) file; ``narrated_hunks`` the
-    subset a step anchors directly; ``blanket_hunks`` the un-narrated hunks that fall under
-    a file-level citation. ``files`` is the per-file un-narrated grouping (only files with
-    ≥1 bare hunk, in manifest order) the Un-narrated changes queue renders.
+    subset a step anchors directly. ``files`` is the per-file un-narrated grouping (only
+    files with ≥1 bare hunk, in manifest order) the Un-narrated changes queue renders — and
+    the source every other count derives from, so no total is tracked in two places.
     """
 
     total_hunks: int
     narrated_hunks: int
-    blanket_hunks: int
     files: tuple[UnnarratedFile, ...] = ()
 
     @property
     def unnarrated_hunks(self) -> int:
         """Hunks no step anchors — ``total − narrated`` (== the count of #103 markers)."""
         return self.total_hunks - self.narrated_hunks
+
+    @property
+    def blanket_hunks(self) -> int:
+        """Un-narrated hunks that fall under a file-level citation — the file-blanket count.
+
+        Every bare hunk of a file with ``file_steps`` is blanketed, and only those, so this
+        is exactly ``files``' own accounting — derived here rather than tallied in parallel,
+        matching the other derived counts on this class.
+        """
+        return sum(len(uf.hunks) for uf in self.files if uf.file_steps)
 
     @property
     def has_unnarrated(self) -> bool:
@@ -117,16 +126,10 @@ class Coverage:
         return round(100 * self.narrated_hunks / self.total_hunks)
 
 
-def _hunk_anchor(hunk: Mapping[str, object]) -> str:
+def _anchor_of(hunk: Mapping[str, object]) -> str:
+    """A hunk's element anchor from the manifest, or ``""`` when it carries none."""
     anchor = hunk.get("anchor")
     return anchor if isinstance(anchor, str) else ""
-
-
-def _hunk_index(hunk: Mapping[str, object], fallback: int) -> int:
-    index = hunk.get("index")
-    if isinstance(index, bool) or not isinstance(index, int):
-        return fallback
-    return index
 
 
 def compute_coverage(
@@ -144,7 +147,6 @@ def compute_coverage(
     """
     total = 0
     narrated = 0
-    blanket = 0
     unnarrated_files: list[UnnarratedFile] = []
     for entry in files:
         # An omitted body has no hunks to narrate — its stats show in the L3 files section
@@ -159,28 +161,26 @@ def compute_coverage(
             continue
         file_steps = tuple(by_file.get(path, ()))
         bare: list[UnnarratedHunk] = []
+        # ``position`` is the hunk's 1-based place in the manifest list, which the Hunk
+        # Anchorer (escape.file_diff_fragment) writes as the hunk's ``index`` in that same
+        # order — so it *is* the manifest index, used directly as the queue's "hunk N" label.
         for position, hunk in enumerate(hunks, start=1):
             if not isinstance(hunk, Mapping):
                 continue
-            anchor = _hunk_anchor(hunk)
+            anchor = _anchor_of(hunk)
             if not anchor:
                 continue
             total += 1
             if anchor in by_hunk:
                 narrated += 1
             else:
-                bare.append(UnnarratedHunk(index=_hunk_index(hunk, position), anchor=anchor))
-                if file_steps:
-                    blanket += 1
+                bare.append(UnnarratedHunk(index=position, anchor=anchor))
         if bare:
             unnarrated_files.append(
                 UnnarratedFile(path=path, hunks=tuple(bare), file_steps=file_steps)
             )
     return Coverage(
-        total_hunks=total,
-        narrated_hunks=narrated,
-        blanket_hunks=blanket,
-        files=tuple(unnarrated_files),
+        total_hunks=total, narrated_hunks=narrated, files=tuple(unnarrated_files)
     )
 
 
