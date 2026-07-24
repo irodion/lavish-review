@@ -322,6 +322,48 @@ test("the mode toggle round-trips L0 stop zero without duplicating it", () => {
   assert.equal(document.querySelectorAll("section.l0").length, 1, "L0 is never duplicated");
 });
 
+test("the Map relays the narrated-hunk coverage headline and links into the queue", () => {
+  const { document } = loadCockpit();
+
+  // The headline is relayed verbatim from L0's data-coverage-label — never re-derived here.
+  const readout = document.querySelector(".deck-coverage");
+  assert.ok(readout, "the Map shows a coverage readout");
+  assert.equal(document.querySelector(".deck-coverage-label").textContent, "2 of 3 hunks narrated");
+
+  // The counting rule is relayed from L0 as the readout's title (stated next to the meter).
+  assert.equal(
+    readout.getAttribute("title"),
+    "Hunk-anchored refs narrate; file-level refs are counted separately."
+  );
+
+  // The generated queue exists → the readout is a button that returns to it in document mode.
+  assert.equal(readout.tagName, "BUTTON");
+  click(readout);
+  assert.ok(!document.body.classList.contains("deck-active"), "clicking returns to document mode");
+});
+
+test("the Map coverage readout is a static line when nothing is un-narrated", () => {
+  const doc = buildFixtureDocument();
+  // Full coverage: no queue section, and the headline reflects it.
+  doc.getElementById("unnarrated-changes").remove();
+  doc.querySelector("section.l0").setAttribute("data-coverage-label", "3 of 3 hunks narrated");
+  const { document } = loadCockpit({ doc });
+
+  const readout = document.querySelector(".deck-coverage");
+  assert.ok(readout, "the readout still shows the fully-narrated headline");
+  assert.equal(readout.tagName, "P", "with no queue to link to, it is a static line, not a button");
+  assert.equal(readout.textContent, "3 of 3 hunks narrated");
+});
+
+test("the Map shows no coverage readout on a page without the label", () => {
+  const doc = buildFixtureDocument();
+  // An older render (before issue #104) carries no data-coverage-label.
+  doc.querySelector("section.l0").removeAttribute("data-coverage-label");
+  const { document } = loadCockpit({ doc });
+
+  assert.equal(document.querySelector(".deck-coverage"), null, "no label → no readout");
+});
+
 test("no deck is built on file:// (a baked record renders document mode only)", () => {
   const { document } = loadCockpit({ protocol: "file:" });
   assert.equal(document.querySelector(".deck"), null, "no deck container");

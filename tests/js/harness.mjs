@@ -134,12 +134,25 @@ export function buildFixtureDocument() {
   // the per-route reading budgets here (issue #101) — core = the two behavior-affecting
   // steps (8 + 40 = 48 lines → ~2 min), full = all three (+200 → 248 lines → ~10 min) —
   // which the Map's route selector relays verbatim.
-  const l0 = h(doc, "section.l0", { "data-core-budget": "~2 min", "data-full-budget": "~10 min" }, [
-    h(doc, "h2", null, ["Orientation"]),
-    h(doc, "blockquote.goal-text", null, ["Ship the narrated review route."]),
-    h(doc, "h3.analysis-title", null, ["Guided Deck presentation"]),
-    h(doc, "p.intent-read", null, ["Present the rendered change in review order."]),
-  ]);
+  // data-coverage-label is the narrated-hunk coverage headline (issue #104) the Map relays
+  // verbatim: this fixture's hunk-a1 (t1.s1) and hunk-b1 (t2.s1) are hunk-anchored, while
+  // src/two.py's hunk-b0 is only file-blanketed by t1.s2 → 2 of 3 narrated, one bare.
+  const l0 = h(
+    doc,
+    "section.l0",
+    {
+      "data-core-budget": "~2 min",
+      "data-full-budget": "~10 min",
+      "data-coverage-label": "2 of 3 hunks narrated",
+      "data-coverage-rule": "Hunk-anchored refs narrate; file-level refs are counted separately.",
+    },
+    [
+      h(doc, "h2", null, ["Orientation"]),
+      h(doc, "blockquote.goal-text", null, ["Ship the narrated review route."]),
+      h(doc, "h3.analysis-title", null, ["Guided Deck presentation"]),
+      h(doc, "p.intent-read", null, ["Present the rendered change in review order."]),
+    ]
+  );
   main.appendChild(l0);
 
   const t1 = h(doc, "section.thread#t1", null, [
@@ -242,6 +255,27 @@ export function buildFixtureDocument() {
       diffText: "@@ -5,7 +5,7 @@\n context\n-    before()\n+    after()\n",
     })
   );
+
+  // The generated Un-narrated changes queue (issue #104): src/two.py's hunk-b0 is bare
+  // (only file-blanketed by t1.s2). The Map's coverage readout links here.
+  const queue = h(doc, "section.unnarrated-changes#unnarrated-changes", null, [
+    h(doc, "h2", null, ["Un-narrated changes"]),
+    h(doc, "p.coverage-rule", null, ["1 of 3 changed hunks are not anchored by any Review Step."]),
+    h(doc, "div.unnarrated-file", null, [
+      h(doc, "p.unnarrated-file-head", null, [
+        h(doc, "a", { href: "#file-f2" }, ["src/two.py"]),
+        " — 1 un-narrated hunk · ",
+        h(doc, "span.file-blanket-note", null, [
+          "file-level narration: ",
+          h(doc, "a.narrating-step", { href: "#t1.s2" }, ["t1.s2"]),
+        ]),
+      ]),
+      h(doc, "ul.unnarrated-hunks", null, [
+        h(doc, "li", null, [h(doc, "a", { href: "#hunk-b0" }, ["hunk 1"])]),
+      ]),
+    ]),
+  ]);
+  main.appendChild(queue);
 
   return doc;
 }

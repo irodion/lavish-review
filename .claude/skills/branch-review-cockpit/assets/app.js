@@ -169,6 +169,16 @@
     }
   }
 
+  // Reveal a target's disclosure ancestors and scroll it into view — the recurring
+  // "jump to this element" idiom the Map's file rail and the coverage readout both use
+  // (scrollIntoView guarded for the file:// / test DOM that may not implement it).
+  function revealAndScrollTo(target) {
+    revealElement(target);
+    if (typeof target.scrollIntoView === "function") {
+      target.scrollIntoView();
+    }
+  }
+
   function revealHashTarget() {
     if (!location.hash || location.hash.length < 2) {
       return;
@@ -710,6 +720,43 @@
     return wrap;
   }
 
+  // The narrated-hunk coverage readout for the Map (issue #104): how much of the diff the
+  // narration accounts for, relayed verbatim from the headline the renderer stamped on L0
+  // (data-coverage-label) — the deck never re-derives the count, exactly as it relays the
+  // route budgets. When the generated Un-narrated changes queue exists, the readout is a
+  // button that returns to document mode on that section (the file-rail idiom); otherwise —
+  // full coverage, or an older page with no label — it is a static line, or absent.
+  function buildCoverageReadout() {
+    const orientation = deck.orientation;
+    const label = orientation ? orientation.getAttribute("data-coverage-label") : null;
+    if (!label) {
+      return null;
+    }
+    const queue = document.getElementById("unnarrated-changes");
+    let readout;
+    if (!queue) {
+      readout = cell("p", "deck-coverage", label);
+    } else {
+      readout = document.createElement("button");
+      readout.type = "button";
+      readout.className = "deck-coverage";
+      readout.appendChild(cell("span", "deck-coverage-label", label));
+      readout.appendChild(cell("span", "deck-coverage-more", "un-narrated changes →"));
+      readout.addEventListener("click", function () {
+        setMode("document");
+        revealAndScrollTo(queue);
+      });
+    }
+    // The counting rule, relayed from L0 as a title (the weight-chip convention) so the
+    // file-level decision is stated next to this meter too, not only in the queue (#104).
+    // `orientation` is already proven truthy above (a falsy one returns a null label).
+    const rule = orientation.getAttribute("data-coverage-rule");
+    if (rule) {
+      readout.setAttribute("title", rule);
+    }
+    return readout;
+  }
+
   function renderMap() {
     const map = deck.map;
     map.textContent = "";
@@ -729,6 +776,13 @@
     progress.appendChild(countBadge("follow-up", "?", overall["follow-up"]));
     progress.appendChild(countBadge("skipped", "↷", overall.skipped));
     map.appendChild(progress);
+
+    // Narrated-hunk coverage (issue #104): the fraction of the diff the narration accounts
+    // for, beneath the disposition progress — a static line or a button into the queue.
+    const coverage = buildCoverageReadout();
+    if (coverage) {
+      map.appendChild(coverage);
+    }
 
     // The route selector rides at the top of the Map, above the thread list, when the
     // review abridges — the whole change is still one selector click away.
@@ -852,10 +906,7 @@
         setMode("document");
         const target = document.getElementById(file.id);
         if (target) {
-          revealElement(target);
-          if (typeof target.scrollIntoView === "function") {
-            target.scrollIntoView();
-          }
+          revealAndScrollTo(target);
         }
       });
       nodes.push(row);
