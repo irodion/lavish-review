@@ -179,9 +179,7 @@ def compute_coverage(
             unnarrated_files.append(
                 UnnarratedFile(path=path, hunks=tuple(bare), file_steps=file_steps)
             )
-    return Coverage(
-        total_hunks=total, narrated_hunks=narrated, files=tuple(unnarrated_files)
-    )
+    return Coverage(total_hunks=total, narrated_hunks=narrated, files=tuple(unnarrated_files))
 
 
 def coverage_headline(coverage: Coverage) -> str:

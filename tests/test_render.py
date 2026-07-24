@@ -615,8 +615,8 @@ def test_render_cockpit_shows_a_fully_narrated_coverage_meter(tmp_path: Path) ->
     assert f'data-coverage-rule="{COVERAGE_RULE}"' in html
     assert (
         '<li class="coverage-meter" title=' in html
-        and "Narrated-hunk coverage: 1 of 1 hunk narrated (100%) — "
-        "every changed hunk is narrated." in html
+        and "Narrated-hunk coverage: 1 of 1 hunk narrated (100%) — every changed hunk is narrated."
+        in html
     )
     assert 'id="unnarrated-changes"' not in html
     assert 'href="#unnarrated-changes"' not in html
@@ -660,9 +660,7 @@ def test_render_cockpit_notes_file_blanket_narration_in_the_queue(tmp_path: Path
     html = render_cockpit(run_dir).read_text(encoding="utf-8")
 
     # The un-narrated count carries the distinct file-blanket refinement.
-    assert (
-        "1 of 2 hunks narrated (50%) · 1 un-narrated (1 under a file-level citation) — " in html
-    )
+    assert "1 of 2 hunks narrated (50%) · 1 un-narrated (1 under a file-level citation) — " in html
     # The queue's file head notes the blanket narrator (a staging narrating-step link).
     assert (
         '<span class="file-blanket-note">file-level narration: '
