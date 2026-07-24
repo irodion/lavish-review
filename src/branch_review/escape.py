@@ -320,6 +320,20 @@ def iter_hunks(diff_text: str) -> Iterator[tuple[int, str]]:
         yield index, diff_text[start:end]
 
 
+def hunk_body_lines(hunk_text: str) -> list[str]:
+    """A hunk's body lines — everything after its ``@@`` header (``split("\\n")[1:]``).
+
+    The single definition of "the lines a hunk body comprises", shared by the renderer's
+    per-hunk ``lines`` count (:func:`file_diff_fragment`) and the move detector
+    (:mod:`branch_review.moves`). The 0-based position of a line here is the same index the
+    client diff rebuild re-derives, so ``data-moved`` dimming lands on the matching row —
+    keeping that alignment as one definition rather than three prose assertions that it
+    holds. Split on ``\\n`` alone (never ``str.splitlines``) so an embedded ``\\r`` or
+    Unicode separator in a body cannot forge an extra line and shift every later position.
+    """
+    return hunk_text.split("\n")[1:]
+
+
 def hunk_anchor_id(fragment_id: str, index: int) -> str:
     """The deterministic element id of the ``index``-th hunk (1-based) in a file's diff.
 
@@ -411,10 +425,9 @@ def file_diff_fragment(
         # ``@@`` header itself and git's ``\ No newline at end of file`` meta lines.
         # Counted from the raw bytes because the header's ``-a,b +c,d`` counts cannot
         # recover it: a modify-in-place hunk shares context in both sides, so ``max(b, d)``
-        # drops the overlap and undercounts. Split on ``\n`` alone — never ``str.splitlines``
-        # (see the module note above) — so a ``\r`` or Unicode separator embedded in a hunk
-        # body cannot forge an extra line and inflate this otherwise-exact count.
-        lines = sum(1 for line in hunk_text.split("\n")[1:] if line[:1] in (" ", "+", "-"))
+        # drops the overlap and undercounts. :func:`hunk_body_lines` owns the ``\n``-only
+        # split (its docstring explains why) — one body-line model shared with the detector.
+        lines = sum(1 for line in hunk_body_lines(hunk_text) if line[:1] in (" ", "+", "-"))
         hunk_entry: dict[str, object] = {
             "index": index,
             "anchor": anchor,

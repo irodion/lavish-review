@@ -39,9 +39,9 @@ is a pure function of the diff bytes, independent of file or hunk ordering.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
-from branch_review.escape import iter_hunks
+from branch_review.escape import hunk_body_lines, iter_hunks
 
 # The whitespace/identity rule, in one sentence — the single source the module docstring,
 # the renderer's legend tooltip, and any documentation reuse share, so the decision is
@@ -69,23 +69,36 @@ def normalize_move_line(content: str) -> str:
     return content.strip()
 
 
+def _classified_lines(hunk_text: str) -> Iterator[tuple[int, str, str]]:
+    """Yield ``(position, marker, key)`` for each non-blank ``+``/``-`` line of a hunk body.
+
+    ``position`` is the 0-based index into :func:`branch_review.escape.hunk_body_lines` (the
+    body-line model the renderer's ``lines`` count and the client diff rebuild share, so a
+    ``position`` here is the exact row ``data-moved`` dims), ``marker`` is ``"+"`` or ``"-"``,
+    and ``key`` is the move-identity of the line's content (:func:`normalize_move_line`),
+    never blank. The single place the split → marker-filter → normalize walk lives, so the
+    added/removed set builder and the per-hunk locator classify lines identically by
+    construction rather than by two copies kept in sync.
+    """
+    for position, line in enumerate(hunk_body_lines(hunk_text)):
+        marker = line[:1]
+        if marker not in ("+", "-"):
+            continue
+        key = normalize_move_line(line[1:])
+        if key:
+            yield position, marker, key
+
+
 def _added_removed(diff_text: str) -> tuple[set[str], set[str]]:
     """One file's normalized non-blank ``(added, removed)`` line contents.
 
-    Walks the file's hunks through the shared splitter so the body-line model matches the
-    renderer's exactly. Blank-after-strip lines are dropped (never movable), so they can
-    neither seed nor satisfy a match.
+    Blank-after-strip lines are dropped by :func:`_classified_lines` (never movable), so
+    they can neither seed nor satisfy a match.
     """
     added: set[str] = set()
     removed: set[str] = set()
     for _index, hunk_text in iter_hunks(diff_text):
-        for line in hunk_text.split("\n")[1:]:
-            marker = line[:1]
-            if marker not in ("+", "-"):
-                continue
-            key = normalize_move_line(line[1:])
-            if not key:
-                continue
+        for _position, marker, key in _classified_lines(hunk_text):
             (added if marker == "+" else removed).add(key)
     return added, removed
 
@@ -110,19 +123,16 @@ def moved_hunk_lines(diff_text: str, moved: frozenset[str]) -> dict[int, list[in
     """Per-hunk relocated body-line positions for one file, given the changeset ``moved`` set.
 
     Returns ``{hunk_1based_index: [body_line_position, ...]}`` — a body-line position is a
-    0-based index into ``hunk_text.split("\\n")[1:]`` (the same enumeration the renderer's
-    ``lines`` count and the client diff rebuild use, so the renderer can address the exact
-    row). A position is included when its line is a ``+``/``-`` whose normalized content is
-    in ``moved``. Only hunks with at least one relocated line appear, so a moveless file
-    yields ``{}`` and the manifest gains no ``moved`` keys (degrade to today exactly).
+    0-based index into :func:`branch_review.escape.hunk_body_lines` (the body-line model the
+    renderer's ``lines`` count and the client diff rebuild share, so the renderer can address
+    the exact row). A position is included when its line is a non-blank ``+``/``-`` whose
+    normalized content is in ``moved``. Only hunks with at least one relocated line appear,
+    so a moveless file yields ``{}`` and the manifest gains no ``moved`` keys (degrade to
+    today exactly).
     """
     result: dict[int, list[int]] = {}
     for index, hunk_text in iter_hunks(diff_text):
-        positions = [
-            position
-            for position, line in enumerate(hunk_text.split("\n")[1:])
-            if line[:1] in ("+", "-") and normalize_move_line(line[1:]) in moved
-        ]
+        positions = [pos for pos, _marker, key in _classified_lines(hunk_text) if key in moved]
         if positions:
             result[index] = positions
     return result
