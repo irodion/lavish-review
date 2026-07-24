@@ -197,6 +197,68 @@ def test_per_file_fragment_records_rename(repo: Path) -> None:
     assert rename["fragment"] is not None
 
 
+def test_collect_records_moved_lines_across_files(tmp_path: Path) -> None:
+    # A block relocated verbatim from one file into another (issue #106): the changeset-
+    # wide detector dims it on BOTH ends, so mover.py's removed lines and holder.py's
+    # added lines both carry `moved` in fragments.json.
+    root = tmp_path / "moverepo"
+    root.mkdir()
+    _git(root, "init", "-b", "main")
+    _commit(root, "mover.py", "keep_a\nalpha()\nbeta()\ngamma()\n", "base: block in mover")
+    _commit(root, "holder.py", "keep_b\n", "base: empty holder")
+    _git(root, "checkout", "-b", "feature")
+    (root / "mover.py").write_text("keep_a\n")
+    (root / "holder.py").write_text("keep_b\nalpha()\nbeta()\ngamma()\n")
+    _git(root, "add", "mover.py", "holder.py")
+    _git(root, "commit", "-m", "refactor: relocate the block")
+
+    out = root / ".review-agent"
+    collect(root, out_dir=out)
+    index = _fragments_index(out)
+
+    mover_moved = [pos for h in index["mover.py"]["hunks"] for pos in h.get("moved", [])]
+    holder_moved = [pos for h in index["holder.py"]["hunks"] for pos in h.get("moved", [])]
+    assert mover_moved, "the relocated-away lines should be dimmed in mover.py"
+    assert holder_moved, "the relocated-in lines should be dimmed in holder.py"
+
+
+def test_collect_records_relocation_with_edit(tmp_path: Path) -> None:
+    # A block relocated with ONE line edited in transit (issue #106): through the real
+    # collector, the identical relocated lines carry `moved`, but the edited line stays at
+    # full contrast (its new content matches nothing removed). This is the earn-the-label
+    # case ADR-0016 cares about — the edit must not hide inside the dimmed move.
+    root = tmp_path / "editrepo"
+    root.mkdir()
+    _git(root, "init", "-b", "main")
+    _commit(root, "mover.py", "keep_a\nalpha()\nbeta()\ngamma()\n", "base: block in mover")
+    _commit(root, "holder.py", "keep_b\n", "base: empty holder")
+    _git(root, "checkout", "-b", "feature")
+    (root / "mover.py").write_text("keep_a\n")
+    # beta() is edited to beta(x) on relocation; alpha()/gamma() move verbatim.
+    (root / "holder.py").write_text("keep_b\nalpha()\nbeta(x)\ngamma()\n")
+    _git(root, "add", "mover.py", "holder.py")
+    _git(root, "commit", "-m", "refactor: relocate the block, tweak beta")
+
+    out = root / ".review-agent"
+    collect(root, out_dir=out)
+    index = _fragments_index(out)
+
+    # holder.py hunk body after the @@ header (0-based): 0=" keep_b", 1="+alpha()",
+    # 2="+beta(x)", 3="+gamma()". Only 1 and 3 relocate; 2 (the edit) is genuine drift.
+    holder_hunks = index["holder.py"]["hunks"]
+    holder_moved = sorted(pos for h in holder_hunks for pos in h.get("moved", []))
+    assert holder_moved == [1, 3], "the edited line must stay full-contrast, not dim"
+
+
+def test_collect_writes_no_moved_key_without_relocation(repo: Path) -> None:
+    # A plain edit (x = 1 → x = 2) relocates nothing: the manifest gains no `moved` key,
+    # so a moveless changeset renders byte-for-byte as before the detector existed.
+    _git(repo, "checkout", "feature")
+    collect(repo)
+    index = _fragments_index(repo / ".review-agent")
+    assert all("moved" not in h for h in index["app.py"]["hunks"])
+
+
 def test_per_file_fragment_handles_unusual_path(repo: Path) -> None:
     _git(repo, "checkout", "feature")
     odd = "weird dir/na me \U0001f600.py"

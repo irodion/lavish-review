@@ -222,6 +222,13 @@ pre.diff {
 .diff-table tr.dl-add td.code { color: var(--add); background: var(--add-wash); }
 .diff-table tr.dl-del td.code { color: var(--del); background: var(--del-wash); }
 
+/* Relocated-but-identical lines (issue #106): dimmed so genuine edits inside a moved
+   block stand out — verify-then-skim made visual. Dimming is EMPHASIS, never a judgment:
+   the add/del hue is kept and only muted (reduced opacity), so a moved line reads as
+   "unchanged, relocated", never as a warn/alarm colour (ADR-0014/0016 discipline). */
+.diff-table tr.dl-moved td.code { opacity: 0.48; }
+.diff-table tr.dl-moved td.lno { opacity: 0.6; }
+
 /* Hunk header row: a full-width band in the accent colour; when the diff is a Hunk
    Anchorer section its text is a self-link to the hunk's own id. */
 .diff-table tr.dl-hunk td {
@@ -547,6 +554,27 @@ details.file > .file-body { padding: 0.5rem 0.9rem 0.9rem; }
   color: var(--warn);
   font-style: italic;
   font-size: 0.9rem;
+}
+
+/* The move legend (issue #106): a small muted note above the L3 evidence, shown only
+   when the detector dimmed some lines. The swatch is a dimmed sample keying the note to
+   the effect — muted, never a judgment colour, matching `.dl-moved` above. */
+.moved-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 0 0 0.7rem;
+}
+.moved-swatch {
+  display: inline-block;
+  width: 1.6rem;
+  height: 0.8rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--add-wash);
+  opacity: 0.48;
 }
 
 /* Reviewer dispositions (ADR-0012/0016) — JS-injected controls on each step summary,
