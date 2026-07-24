@@ -188,8 +188,11 @@ test("clicking a concern link stages that step", async () => {
   assert.equal(stagedStepId(document), "t1.s2", "the concern link jumps into the route at its step");
 });
 
-test("all steps reviewed → no next stop, and it says so", async () => {
+test("all steps reviewed and nothing un-narrated → no next stop, and it says so", async () => {
+  const doc = buildFixtureDocument();
+  doc.getElementById("unnarrated-changes").remove(); // full coverage — no tail to walk either
   const { document } = loadCockpit({
+    doc,
     dispositions: { "t1.s1": "looks-right", "t1.s2": "follow-up", "t2.s1": "skipped" },
     sessionStorage: memoryStorage(),
   });
@@ -199,6 +202,7 @@ test("all steps reviewed → no next stop, and it says so", async () => {
   assert.match(text(document, ".deck-recap-coverage"), /3 of 3 steps/, "full coverage");
   assert.equal(document.querySelector(".deck-recap-continue-step"), null, "no next-step chip");
   assert.ok(document.querySelector(".deck-recap-done"), "states every step is reviewed");
+  assert.equal(document.querySelector(".deck-recap-tail"), null, "no tail line when the diff is fully narrated");
   // The follow-up is still surfaced with its link even when nothing is left to review.
   assert.ok(document.querySelector('.deck-recap-list a[href="#t1.s2"]'), "the follow-up is linked");
 });

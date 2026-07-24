@@ -97,9 +97,14 @@ test("in core mode J/K step over off-route steps, and K from the head returns to
   press(document, "j"); // t1.s2 (last core step)
   assert.equal(stagedStepId(document), "t1.s2");
 
-  press(document, "j"); // no further core step — clamp
-  assert.equal(stagedStepId(document), "t1.s2", "J clamps at the core route's end (skips t2.s1)");
+  press(document, "j"); // past the last core step → the un-narrated act (issue #105)
+  assert.ok(
+    document.querySelector(".deck-stage .deck-tail-note"),
+    "J past the last core step enters the un-narrated act (the tail is route-independent)"
+  );
 
+  press(document, "k"); // back from the first bare hunk → the last core step (not t2.s1)
+  assert.equal(stagedStepId(document), "t1.s2", "K from the tail returns to the last core step");
   press(document, "k"); // back to the first core step
   assert.equal(stagedStepId(document), "t1.s1");
   press(document, "k"); // no earlier core step — back to stop zero
