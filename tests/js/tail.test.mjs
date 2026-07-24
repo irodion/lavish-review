@@ -10,7 +10,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadCockpit, buildFixtureDocument, memoryStorage, click, press, flush } from "./harness.mjs";
+import {
+  loadCockpit,
+  buildFixtureDocument,
+  memoryStorage,
+  click,
+  press,
+  flush,
+  h,
+  filePanel,
+} from "./harness.mjs";
 
 const STORE_KEY = "brc:ui:/review.html";
 
@@ -22,60 +31,35 @@ const crumbText = (document, cls) => {
 const actDot = (document, anchor) =>
   document.querySelectorAll(".deck-act-dot").find((d) => d.dataset.hunk === anchor);
 
-// Add a second bare hunk to the default fixture: an L3 file panel + hunk (so the tail can
-// clone it) and a matching queue entry, both built before DOMContentLoaded so buildTailHunks
-// reads the queue and annotateDiff annotates the diff. Returns the doc for loadCockpit.
+// Add a second bare hunk (in a second file) to the default fixture, reusing the harness's
+// own builders (filePanel for the L3 panel, h for the queue entry) so the shapes stay
+// identical to buildFixtureDocument. Built before DOMContentLoaded so buildTailHunks reads
+// the queue and annotateDiff annotates the diff. Returns the doc for loadCockpit.
 function withSecondBareHunk(doc = buildFixtureDocument()) {
-  const main = doc.querySelector("main");
-
-  // L3: <details.file><summary>…</summary><div.file-body><section.hunk><pre.diff>…
   const l3 = doc.createElement("section");
-  const details = doc.createElement("details");
-  details.className = "file";
-  details.id = "file-f4";
-  const summary = doc.createElement("summary");
-  summary.appendChild(doc.createTextNode("src/four.py "));
-  const stats = doc.createElement("span");
-  stats.className = "file-stats";
-  stats.appendChild(doc.createTextNode("+2 −0"));
-  summary.appendChild(stats);
-  const fileBody = doc.createElement("div");
-  fileBody.className = "file-body";
-  const hunk = doc.createElement("section");
-  hunk.className = "hunk";
-  hunk.id = "hunk-c0";
-  const pre = doc.createElement("pre");
-  pre.className = "diff";
-  pre.appendChild(doc.createTextNode("@@ -1,0 +1,2 @@\n+    added_four = True\n"));
-  hunk.appendChild(pre);
-  fileBody.appendChild(hunk);
-  details.appendChild(summary);
-  details.appendChild(fileBody);
-  l3.appendChild(details);
-  main.appendChild(l3);
+  l3.appendChild(
+    filePanel(doc, {
+      id: "file-f4",
+      path: "src/four.py",
+      added: 2,
+      deleted: 0,
+      hunkId: "hunk-c0",
+      diffText: "@@ -1,0 +1,2 @@\n+    added_four = True\n",
+    })
+  );
+  doc.querySelector("main").appendChild(l3);
 
-  // Queue: a second .unnarrated-file with a head link + one bare-hunk li.
-  const queue = doc.getElementById("unnarrated-changes");
-  const fileBlock = doc.createElement("div");
-  fileBlock.className = "unnarrated-file";
-  const head = doc.createElement("p");
-  head.className = "unnarrated-file-head";
-  const headLink = doc.createElement("a");
-  headLink.setAttribute("href", "#file-f4");
-  headLink.appendChild(doc.createTextNode("src/four.py"));
-  head.appendChild(headLink);
-  fileBlock.appendChild(head);
-  const ul = doc.createElement("ul");
-  ul.className = "unnarrated-hunks";
-  const li = doc.createElement("li");
-  const link = doc.createElement("a");
-  link.setAttribute("href", "#hunk-c0");
-  link.appendChild(doc.createTextNode("hunk 1"));
-  li.appendChild(link);
-  ul.appendChild(li);
-  fileBlock.appendChild(ul);
-  queue.appendChild(fileBlock);
-
+  doc.getElementById("unnarrated-changes").appendChild(
+    h(doc, "div.unnarrated-file", null, [
+      h(doc, "p.unnarrated-file-head", null, [
+        h(doc, "a", { href: "#file-f4" }, ["src/four.py"]),
+        " — 1 un-narrated hunk",
+      ]),
+      h(doc, "ul.unnarrated-hunks", null, [
+        h(doc, "li", null, [h(doc, "a", { href: "#hunk-c0" }, ["hunk 1"])]),
+      ]),
+    ])
+  );
   return doc;
 }
 
@@ -280,22 +264,17 @@ test("multiple bare hunks in one file are each walked, sharing the file context"
   const doc = buildFixtureDocument();
   // A second bare hunk in the SAME file (src/two.py): a second L3 hunk + a second queue li,
   // so buildTailHunks must group both under one file path.
-  const body = doc.getElementById("file-f2").querySelector(".file-body");
-  const hunk = doc.createElement("section");
-  hunk.className = "hunk";
-  hunk.id = "hunk-b0b";
-  const pre = doc.createElement("pre");
-  pre.className = "diff";
-  pre.appendChild(doc.createTextNode("@@ -20,0 +21,2 @@\n+    also_added = True\n"));
-  hunk.appendChild(pre);
-  body.appendChild(hunk);
-  const ul = doc.querySelector("#unnarrated-changes .unnarrated-hunks");
-  const li = doc.createElement("li");
-  const link = doc.createElement("a");
-  link.setAttribute("href", "#hunk-b0b");
-  link.appendChild(doc.createTextNode("hunk 2"));
-  li.appendChild(link);
-  ul.appendChild(li);
+  doc
+    .getElementById("file-f2")
+    .querySelector(".file-body")
+    .appendChild(
+      h(doc, "section.hunk#hunk-b0b", null, [
+        h(doc, "pre.diff", null, ["@@ -20,0 +21,2 @@\n+    also_added = True\n"]),
+      ])
+    );
+  doc
+    .querySelector("#unnarrated-changes .unnarrated-hunks")
+    .appendChild(h(doc, "li", null, [h(doc, "a", { href: "#hunk-b0b" }, ["hunk 2"])]));
 
   const { document } = loadCockpit({ doc });
 

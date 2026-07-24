@@ -1019,10 +1019,9 @@
     }
 
     // A bare hunk (issue #105) is CLONED onto the Stage, not relocated — the document is
-    // already whole, so there is nothing to move back. Drop the staged flag but PRESERVE
+    // already whole, so there is nothing to move back. Clear the staged index but PRESERVE
     // the return memory (deck.tailStop), so a toggle to the document and back returns here.
-    if (deck.tailStaged) {
-      deck.tailStaged = false;
+    if (deck.tailIndex !== -1) {
       deck.tailIndex = -1;
       return;
     }
@@ -1065,6 +1064,21 @@
     return crumb;
   }
 
+  // The in-page id a link's `href="#…"` addresses, decoded, or null for a non-anchor or a
+  // malformed href — the one place the anchor-decode fallback lives, shared by the step's
+  // inline evidence and the un-narrated tail (issue #105).
+  function anchorTargetId(link) {
+    const href = link.getAttribute("href") || "";
+    if (href.charAt(0) !== "#" || href.length < 2) {
+      return null;
+    }
+    try {
+      return decodeURIComponent(href.slice(1));
+    } catch (_err) {
+      return null; // a malformed anchor addresses nothing
+    }
+  }
+
   // Clone the hunk(s) this step's evidence points at, inline under the Stage
   // card. Each evidence link is an in-page anchor; resolve it to its element and
   // clone it (a hunk section, or a file body for a file-level ref). Cloning keeps
@@ -1074,17 +1088,8 @@
     const seen = Object.create(null);
     const anchors = step.querySelectorAll(".evidence-list a");
     Array.prototype.forEach.call(anchors, function (anchor) {
-      const href = anchor.getAttribute("href") || "";
-      if (href.charAt(0) !== "#" || href.length < 2) {
-        return;
-      }
-      let id;
-      try {
-        id = decodeURIComponent(href.slice(1));
-      } catch (_err) {
-        return; // a malformed anchor addresses nothing
-      }
-      if (seen[id]) {
+      const id = anchorTargetId(anchor);
+      if (id === null || seen[id]) {
         return;
       }
       seen[id] = true;
@@ -1155,7 +1160,7 @@
 
   function setMode(mode) {
     if (mode === "deck") {
-      if (deck.staged || deck.orientationStaged || deck.tailStaged) {
+      if (deck.staged || deck.orientationStaged || deck.tailIndex !== -1) {
         showDeck();
       } else if (deck.tailStop) {
         // The reviewer left off on a bare hunk (issue #105): re-stage it. tailStop is only
@@ -1347,7 +1352,7 @@
     const route = routeSteps();
     // Inside the un-narrated act (issue #105), J/K walk the bare hunks (navigateTail owns
     // both the forward clamp and the return to the last step from the first hunk).
-    if (deck.tailStaged) {
+    if (deck.tailIndex !== -1) {
       navigateTail(delta);
       return;
     }
@@ -1416,17 +1421,10 @@
       Array.prototype.forEach.call(
         fileBlock.querySelectorAll(".unnarrated-hunks li a"),
         function (link) {
-          const href = link.getAttribute("href") || "";
-          if (href.charAt(0) !== "#" || href.length < 2) {
-            return;
+          const anchor = anchorTargetId(link);
+          if (anchor !== null) {
+            hunks.push({ anchor: anchor, label: link.textContent, filePath: filePath });
           }
-          let anchor;
-          try {
-            anchor = decodeURIComponent(href.slice(1));
-          } catch (_err) {
-            return; // a malformed anchor addresses nothing
-          }
-          hunks.push({ anchor: anchor, label: link.textContent, filePath: filePath });
         }
       );
     });
@@ -1487,7 +1485,8 @@
     }
     // Already on this bare hunk — no-op re-stage (a repeat dot/act click), matching the
     // same-target guards stageStep/stageOrientation use so the Stage isn't needlessly rebuilt.
-    if (deck.tailStaged && deck.tailIndex === index) {
+    // (index ≥ 0 here, so this can't match the not-staged sentinel of -1.)
+    if (deck.tailIndex === index) {
       showDeck();
       return;
     }
@@ -1506,8 +1505,7 @@
     deck.stage.appendChild(buildTailEvidence(hunk));
 
     deck.staged = null; // a bare hunk is not a step — no disposition target
-    deck.tailStaged = true;
-    deck.tailIndex = index;
+    deck.tailIndex = index; // ≥ 0 marks "a bare hunk is staged" (no separate boolean)
     deck.tailStop = hunk.anchor; // current + return position (survives a document toggle)
     deck.tailVisited.add(hunk.anchor); // session-scoped "tail walked" progress
     deck.stageControlButtons = null; // no disposition control on the Stage
@@ -1596,7 +1594,7 @@
       if (deck.tailVisited.has(hunk.anchor)) {
         dot.classList.add("visited");
       }
-      if (deck.tailStaged && deck.tailIndex === index) {
+      if (deck.tailIndex === index) {
         dot.classList.add("current");
       }
       dot.setAttribute("title", hunk.filePath + " " + hunk.label);
@@ -1894,7 +1892,10 @@
             deck.tailVisited.add(anchor);
           }
         });
-        if (deck.tailVisited.size) {
+        // Only the L0 stop below short-circuits without a render (it re-stages an
+        // already-staged orientation); a step or `tail:` stop re-renders on its own, so
+        // render here only for L0 to avoid a duplicate Map rebuild on restore.
+        if (deck.tailVisited.size && state.stop === "l0") {
           renderMap();
         }
       }
@@ -2155,6 +2156,20 @@
     return list;
   }
 
+  // A recap CTA button: a bold label + a mono sub-label (a step id or a hunk label), an
+  // aria-label, and a click action — the one shape the "continue at a step" and "walk the
+  // tail" (issue #105) CTAs share (the plain "Back to orientation" button is its own shape).
+  function recapContinueButton(label, subLabel, ariaLabel, onClick) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "deck-recap-continue";
+    btn.setAttribute("aria-label", ariaLabel);
+    btn.appendChild(cell("span", "deck-recap-continue-label", label));
+    btn.appendChild(cell("span", "deck-recap-continue-step", subLabel));
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
   // Build the recap card element from its data — closed-vocabulary structure with every
   // reviewer-adjacent value set as text (counts, ids, DOM-read titles). Never innerHTML.
   function renderRecapCard(data) {
@@ -2216,35 +2231,35 @@
     // The next unreviewed stop, offered as the primary way back into the route.
     const row = cell("div", "deck-recap-continue-row", null);
     if (data.nextStep) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "deck-recap-continue";
-      btn.setAttribute("aria-label", "Resume review at step " + data.nextStep.id);
-      btn.appendChild(cell("span", "deck-recap-continue-label", "Continue where you left off"));
-      btn.appendChild(cell("span", "deck-recap-continue-step", data.nextStep.id));
-      btn.addEventListener("click", function () {
-        const target = document.getElementById(data.nextStep.id);
-        if (target && deck.steps.indexOf(target) !== -1) {
-          stageStep(target);
-        }
-      });
-      row.appendChild(btn);
+      row.appendChild(
+        recapContinueButton(
+          "Continue where you left off",
+          data.nextStep.id,
+          "Resume review at step " + data.nextStep.id,
+          function () {
+            const target = document.getElementById(data.nextStep.id);
+            if (target && deck.steps.indexOf(target) !== -1) {
+              stageStep(target);
+            }
+          }
+        )
+      );
     } else if (data.nextTail) {
       // Every step is reviewed, but the tail isn't fully walked (issue #105): steer to the
       // un-narrated work rather than back to orientation — otherwise the recap's only CTA
       // would imply the change is done. Staging a bare hunk records tailStop through the real
       // path, so the tail return memory is set, never discarded by a stageOrientation().
       row.appendChild(cell("p", "deck-recap-done", "Every step has been reviewed."));
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "deck-recap-continue";
-      btn.setAttribute("aria-label", "Walk the un-narrated changes at " + data.nextTail.label);
-      btn.appendChild(cell("span", "deck-recap-continue-label", "Walk the un-narrated changes"));
-      btn.appendChild(cell("span", "deck-recap-continue-step", data.nextTail.label));
-      btn.addEventListener("click", function () {
-        stageTailHunkByAnchor(data.nextTail.anchor);
-      });
-      row.appendChild(btn);
+      row.appendChild(
+        recapContinueButton(
+          "Walk the un-narrated changes",
+          data.nextTail.label,
+          "Walk the un-narrated changes at " + data.nextTail.label,
+          function () {
+            stageTailHunkByAnchor(data.nextTail.anchor);
+          }
+        )
+      );
     } else {
       // Every step reviewed and the tail (if any) fully walked — nothing left, back to L0.
       row.appendChild(cell("p", "deck-recap-done", "Every step has been reviewed."));
@@ -2413,8 +2428,8 @@
       // the current/last bare-hunk stop (the return memory across a document toggle and an
       // injection reload); tailVisited is the session-scoped "tail walked" progress.
       tailHunks: buildTailHunks(),
-      tailStaged: false,
-      tailIndex: -1,
+      tailIndex: -1, // the staged bare hunk's index, or -1 when none is staged (the "on a
+      // tail hunk?" state — no separate boolean, so the two can never drift out of sync)
       tailStop: null,
       tailVisited: new Set(),
     };

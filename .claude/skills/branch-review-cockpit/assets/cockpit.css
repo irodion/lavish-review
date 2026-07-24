@@ -1026,7 +1026,9 @@ button.deck-coverage:hover .deck-coverage-more { text-decoration: underline; }
   font-variant-numeric: tabular-nums;
 }
 
-.deck-dots { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.15rem 0 0 0.35rem; align-items: center; }
+/* The step dots and the un-narrated act's dots (issue #105) share the rail layout and the
+   current-stop outline; only the base dot fill/sizing differs (steps carry a weight tier). */
+.deck-dots, .deck-act-dots { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.15rem 0 0 0.35rem; align-items: center; }
 .deck-dot {
   --dot-w: 20px; /* sized by reading weight below (issue #100) — a bucket sets this var */
   width: var(--dot-w);
@@ -1060,7 +1062,7 @@ button.deck-coverage:hover .deck-coverage-more { text-decoration: underline; }
 .deck-dot[data-disposition="concern"] { background: var(--level-high); border-color: var(--level-high); }
 .deck-dot[data-disposition="follow-up"] { background: var(--warn); border-color: var(--warn); }
 .deck-dot[data-disposition="skipped"] { background: var(--muted); border-color: var(--muted); }
-.deck-dot.current { outline: 2px solid var(--accent); outline-offset: 1px; }
+.deck-dot.current, .deck-act-dot.current { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* While the abridged core route is active (issue #101), dots outside it are dimmed — a
    texture cue that the pass sequences past them, never a hide: they stay in place and
    clickable, so nothing is hidden, only sequenced. */
@@ -1119,7 +1121,9 @@ button.deck-coverage:hover .deck-coverage-more { text-decoration: underline; }
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
 }
-.deck-act-dots { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.15rem 0 0 0.35rem; align-items: center; }
+/* The rail layout (.deck-act-dots) and the current-stop outline (.deck-act-dot.current) are
+   shared with the step dots above; only the base fill/size is the tail's own (uniform, no
+   weight tier). A visited (walked) bare hunk fills neutral — "seen", never a verdict. */
 .deck-act-dot {
   width: 20px;
   height: 11px;
@@ -1129,9 +1133,7 @@ button.deck-coverage:hover .deck-coverage-more { text-decoration: underline; }
   background: var(--bg);
   cursor: pointer;
 }
-/* A visited (walked) bare hunk fills neutral — "seen", never a disposition or verdict. */
 .deck-act-dot.visited { background: var(--muted); border-color: var(--muted); }
-.deck-act-dot.current { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* --- Stage: stop zero or one step at a time, with step evidence inline --- */
 .deck-stage { min-width: 0; max-width: 900px; }
