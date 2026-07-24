@@ -2074,11 +2074,9 @@
     const concerns = [];
     const followUps = [];
     const threads = [];
-    let nextStep = null;
-    // One walk of the route, thread by thread. deck.steps is exactly these groups
-    // flattened in order, so iterating groups → steps visits the route in the same order
-    // while also yielding each thread's total in the same pass — no second traversal, and
-    // no reliance on the two staying in sync.
+    // Coverage, concerns, and follow-ups are FULL-route totals — every step counts, whatever
+    // route is active (the abridged Core pass hides nothing, only sequences). One walk of the
+    // groups (deck.steps flattened) yields the tally and each thread's total together.
     deck.groups.forEach(function (group) {
       if (!group.steps.length) {
         return;
@@ -2094,15 +2092,23 @@
           } else if (state === "follow-up") {
             followUps.push({ id: step.id, title: stepTitleText(step) });
           }
-        } else if (!nextStep) {
-          // The next unreviewed stop in Review Route order — the first undisposed step.
-          nextStep = { id: step.id, title: stepTitleText(step) };
         }
       });
       threads.push({ id: group.threadId, title: group.title, reviewed: done, total: group.steps.length });
     });
     if (reviewed === 0 && answered === 0) {
       return null; // nothing happened before this sitting → a first open, no recap
+    }
+    // The next unreviewed stop is chosen from the ACTIVE route (issue #101), not every step,
+    // so a Core-mode resume that has finished Core steers to the final act (the tail, below)
+    // exactly as forward navigation (J) does — never jumping to an off-route Full-only step.
+    let nextStep = null;
+    const route = routeSteps();
+    for (let i = 0; i < route.length; i++) {
+      if (!settableFor(map, route[i].id)) {
+        nextStep = { id: route[i].id, title: stepTitleText(route[i]) };
+        break;
+      }
     }
     // The un-narrated tail (issue #105): its walked progress and the first un-walked bare
     // hunk, so a resume that has finished every step can still steer to the un-narrated diff

@@ -348,3 +348,28 @@ test("resume recap steers to the tail when every step is reviewed but the tail i
   click(document.querySelector(".deck-recap-continue"));
   assert.ok(tailNote(document), "clicking it walks the un-narrated tail");
 });
+
+test("resume recap keeps the CTA on the active route: Core done → the tail, not a Full-only step", async () => {
+  // Restore the Core route from the store, then resume with both Core steps (t1.s1, t1.s2)
+  // disposed and the Full-only t2.s1 (test-change) left undisposed. Core is complete, so the
+  // recap CTA must enter the final act — matching J — not jump to the off-route t2.s1.
+  const storage = memoryStorage({
+    [STORE_KEY]: JSON.stringify({ run: "run-1", route: "core", mode: "deck", stop: "l0" }),
+  });
+  const { document } = loadCockpit({
+    dispositions: { "t1.s1": "looks-right", "t1.s2": "looks-right" },
+    sessionStorage: storage,
+    run: "run-1",
+  });
+  await flush();
+
+  assert.ok(document.querySelector(".deck-recap"), "the resume recaps");
+  assert.match(
+    document.querySelector(".deck-recap-continue-label").textContent,
+    /Walk the un-narrated changes/,
+    "Core complete → the CTA enters the tail, not the off-route Full-only step"
+  );
+  assert.equal(document.querySelector(".deck-recap-continue-step").textContent, "hunk 1");
+  click(document.querySelector(".deck-recap-continue"));
+  assert.ok(tailNote(document), "and it walks the tail");
+});
