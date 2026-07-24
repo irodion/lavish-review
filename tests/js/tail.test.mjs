@@ -240,6 +240,25 @@ test("a restored walked-anchor that no longer resolves is dropped, never resurre
   assert.ok(actDot(document, "hunk-b0").classList.contains("visited"), "the present hunk reads walked");
 });
 
+test("a stale tail: stop that no-ops still renders the restored walked progress", () => {
+  // Same run, but the persisted stop points at a bare hunk this run no longer has while a
+  // live walked anchor remains. stageTailHunkByAnchor no-ops on the stale stop, so the Map
+  // must still be rendered from the restored tailVisited (not left at the build-time frac).
+  const seed = {
+    [STORE_KEY]: JSON.stringify({
+      run: "run-1",
+      mode: "deck",
+      stop: "tail:hunk-gone",
+      tail: ["hunk-b0"],
+    }),
+  };
+  const { document } = loadCockpit({ sessionStorage: memoryStorage(seed), run: "run-1" });
+
+  assert.ok(document.querySelector(".deck-stage .l0"), "the stale stop no-ops → orientation stays staged");
+  assert.equal(document.querySelector(".deck-act-frac").textContent, "1/1", "the restored walked count is rendered");
+  assert.ok(actDot(document, "hunk-b0").classList.contains("visited"), "and its dot reads walked");
+});
+
 test("a fully-narrated diff (no queue) has no act, and forward clamps at the last step", () => {
   const doc = buildFixtureDocument();
   doc.getElementById("unnarrated-changes").remove(); // full coverage — nothing bare

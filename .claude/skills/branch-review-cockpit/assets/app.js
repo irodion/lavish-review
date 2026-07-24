@@ -1883,21 +1883,13 @@
       }
       // Restore the session-scoped tail-walked progress (issue #105), keeping only anchors
       // the current run still lists — a regenerated run's dropped hunk self-invalidates
-      // rather than resurrecting a walked mark for a hunk that no longer exists. Re-render so
-      // the Map's tail frac reflects it even when the stop below short-circuits (an L0 stop
-      // re-stages an already-staged orientation without a render), mirroring the route restore.
+      // rather than resurrecting a walked mark for a hunk that no longer exists.
       if (Array.isArray(state.tail)) {
         state.tail.forEach(function (anchor) {
           if (typeof anchor === "string" && tailIndexOf(anchor) !== -1) {
             deck.tailVisited.add(anchor);
           }
         });
-        // Only the L0 stop below short-circuits without a render (it re-stages an
-        // already-staged orientation); a step or `tail:` stop re-renders on its own, so
-        // render here only for L0 to avoid a duplicate Map rebuild on restore.
-        if (deck.tailVisited.size && state.stop === "l0") {
-          renderMap();
-        }
       }
       // Stage the reviewer's last stop first — in *either* mode — so the deck's
       // return memory (lastStop/lastStaged/tailStop) is set through the real staging paths.
@@ -1917,6 +1909,15 @@
       }
       if (state.mode === "document") {
         setMode("document");
+      }
+      // If the restored stop staged nothing that renders — an L0 stop re-stages an
+      // already-staged orientation (short-circuit), and a stale step/`tail:` stop no-ops —
+      // the build-time Map still shows the pre-restore tail frac. Render once so the restored
+      // walked-hunk count shows (issue #105). A staged step or live tail hunk renders on its
+      // own, and document mode rendered via showDocument above — both left staged/tailIndex
+      // set (or mode document), so this is skipped there and never double-renders.
+      if (deck.tailVisited.size && deck.mode !== "document" && !deck.staged && deck.tailIndex === -1) {
+        renderMap();
       }
     }
     // Persistence is live from here — snapshot the restored (or default) state so a
