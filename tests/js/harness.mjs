@@ -22,7 +22,7 @@ const SESSION_NAME = "session.json";
 // The `#id` may appear anywhere after the tag and is split off first, so ids that
 // contain no `.` work regardless of class order (step ids, which carry a dot, are
 // set on the element directly instead).
-function h(doc, spec, attrs, children) {
+export function h(doc, spec, attrs, children) {
   let id = null;
   const hash = spec.indexOf("#");
   if (hash !== -1) {
@@ -107,7 +107,7 @@ function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence,
 
 // One L3 file panel with a single hunk section whose <pre class="diff"> holds the
 // raw (pre-escaped) diff text — the caller supplies the diff body verbatim.
-function filePanel(doc, { id, path, added, deleted, hunkId, diffText }) {
+export function filePanel(doc, { id, path, added, deleted, hunkId, diffText }) {
   const stats = h(doc, "span.file-stats", null, [
     h(doc, "span.added", null, ["+" + added]),
     " ",

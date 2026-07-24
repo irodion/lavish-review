@@ -870,6 +870,15 @@
       map.appendChild(block);
     });
 
+    // The un-narrated act (issue #105): the route's final act, after the threads — the bare
+    // hunks no step anchors, with their own session-scoped "tail walked" progress. Absent on
+    // a fully narrated diff (buildTailAct returns null), so the label only shows with it.
+    const tailAct = buildTailAct();
+    if (tailAct) {
+      map.appendChild(cell("p", "deck-map-label", "Final act"));
+      map.appendChild(tailAct);
+    }
+
     // The file rail never changes after build; re-append the cached nodes (which
     // appendChild moves back into place) instead of re-deriving them each render.
     deck.fileNodes.forEach(function (node) {
@@ -949,6 +958,7 @@
 
     deck.orientationStaged = true;
     deck.lastStop = orientation;
+    deck.tailStop = null; // stop zero is the position now, not a bare hunk
     deck.stageControlButtons = null;
     deck.status = null;
     showDeck();
@@ -989,6 +999,7 @@
     deck.staged = step;
     deck.lastStaged = step;
     deck.lastStop = step;
+    deck.tailStop = null; // leaving the tail (if we were in it) — a step is the position now
     showDeck();
     renderMap();
   }
@@ -1004,6 +1015,14 @@
       }
       deck.orientationHome = null;
       deck.orientationStaged = false;
+      return;
+    }
+
+    // A bare hunk (issue #105) is CLONED onto the Stage, not relocated — the document is
+    // already whole, so there is nothing to move back. Clear the staged index but PRESERVE
+    // the return memory (deck.tailStop), so a toggle to the document and back returns here.
+    if (deck.tailIndex !== -1) {
+      deck.tailIndex = -1;
       return;
     }
 
@@ -1045,6 +1064,21 @@
     return crumb;
   }
 
+  // The in-page id a link's `href="#…"` addresses, decoded, or null for a non-anchor or a
+  // malformed href — the one place the anchor-decode fallback lives, shared by the step's
+  // inline evidence and the un-narrated tail (issue #105).
+  function anchorTargetId(link) {
+    const href = link.getAttribute("href") || "";
+    if (href.charAt(0) !== "#" || href.length < 2) {
+      return null;
+    }
+    try {
+      return decodeURIComponent(href.slice(1));
+    } catch (_err) {
+      return null; // a malformed anchor addresses nothing
+    }
+  }
+
   // Clone the hunk(s) this step's evidence points at, inline under the Stage
   // card. Each evidence link is an in-page anchor; resolve it to its element and
   // clone it (a hunk section, or a file body for a file-level ref). Cloning keeps
@@ -1054,17 +1088,8 @@
     const seen = Object.create(null);
     const anchors = step.querySelectorAll(".evidence-list a");
     Array.prototype.forEach.call(anchors, function (anchor) {
-      const href = anchor.getAttribute("href") || "";
-      if (href.charAt(0) !== "#" || href.length < 2) {
-        return;
-      }
-      let id;
-      try {
-        id = decodeURIComponent(href.slice(1));
-      } catch (_err) {
-        return; // a malformed anchor addresses nothing
-      }
-      if (seen[id]) {
+      const id = anchorTargetId(anchor);
+      if (id === null || seen[id]) {
         return;
       }
       seen[id] = true;
@@ -1135,8 +1160,13 @@
 
   function setMode(mode) {
     if (mode === "deck") {
-      if (deck.staged || deck.orientationStaged) {
+      if (deck.staged || deck.orientationStaged || deck.tailIndex !== -1) {
         showDeck();
+      } else if (deck.tailStop) {
+        // The reviewer left off on a bare hunk (issue #105): re-stage it. tailStop is only
+        // ever a live anchor (set on staging, cleared on leaving to a step/L0), so this
+        // resolves — a stale one only ever arrives via restore, which no-ops on it.
+        stageTailHunkByAnchor(deck.tailStop);
       } else if (deck.lastStop === deck.orientation) {
         stageOrientation();
       } else {
@@ -1305,7 +1335,13 @@
         return;
       }
     }
-    announceStage("All " + activeRouteLabel() + "steps reviewed — nothing left to advance to.");
+    // At the route's end, point the reviewer at the un-narrated act if one exists (issue
+    // #105) — the tail is reached by forward navigation (J), not by disposition advance, so
+    // this is how a keys-only reviewer discovers it. Steps are "reviewed"; the tail is "walked".
+    const tailHint = deck.tailHunks.length ? " Press J to walk the un-narrated changes." : "";
+    announceStage(
+      "All " + activeRouteLabel() + "steps reviewed — nothing left to advance to." + tailHint
+    );
   }
 
   // J/K free navigation: one step forward/back along the ACTIVE route, clamped at the
@@ -1314,6 +1350,12 @@
   // a dot click) are stepped over, so J/K always land on the route the reviewer chose.
   function navigateStage(delta) {
     const route = routeSteps();
+    // Inside the un-narrated act (issue #105), J/K walk the bare hunks (navigateTail owns
+    // both the forward clamp and the return to the last step from the first hunk).
+    if (deck.tailIndex !== -1) {
+      navigateTail(delta);
+      return;
+    }
     if (deck.orientationStaged) {
       if (delta > 0 && route.length) {
         stageStep(route[0]); // stop zero → the head of the active route
@@ -1326,8 +1368,8 @@
       return;
     }
     // Scan in the requested direction (delta is ±1) for the nearest active-route step,
-    // stepping over any off-route step reached by a dot click. Forward clamps silently at
-    // the route's end; backward with none before it falls back to stop zero.
+    // stepping over any off-route step reached by a dot click. Backward with none before it
+    // falls back to stop zero; forward past the last step enters the un-narrated act.
     const inRoute = new Set(route);
     for (let i = from + delta; i >= 0 && i < all.length; i += delta) {
       if (inRoute.has(all[i])) {
@@ -1337,7 +1379,233 @@
     }
     if (delta < 0 && deck.orientation) {
       stageOrientation();
+    } else if (delta > 0 && deck.tailHunks.length) {
+      // Past the last step of the active route → the route's final act (issue #105).
+      stageTailHunk(0);
     }
+  }
+
+  // --- The un-narrated act: the route's final act (issue #105) ----------------
+  //
+  // "16/16 steps reviewed" can still leave a fifth of the diff never pointed at. After the
+  // last step, forward navigation walks the bare hunks no Review Step anchors — the very
+  // hunks the generated Un-narrated changes queue (issue #104) already lists — one at a time
+  // with their file for context. A bare hunk is NOT a Review Step: the Stage carries no
+  // disposition control and no step-scoped ask (a question about it goes through ordinary
+  // branch-scoped chat, out of scope here), and the Map tracks its own *session-scoped*
+  // "tail walked" progress — which bare hunks were visited — kept out of the step-review
+  // counts so the two never conflate (steps are reviewed; the tail is walked). The hunks are
+  // read from the rendered queue, never re-derived here (the count is Python-owned policy,
+  // coverage.py), and each staged hunk is a CLONE of its L3 section (like a step's inline
+  // evidence), so the document stays whole and the mode toggle round-trips losslessly.
+  // Walked-hunk progress and the current stop ride the run-scoped UI store (issue #112), so
+  // they survive an injection reload and self-invalidate when a regenerated run's hunks no
+  // longer match.
+
+  // The bare hunks, read once from the generated queue: each carries its L3 anchor, its
+  // "hunk N" label, and its file path for the staged context. Empty on a fully narrated diff
+  // (no queue) or an older page — then the act never exists and forward clamps at the last
+  // step, exactly as before.
+  function buildTailHunks() {
+    const queue = document.getElementById("unnarrated-changes");
+    if (!queue) {
+      return [];
+    }
+    const hunks = [];
+    Array.prototype.forEach.call(queue.querySelectorAll(".unnarrated-file"), function (fileBlock) {
+      const head = fileBlock.querySelector(".unnarrated-file-head");
+      // The head's first link wraps the (pre-escaped) path; read it as text for the crumb —
+      // never markup, the same DOM-relocation discipline the rest of the deck holds to.
+      const fileLink = head ? head.querySelector("a") : null;
+      const filePath = fileLink ? fileLink.textContent : "";
+      Array.prototype.forEach.call(
+        fileBlock.querySelectorAll(".unnarrated-hunks li a"),
+        function (link) {
+          const anchor = anchorTargetId(link);
+          if (anchor !== null) {
+            hunks.push({ anchor: anchor, label: link.textContent, filePath: filePath });
+          }
+        }
+      );
+    });
+    return hunks;
+  }
+
+  // The index of the bare hunk with this anchor, or -1 — the stable key the return memory
+  // and the store restore resolve a tail stop through (an anchor no longer present is
+  // discarded, never guessed, the same clean-break posture as a stale staged-step id).
+  function tailIndexOf(anchor) {
+    for (let i = 0; i < deck.tailHunks.length; i++) {
+      if (deck.tailHunks[i].anchor === anchor) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // The Stage crumb for a bare hunk: the act name, the file it belongs to (its context), and
+  // the hunk label — all text, from the queue the renderer authored.
+  function buildTailCrumb(hunk) {
+    const crumb = cell("div", "deck-crumb", null);
+    crumb.appendChild(cell("span", "deck-crumb-act", "Un-narrated changes"));
+    crumb.appendChild(cell("span", "deck-crumb-title", hunk.filePath));
+    crumb.appendChild(cell("span", "deck-crumb-hunk", hunk.label));
+    return crumb;
+  }
+
+  // Clone the bare hunk's L3 section inline, exactly as a step's inline evidence does
+  // (evidenceBody + stripIds) — already-escaped nodes, so a <script> in a diff stays text.
+  // Its file/label ride in the figcaption for context; there is NO disposition control and
+  // NO ask box — a bare hunk is not a Review Step.
+  function buildTailEvidence(hunk) {
+    const wrap = cell("div", "deck-evidence", null);
+    const target = document.getElementById(hunk.anchor);
+    if (!target) {
+      wrap.appendChild(cell("p", "deck-evidence-none", "This hunk is no longer in the document."));
+      return wrap;
+    }
+    const figure = cell("figure", "deck-hunk", null);
+    figure.appendChild(cell("figcaption", "", hunk.filePath + " · " + hunk.label)); // text only
+    const clone = evidenceBody(target).cloneNode(true); // already-escaped nodes, text only
+    stripIds(clone); // the original keeps the anchor; a clone must not duplicate ids
+    figure.appendChild(clone);
+    wrap.appendChild(figure);
+    return wrap;
+  }
+
+  // Stage the bare hunk at `index`: clear the Stage, show the crumb (file context), a note
+  // that it is not a Review Step, and the cloned hunk — no disposition control, no ask box.
+  // Records it as the current tail stop (the return memory across a toggle/reload) and marks
+  // it walked (session-scoped Map progress). Out-of-range index clamps to just showing the
+  // deck. Setting deck.staged null keeps the L/C/F/S keys inert (disposeStaged early-returns).
+  function stageTailHunk(index) {
+    if (index < 0 || index >= deck.tailHunks.length) {
+      showDeck();
+      return;
+    }
+    // Already on this bare hunk — no-op re-stage (a repeat dot/act click), matching the
+    // same-target guards stageStep/stageOrientation use so the Stage isn't needlessly rebuilt.
+    // (index ≥ 0 here, so this can't match the not-staged sentinel of -1.)
+    if (deck.tailIndex === index) {
+      showDeck();
+      return;
+    }
+    unstageCurrent();
+    const hunk = deck.tailHunks[index];
+
+    deck.stage.textContent = "";
+    deck.stage.appendChild(buildTailCrumb(hunk));
+    deck.stage.appendChild(
+      cell(
+        "p",
+        "deck-tail-note",
+        "No Review Step narrates this hunk — read it here; ask about it in the branch chat."
+      )
+    );
+    deck.stage.appendChild(buildTailEvidence(hunk));
+
+    deck.staged = null; // a bare hunk is not a step — no disposition target
+    deck.tailIndex = index; // ≥ 0 marks "a bare hunk is staged" (no separate boolean)
+    deck.tailStop = hunk.anchor; // current + return position (survives a document toggle)
+    deck.tailVisited.add(hunk.anchor); // session-scoped "tail walked" progress
+    deck.stageControlButtons = null; // no disposition control on the Stage
+    deck.status = null;
+    showDeck();
+    renderMap();
+  }
+
+  // Re-stage the bare hunk with this anchor — the return path setMode and the store restore
+  // use. A no-op when the anchor no longer resolves (a regenerated run dropped it), so a
+  // stale return memory falls through cleanly rather than staging nothing coherent.
+  function stageTailHunkByAnchor(anchor) {
+    const index = tailIndexOf(anchor);
+    if (index !== -1) {
+      stageTailHunk(index);
+    }
+  }
+
+  // J/K within the tail: forward to the next bare hunk (clamped at the last — the tail is the
+  // route's true end), backward to the previous, and back from the FIRST bare hunk returns to
+  // the last step of the active route, so the act is reachable and escapable by the same keys.
+  function navigateTail(delta) {
+    const next = deck.tailIndex + delta;
+    if (next >= 0 && next < deck.tailHunks.length) {
+      stageTailHunk(next);
+      return;
+    }
+    if (delta < 0) {
+      const route = routeSteps();
+      if (route.length) {
+        stageStep(route[route.length - 1]);
+      } else if (deck.orientation) {
+        stageOrientation();
+      }
+    }
+    // Forward past the last bare hunk: clamp (stay put) — there is nothing beyond the tail.
+  }
+
+  // The bare hunks walked this session — the "tail walked" fraction's numerator.
+  function tailWalkedCount() {
+    return deck.tailVisited ? deck.tailVisited.size : 0;
+  }
+
+  // The walked anchors as an array, for the run-scoped store (issue #112). Restored back into
+  // the Set on load, filtered to hunks the current run still lists (self-invalidation).
+  function tailVisitedList() {
+    const out = [];
+    if (deck && deck.tailVisited) {
+      deck.tailVisited.forEach(function (anchor) {
+        out.push(anchor);
+      });
+    }
+    return out;
+  }
+
+  // The un-narrated act's block in the Map: the act, its session-scoped "tail walked"
+  // progress, and one dot per bare hunk (visited = a neutral fill; coverage is emphasis, not
+  // a verdict — judgment-color discipline). Its own `.deck-act*` namespace, never the step
+  // dots/threads, so the Map's step counts never absorb it. Absent on a fully narrated diff.
+  function buildTailAct() {
+    if (!deck.tailHunks.length) {
+      return null;
+    }
+    const block = cell("div", "deck-act-block", null);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "deck-act";
+    button.appendChild(cell("span", "deck-act-title", "Un-narrated changes"));
+    // "tail walked" — steps are "reviewed"; this keeps the progress language distinct.
+    button.appendChild(cell("span", "deck-act-note", "tail walked"));
+    button.appendChild(
+      cell("span", "deck-act-frac", tailWalkedCount() + "/" + deck.tailHunks.length)
+    );
+    button.addEventListener("click", function () {
+      stageTailHunk(0);
+    });
+    block.appendChild(button);
+
+    const dots = cell("div", "deck-act-dots", null);
+    deck.tailHunks.forEach(function (hunk, index) {
+      const dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "deck-act-dot";
+      dot.dataset.hunk = hunk.anchor;
+      if (deck.tailVisited.has(hunk.anchor)) {
+        dot.classList.add("visited");
+      }
+      if (deck.tailIndex === index) {
+        dot.classList.add("current");
+      }
+      dot.setAttribute("title", hunk.filePath + " " + hunk.label);
+      dot.setAttribute("aria-label", "Stage un-narrated " + hunk.label + " in " + hunk.filePath);
+      dot.addEventListener("click", function () {
+        stageTailHunk(index);
+      });
+      dots.appendChild(dot);
+    });
+    block.appendChild(dots);
+    return block;
   }
 
   // The single global keydown handler, active only while the deck is showing (the
@@ -1524,6 +1792,12 @@
   // *staged* but the reviewer still has a position the deck returns to). This is what
   // must survive a reload, not the transient `staged`, which is null in document mode.
   function currentStopId() {
+    // A bare-hunk stop (issue #105) takes precedence: tailStop holds it in either mode (the
+    // reviewer can toggle to the document from a tail hunk), the same way lastStop holds a
+    // step. Encoded with a `tail:` prefix so restore can tell it from a step id.
+    if (deck && deck.tailStop) {
+      return "tail:" + deck.tailStop;
+    }
     if (!deck || deck.orientationStaged || deck.lastStop === deck.orientation) {
       return "l0";
     }
@@ -1544,6 +1818,7 @@
       drafts: snapshotDrafts(),
       open: snapshotOpen(),
       ticks: snapshotTicks(),
+      tail: tailVisitedList(), // session-scoped un-narrated "tail walked" progress (#105)
       resumeSeen: resumeSeen, // the resume signal this tab has acknowledged (#102)
     });
   }
@@ -1606,12 +1881,26 @@
           });
         });
       }
+      // Restore the session-scoped tail-walked progress (issue #105), keeping only anchors
+      // the current run still lists — a regenerated run's dropped hunk self-invalidates
+      // rather than resurrecting a walked mark for a hunk that no longer exists.
+      if (Array.isArray(state.tail)) {
+        state.tail.forEach(function (anchor) {
+          if (typeof anchor === "string" && tailIndexOf(anchor) !== -1) {
+            deck.tailVisited.add(anchor);
+          }
+        });
+      }
       // Stage the reviewer's last stop first — in *either* mode — so the deck's
-      // return memory (lastStop/lastStaged) is set through the real staging paths.
+      // return memory (lastStop/lastStaged/tailStop) is set through the real staging paths.
       // Then, if the reviewer had toggled to the document, unstage back to it: the
       // memory stays, so a later toggle to the deck lands where they left off.
       if (state.stop === "l0") {
         stageOrientation();
+      } else if (typeof state.stop === "string" && state.stop.indexOf("tail:") === 0) {
+        // A bare-hunk stop (issue #105): re-stage it, or fall through cleanly when the run
+        // regenerated and the anchor no longer resolves (stageTailHunkByAnchor no-ops).
+        stageTailHunkByAnchor(state.stop.slice("tail:".length));
       } else if (typeof state.stop === "string") {
         const target = document.getElementById(state.stop);
         if (target && deck.steps.indexOf(target) !== -1) {
@@ -1620,6 +1909,15 @@
       }
       if (state.mode === "document") {
         setMode("document");
+      }
+      // If the restored stop staged nothing that renders — an L0 stop re-stages an
+      // already-staged orientation (short-circuit), and a stale step/`tail:` stop no-ops —
+      // the build-time Map still shows the pre-restore tail frac. Render once so the restored
+      // walked-hunk count shows (issue #105). A staged step or live tail hunk renders on its
+      // own, and document mode rendered via showDocument above — both left staged/tailIndex
+      // set (or mode document), so this is skipped there and never double-renders.
+      if (deck.tailVisited.size && deck.mode !== "document" && !deck.staged && deck.tailIndex === -1) {
+        renderMap();
       }
     }
     // Persistence is live from here — snapshot the restored (or default) state so a
@@ -1777,11 +2075,9 @@
     const concerns = [];
     const followUps = [];
     const threads = [];
-    let nextStep = null;
-    // One walk of the route, thread by thread. deck.steps is exactly these groups
-    // flattened in order, so iterating groups → steps visits the route in the same order
-    // while also yielding each thread's total in the same pass — no second traversal, and
-    // no reliance on the two staying in sync.
+    // Coverage, concerns, and follow-ups are FULL-route totals — every step counts, whatever
+    // route is active (the abridged Core pass hides nothing, only sequences). One walk of the
+    // groups (deck.steps flattened) yields the tally and each thread's total together.
     deck.groups.forEach(function (group) {
       if (!group.steps.length) {
         return;
@@ -1797,9 +2093,6 @@
           } else if (state === "follow-up") {
             followUps.push({ id: step.id, title: stepTitleText(step) });
           }
-        } else if (!nextStep) {
-          // The next unreviewed stop in Review Route order — the first undisposed step.
-          nextStep = { id: step.id, title: stepTitleText(step) };
         }
       });
       threads.push({ id: group.threadId, title: group.title, reviewed: done, total: group.steps.length });
@@ -1807,6 +2100,29 @@
     if (reviewed === 0 && answered === 0) {
       return null; // nothing happened before this sitting → a first open, no recap
     }
+    // The next unreviewed stop is chosen from the ACTIVE route (issue #101), not every step,
+    // so a Core-mode resume that has finished Core steers to the final act (the tail, below)
+    // exactly as forward navigation (J) does — never jumping to an off-route Full-only step.
+    let nextStep = null;
+    const route = routeSteps();
+    for (let i = 0; i < route.length; i++) {
+      if (!settableFor(map, route[i].id)) {
+        nextStep = { id: route[i].id, title: stepTitleText(route[i]) };
+        break;
+      }
+    }
+    // The un-narrated tail (issue #105): its walked progress and the first un-walked bare
+    // hunk, so a resume that has finished every step can still steer to the un-narrated diff
+    // rather than imply the change is fully covered (steps reviewed ≠ diff walked).
+    let tailWalked = 0;
+    let nextTail = null;
+    deck.tailHunks.forEach(function (hunk) {
+      if (deck.tailVisited.has(hunk.anchor)) {
+        tailWalked++;
+      } else if (!nextTail) {
+        nextTail = { anchor: hunk.anchor, label: hunk.label };
+      }
+    });
     return {
       reviewed: reviewed,
       total: deck.steps.length,
@@ -1815,6 +2131,9 @@
       followUps: followUps,
       nextStep: nextStep,
       answered: answered,
+      tailTotal: deck.tailHunks.length, // 0 when the diff is fully narrated → no tail line
+      tailWalked: tailWalked,
+      nextTail: nextTail, // the first un-walked bare hunk, or null when the tail is done
     };
   }
 
@@ -1844,6 +2163,20 @@
     return list;
   }
 
+  // A recap CTA button: a bold label + a mono sub-label (a step id or a hunk label), an
+  // aria-label, and a click action — the one shape the "continue at a step" and "walk the
+  // tail" (issue #105) CTAs share (the plain "Back to orientation" button is its own shape).
+  function recapContinueButton(label, subLabel, ariaLabel, onClick) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "deck-recap-continue";
+    btn.setAttribute("aria-label", ariaLabel);
+    btn.appendChild(cell("span", "deck-recap-continue-label", label));
+    btn.appendChild(cell("span", "deck-recap-continue-step", subLabel));
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
   // Build the recap card element from its data — closed-vocabulary structure with every
   // reviewer-adjacent value set as text (counts, ids, DOM-read titles). Never innerHTML.
   function renderRecapCard(data) {
@@ -1854,6 +2187,18 @@
     card.appendChild(
       cell("p", "deck-recap-coverage", "You reviewed " + data.reviewed + " of " + data.total + " steps.")
     );
+    // Tail coverage is reported distinctly from step coverage (issue #105): "reviewed" is for
+    // steps, "walked" for the un-narrated tail, so the recap never implies the whole diff was
+    // covered just because every step was. Absent on a fully narrated diff (no tail).
+    if (data.tailTotal > 0) {
+      card.appendChild(
+        cell(
+          "p",
+          "deck-recap-tail",
+          "Un-narrated changes: " + data.tailWalked + " of " + data.tailTotal + " hunks walked."
+        )
+      );
+    }
 
     if (data.threads.length) {
       const threads = cell("ul", "deck-recap-threads", null);
@@ -1893,21 +2238,37 @@
     // The next unreviewed stop, offered as the primary way back into the route.
     const row = cell("div", "deck-recap-continue-row", null);
     if (data.nextStep) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "deck-recap-continue";
-      btn.setAttribute("aria-label", "Resume review at step " + data.nextStep.id);
-      btn.appendChild(cell("span", "deck-recap-continue-label", "Continue where you left off"));
-      btn.appendChild(cell("span", "deck-recap-continue-step", data.nextStep.id));
-      btn.addEventListener("click", function () {
-        const target = document.getElementById(data.nextStep.id);
-        if (target && deck.steps.indexOf(target) !== -1) {
-          stageStep(target);
-        }
-      });
-      row.appendChild(btn);
+      row.appendChild(
+        recapContinueButton(
+          "Continue where you left off",
+          data.nextStep.id,
+          "Resume review at step " + data.nextStep.id,
+          function () {
+            const target = document.getElementById(data.nextStep.id);
+            if (target && deck.steps.indexOf(target) !== -1) {
+              stageStep(target);
+            }
+          }
+        )
+      );
+    } else if (data.nextTail) {
+      // Every step is reviewed, but the tail isn't fully walked (issue #105): steer to the
+      // un-narrated work rather than back to orientation — otherwise the recap's only CTA
+      // would imply the change is done. Staging a bare hunk records tailStop through the real
+      // path, so the tail return memory is set, never discarded by a stageOrientation().
+      row.appendChild(cell("p", "deck-recap-done", "Every step has been reviewed."));
+      row.appendChild(
+        recapContinueButton(
+          "Walk the un-narrated changes",
+          data.nextTail.label,
+          "Walk the un-narrated changes at " + data.nextTail.label,
+          function () {
+            stageTailHunkByAnchor(data.nextTail.anchor);
+          }
+        )
+      );
     } else {
-      // Every step already carries a disposition — there is no next unreviewed stop.
+      // Every step reviewed and the tail (if any) fully walked — nothing left, back to L0.
       row.appendChild(cell("p", "deck-recap-done", "Every step has been reviewed."));
       const btn = document.createElement("button");
       btn.type = "button";
@@ -1953,6 +2314,7 @@
     const modeAtStart = deck.mode;
     const stopAtStart = deck.lastStop;
     const routeAtStart = deck.route;
+    const tailAtStart = deck.tailStop; // a tail hunk is a position too (issue #105)
     Promise.all([fetchDispositionEntries(), fetchAnsweredCount(), fetchResumeSeq()]).then(
       function (results) {
         const resumeSeq = results[2];
@@ -1964,7 +2326,12 @@
         if (!resumed) {
           return; // no resume beyond what this tab has seen → not a return, no recap
         }
-        if (deck.mode !== modeAtStart || deck.lastStop !== stopAtStart || deck.route !== routeAtStart) {
+        if (
+          deck.mode !== modeAtStart ||
+          deck.lastStop !== stopAtStart ||
+          deck.route !== routeAtStart ||
+          deck.tailStop !== tailAtStart
+        ) {
           return; // the reviewer acted during the fetch — do not stage over their choice
         }
         const data = buildRecapData(results[0], results[1]);
@@ -2063,6 +2430,15 @@
       mode: "document",
       stageControlButtons: null, // the current Stage control's disposition buttons
       status: null, // the Stage's `role="status"` announcement line
+      // The un-narrated act (issue #105): the bare hunks no Review Step anchors, read from
+      // the generated queue and walked as the route's final act. tailStop is the anchor of
+      // the current/last bare-hunk stop (the return memory across a document toggle and an
+      // injection reload); tailVisited is the session-scoped "tail walked" progress.
+      tailHunks: buildTailHunks(),
+      tailIndex: -1, // the staged bare hunk's index, or -1 when none is staged (the "on a
+      // tail hunk?" state — no separate boolean, so the two can never drift out of sync)
+      tailStop: null,
+      tailVisited: new Set(),
     };
 
     // The deck sits after the document; document mode simply hides the deck and

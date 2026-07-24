@@ -126,7 +126,7 @@ test("re-selecting the active state clears to unreviewed and stays put (no advan
   assert.equal(calls[calls.length - 1].options.data.disposition, "unreviewed", "the clear is sent");
 });
 
-test("J/K navigate stop zero and the route freely, clamped at both ends", () => {
+test("J/K navigate stop zero and the route freely, clamping back at stop zero", () => {
   const { document, window } = loadCockpit();
   lavishSpy(window);
 
@@ -147,10 +147,9 @@ test("J/K navigate stop zero and the route freely, clamped at both ends", () => 
   press(document, "j"); // forward onto the reviewed t1.s2 (navigation is not state-gated)
   assert.equal(stagedStepId(document), "t1.s2", "J lands on the reviewed step");
   press(document, "j");
-  assert.equal(stagedStepId(document), "t2.s1");
-  press(document, "j"); // last — clamp
-  assert.equal(stagedStepId(document), "t2.s1", "J clamps at the route's end");
+  assert.equal(stagedStepId(document), "t2.s1", "J reaches the last step of the route");
 
+  // (Forward past the last step enters the un-narrated act — covered in tail.test.mjs.)
   press(document, "k");
   assert.equal(stagedStepId(document), "t1.s2", "K moves back one step");
 });
