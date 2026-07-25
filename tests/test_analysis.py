@@ -16,6 +16,7 @@ import pytest
 
 from branch_review.analysis import (
     CONFIDENCE_LEVELS,
+    CONTRAST_ALLOWED_IMPACTS,
     IMPACTS,
     PROMPT_REQUIRED_IMPACTS,
     SCHEMA,
@@ -237,6 +238,32 @@ def test_prompts_optional_on_test_and_mechanical_steps() -> None:
     assert validate_analysis(doc) == []
 
 
+def test_contrast_is_optional_and_valid_on_behavior_change() -> None:
+    # An optional before/after contrast (issue #107, ADR-0017) is accepted on a
+    # behavior-change step, both fields non-empty strings. Absent (the default in
+    # _valid) it is equally fine — additive-optional within the unchanged 0.4 tag.
+    assert SCHEMA == "review-analysis/0.4"  # the decision: additive-optional, no bump
+    doc = _valid()
+    doc["threads"][0]["steps"][0]["contrast"] = {
+        "before": "retry delay constant 1s",
+        "after": "delay = base * 2**attempt, capped at 60s",
+    }
+    assert validate_analysis(doc) == []
+
+
+def test_non_string_impact_does_not_crash_validation() -> None:
+    # validate_analysis returns located errors, never raises — even when a malformed
+    # ``impact`` (a list, which is unhashable) reaches the frozenset-membership gates for
+    # review_prompts and contrast. Both gates guard the type first (CodeRabbit, #107).
+    doc = _valid()
+    doc["threads"][0]["steps"][0]["impact"] = ["behavior-change"]
+    doc["threads"][0]["steps"][0]["contrast"] = {"before": "a", "after": "b"}
+    errors = validate_analysis(doc)  # must not raise
+    locations = [e.location for e in errors]
+    assert "threads[0].steps[0].impact" in locations  # the bad impact is located
+    assert "threads[0].steps[0].contrast" in locations  # contrast rejected on a non-bc impact
+
+
 def test_hunk_anchored_evidence_is_optional_and_passes() -> None:
     # A {path} ref may carry a 1-based hunk index, or omit it entirely — a path-only
     # ref keeps file-level anchoring. Both shapes are valid.
@@ -402,6 +429,48 @@ _BAD_CASES = [
         _set([*_TEST, "relates_to"], ["t4.s1"]),
         "threads[3].steps[0].relates_to[0]",
     ),
+    # Contrast (issue #107): a behavior-change-only before/after, both non-empty strings.
+    # On any other impact it has no observable delta to state and is rejected at .contrast.
+    (
+        "contrast-on-preserving-step",
+        _set([*_PRESERVE, "contrast"], {"before": "x", "after": "y"}),
+        "threads[2].steps[0].contrast",
+    ),
+    (
+        "contrast-on-mechanical-step",
+        _set([*_MECH, "contrast"], {"before": "x", "after": "y"}),
+        "threads[3].steps[1].contrast",
+    ),
+    (
+        "contrast-on-unknown-impact-step",
+        _set([*_S, 1, "contrast"], {"before": "x", "after": "y"}),
+        "threads[0].steps[1].contrast",
+    ),
+    (
+        "contrast-not-object",
+        _set([*_S, 0, "contrast"], "before to after"),
+        "threads[0].steps[0].contrast",
+    ),
+    (
+        "contrast-missing-before",
+        _set([*_S, 0, "contrast"], {"after": "y"}),
+        "threads[0].steps[0].contrast.before",
+    ),
+    (
+        "contrast-missing-after",
+        _set([*_S, 0, "contrast"], {"before": "x"}),
+        "threads[0].steps[0].contrast.after",
+    ),
+    (
+        "contrast-empty-before",
+        _set([*_S, 0, "contrast"], {"before": "   ", "after": "y"}),
+        "threads[0].steps[0].contrast.before",
+    ),
+    (
+        "contrast-before-not-string",
+        _set([*_S, 0, "contrast"], {"before": 5, "after": "y"}),
+        "threads[0].steps[0].contrast.before",
+    ),
     # Attention notes: muted asides only — no hunting attributes (ADR-0016).
     (
         "note-missing-text",
@@ -493,3 +562,6 @@ def test_vocabularies_are_canonical() -> None:
     assert set(CONFIDENCE_LEVELS) == {"high", "medium", "low"}
     # Prompts are required exactly where the reviewer has a comparison to make.
     assert {"behavior-change", "behavior-preserving", "unknown-impact"} == PROMPT_REQUIRED_IMPACTS
+    # A contrast rides only on behavior-change — the one impact with an observable delta.
+    assert {"behavior-change"} == CONTRAST_ALLOWED_IMPACTS
+    assert set(IMPACTS) >= CONTRAST_ALLOWED_IMPACTS  # it partitions the closed vocabulary

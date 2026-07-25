@@ -490,6 +490,48 @@ def _weight_chip(weight: StepWeight) -> str:
     )
 
 
+def _render_contrast(step: Mapping[str, object]) -> str:
+    """The optional before/after ``contrast`` card for a step, or ``""`` (issue #107).
+
+    A two-cell before→after delta on a ``behavior-change`` step, rendered as the first
+    thing in the step body — *above* the narration — so a reviewer absorbs the change as a
+    glance instead of parsing the ``detail`` sentence. The validator guarantees the shape
+    (both fields non-empty strings, ``behavior-change`` only) before render, but this stays
+    tolerant like the rest of the module: a missing or malformed contrast simply yields no
+    card. Both cells cross the Escape Boundary through :func:`fragment` — the contrast is
+    narrator prose, untrusted like every other authored string. The card lives inside
+    ``.step-body``, so when Deck Mode relocates the whole ``<details class="step">`` onto
+    the Stage the card travels with it; there is no Stage-specific rendering path.
+    """
+    contrast = step.get("contrast")
+    if not isinstance(contrast, Mapping):
+        return ""
+    before = contrast.get("before")
+    after = contrast.get("after")
+    # Non-empty means strip-non-empty, matching the validator's ``_require_str`` — so a
+    # whitespace-only value yields no card rather than an empty one, keeping the tolerant
+    # renderer consistent with what the validator would have rejected.
+    if (
+        not isinstance(before, str)
+        or not before.strip()
+        or not isinstance(after, str)
+        or not after.strip()
+    ):
+        return ""
+    return (
+        '<div class="step-contrast" role="group" aria-label="Before and after">'
+        '<div class="contrast-cell contrast-before">'
+        '<span class="contrast-label">before</span>'
+        f'<span class="contrast-value">{fragment(before)}</span>'
+        "</div>"
+        '<div class="contrast-cell contrast-after">'
+        '<span class="contrast-label">after</span>'
+        f'<span class="contrast-value">{fragment(after)}</span>'
+        "</div>"
+        "</div>"
+    )
+
+
 def _render_step(
     step: Mapping[str, object], files_by_path: Mapping[str, Mapping[str, object]]
 ) -> str:
@@ -519,6 +561,12 @@ def _render_step(
         "</summary>",
         '<div class="step-body">',
     ]
+    # The before/after contrast card leads the body — above the narration (issue #107) —
+    # so the structured delta is read before the prose that elaborates it. Appended only
+    # when present, so a step with no contrast renders byte-for-byte as before.
+    contrast = _render_contrast(step)
+    if contrast:
+        parts.append(contrast)
     detail = step.get("detail")
     if isinstance(detail, str):
         parts.append(f'<p class="detail">{fragment(detail)}</p>')

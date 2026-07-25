@@ -142,8 +142,8 @@ Route policy below, not by copying the example's particular sequence. Structure:
 - **steps** — one guided stop on the walkthrough each; **not a finding.** A step
   says what changed here, its Behavior Impact, why it sits at this point on the
   route, what the human should compare, and the exact evidence it lands on:
-  `{id, impact, summary, detail?, confidence, why_now, review_prompts[], evidence[],
-  attention_notes?, relates_to?}`.
+  `{id, impact, summary, detail?, contrast?, confidence, why_now, review_prompts[],
+  evidence[], attention_notes?, relates_to?}`.
   - `id` — `<thread>.s<N>` (`t1.s1`, `t1.s2`…): **stable within the run**; it
     becomes the cockpit element id and, later, the disposition key (ADR-0012/0016).
   - `impact` — the step's **Behavior Impact**, exactly one of a closed vocabulary
@@ -171,6 +171,25 @@ Route policy below, not by copying the example's particular sequence. Structure:
   - `summary` / `detail?` — `summary` is the step's one-line scan line; `detail`
     carries the mechanism, the before/after, and the consequence. Hold the `summary`
     to ~15 plain words — see the **Prose contract** below.
+  - `contrast?` — an **optional** structured before/after, **on a `behavior-change`
+    step only**: `{"before": "…", "after": "…"}`, two short phrases the cockpit renders
+    as a two-cell card *above* the narration, because absorbing a before→after contrast
+    is far faster than parsing a 40-word sentence. It is a distilled, at-a-glance delta,
+    not a second copy of `detail` (which still carries the full mechanism and
+    consequence in prose).
+    - **Earn it — state *observable behavior*, never a paraphrase of the summary.**
+      `before`/`after` name what the system *did* and now *does* — a concrete value,
+      formula, status code, default, or code path (`"retry delay constant 1s"` →
+      `"delay = base * 2**attempt, capped at 60s"`). A restatement of the change
+      itself (`"the old behavior"` → `"the new behavior"`, or the summary reworded)
+      earns nothing and is worse than no card.
+    - **Omit it when there is no crisp delta.** A change with no single observable
+      before/after — a broad behavioral refactor, a many-valued or diffuse change — is
+      better served by `detail` prose than by a card forced into a false two-cell
+      shape. Most `behavior-change` steps will carry one; some honestly should not.
+    - The validator accepts `contrast` **only** on `behavior-change` and rejects it on
+      any other impact (a preserving step asserts nothing changed; test/mechanical carry
+      no runtime delta; `unknown-impact` is the delta you could not pin down).
   - `confidence` — `high|medium|low`: **your** confidence in the step's reading,
     stated honestly (ADR-0012). Confidence is about one step; you never emit an
     overall verdict about the change. An all-`high` route is a smell to recheck — see

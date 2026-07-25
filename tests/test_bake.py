@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from branch_review.bake import (
     QA_SEAM_CLOSE,
@@ -22,6 +23,7 @@ from branch_review.bake import (
     Exchange,
     Prompt,
     bake_dispositions_html,
+    bake_html,
     bake_review,
     build_markdown,
     extract_prompts,
@@ -32,7 +34,13 @@ from branch_review.bake import (
     render_qa_markdown,
     swap_csp,
 )
-from branch_review.escape import INTERACTIVE_CSP, STRICT_CSP, UNTRUSTED_CLOSE, UNTRUSTED_OPEN
+from branch_review.escape import (
+    INTERACTIVE_CSP,
+    STRICT_CSP,
+    UNTRUSTED_CLOSE,
+    UNTRUSTED_OPEN,
+    fragment,
+)
 from branch_review.lint import lint_cockpit
 
 # --- Real TOON shapes, lifted from an actual qa.jsonl ------------------------
@@ -374,6 +382,55 @@ def test_markdown_contains_review_and_qa() -> None:
     assert "the answer" in md
 
 
+def test_markdown_carries_before_after_contrast_table() -> None:
+    # The bake carries the contrast (issue #107) into review.md as a two-column table
+    # above the step's narration. A pipe must be escaped and a newline collapsed so
+    # untrusted-shaped prose can never break the table structure.
+    import copy
+
+    # Annotate the copy as a mutable str-keyed mapping: _ANALYSIS's inferred nested type
+    # is not indexable under strict mypy, so the deep index-assign below needs Any.
+    analysis: dict[str, Any] = copy.deepcopy(_ANALYSIS)
+    analysis["threads"][0]["steps"][0]["contrast"] = {
+        "before": "delay 1s | always",
+        "after": "base * 2**n\ncapped 60s",
+    }
+    md = build_markdown(analysis, [])
+
+    assert "| Before | After |" in md
+    assert "| delay 1s \\| always | base * 2**n capped 60s |" in md
+    # Above the narration: the table precedes the step's detail prose.
+    heading = md.index("### [behavior-change] R")
+    assert md.index("| Before | After |", heading) < md.index("the retry timing moved", heading)
+    # The test-change and preserving steps carry no contrast → exactly one table.
+    assert md.count("| Before | After |") == 1
+
+
+def test_contrast_table_rejects_malformed_and_whitespace_values() -> None:
+    from branch_review.bake import _contrast_table
+
+    # Missing, partial, or wrong-typed → no table (tolerant, like the HTML renderer).
+    assert _contrast_table({}) == ""
+    assert _contrast_table({"contrast": {"before": "a"}}) == ""
+    assert _contrast_table({"contrast": {"before": "a", "after": 5}}) == ""
+    # Whitespace-only is treated as empty, matching the validator's _require_str.
+    assert _contrast_table({"contrast": {"before": "  ", "after": "b"}}) == ""
+    # A well-formed pair renders the two-column table.
+    assert "| Before | After |" in _contrast_table({"contrast": {"before": "a", "after": "b"}})
+
+
+def test_md_cell_escapes_backslash_before_pipe() -> None:
+    from branch_review.bake import _md_cell
+
+    # A raw pipe becomes an escaped pipe so it stays literal in a table cell.
+    assert _md_cell("a | b") == "a \\| b"
+    # A backslash is doubled BEFORE the pipe is escaped, so prose containing a literal
+    # "\|" (a regex alternation, a Windows path) renders verbatim in GFM rather than the
+    # backslash consuming the pipe's escape and splitting the row. "a\|b" → "a\\\|b",
+    # which GFM reads as a literal "\" then a literal "|".
+    assert _md_cell("a\\|b") == "a\\\\\\|b"
+
+
 def test_markdown_null_alignment_has_no_goal_line() -> None:
     # No stated goal (alignment null, ADR-0010): the export carries no alignment
     # line and flags nothing — silence, not an invented judgement.
@@ -515,6 +572,33 @@ def test_bake_review_contains_every_question_escaped_and_self_contained(tmp_path
     assert "## Q&A Log" in md_text and "one" in md_text
 
     assert result.exchanges == 3 and result.prompts == 3 and result.csp_swapped
+
+
+def test_bake_carries_the_contrast_card_into_the_self_contained_record() -> None:
+    # The baked record carries the contrast card (issue #107): the bake rewrites only the
+    # <details> open tags, the Q&A seam, and the CSP meta — never step-body content — so a
+    # rendered .step-contrast survives verbatim into the strict-CSP, self-contained artifact.
+    card = (
+        '<div class="step-contrast" role="group" aria-label="Before and after">'
+        '<div class="contrast-cell contrast-before"><span class="contrast-label">before</span>'
+        f'<span class="contrast-value">{fragment("delay 1s <b>x</b>")}</span></div>'
+        '<div class="contrast-cell contrast-after"><span class="contrast-label">after</span>'
+        f'<span class="contrast-value">{fragment("base * 2**n")}</span></div></div>'
+    )
+    cockpit = _BASE_COCKPIT.replace(
+        '<details class="step" id="t1.s1"><summary>R</summary></details>',
+        '<details class="step" id="t1.s1"><summary>R</summary>'
+        f'<div class="step-body">{card}</div></details>',
+    )
+
+    baked, swapped = bake_html(cockpit, [], dispositions={"t1.s1": "looks-right"})
+
+    assert card in baked  # the card region survives byte-for-byte
+    assert "<b>x</b>" not in baked and "&lt;b&gt;x&lt;/b&gt;" in baked  # still escaped
+    assert swapped and STRICT_CSP in baked
+    assert 'data-disposition="looks-right"' in baked  # the bake still stamped the step
+    # Self-contained with the card in place: the strict linter passes over the baked record.
+    assert lint_cockpit(baked, csp_mode="strict") == []
 
 
 _TOON_DISPOSITION = (

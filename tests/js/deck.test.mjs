@@ -8,7 +8,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Element } from "./dom.mjs";
-import { loadCockpit, click, press, buildFixtureDocument } from "./harness.mjs";
+import { loadCockpit, click, press, buildFixtureDocument, h } from "./harness.mjs";
+
+// Mirror the renderer: prepend a before/after contrast card (issue #107) to a step's
+// body, above the narration, exactly as _render_contrast emits it.
+function addContrast(doc, stepId, before, after) {
+  const step = doc.querySelectorAll("details.step").find((s) => s.id === stepId);
+  const body = step.querySelector(".step-body");
+  const card = h(doc, "div.step-contrast", { role: "group", "aria-label": "Before and after" }, [
+    h(doc, "div.contrast-cell.contrast-before", null, [
+      h(doc, "span.contrast-label", null, ["before"]),
+      h(doc, "span.contrast-value", null, [before]),
+    ]),
+    h(doc, "div.contrast-cell.contrast-after", null, [
+      h(doc, "span.contrast-label", null, ["after"]),
+      h(doc, "span.contrast-value", null, [after]),
+    ]),
+  ]);
+  body.insertBefore(card, body.childNodes[0]);
+  return card;
+}
 
 const dot = (document, stepId) =>
   document.querySelectorAll(".deck-dot").find((d) => d.dataset.step === stepId);
@@ -69,6 +88,41 @@ test("builds the Map and Stage from the document when served", () => {
   const stage = document.querySelector(".deck-stage");
   assert.ok(stage.querySelector("details.step .review-prompts"), "review prompts on Stage");
   assert.ok(stage.querySelector(".deck-hunk .diff-table"), "the evidence hunk is inline");
+});
+
+test("the before/after contrast card relocates onto the Stage with its step (#107)", () => {
+  const doc = buildFixtureDocument();
+  // t1.s1 is a behavior-change step; give it a contrast card above its narration.
+  addContrast(doc, "t1.s1", "retry delay constant 1s", "delay = base * 2^n, capped 60s");
+  const { document } = loadCockpit({ doc });
+
+  press(document, "j"); // stop zero → the first Review Step (t1.s1)
+  assert.equal(stagedStepId(document), "t1.s1");
+  const stage = document.querySelector(".deck-stage");
+  // The Stage relocates the whole step element, so the card travels with it — there is
+  // no Stage-specific rendering path. It stays inside the step body, above the narration.
+  const body = stage.querySelector("details.step .step-body");
+  assert.ok(body.querySelector(".step-contrast"), "the contrast card is on the Stage");
+  assert.equal(body.children[0].className, "step-contrast", "card is the first body child");
+  assert.equal(
+    stage.querySelector(".contrast-before .contrast-value").textContent,
+    "retry delay constant 1s"
+  );
+  assert.equal(
+    stage.querySelector(".contrast-after .contrast-value").textContent,
+    "delay = base * 2^n, capped 60s"
+  );
+  // Relocated, never cloned: exactly one card in the whole document while staged.
+  assert.equal(document.querySelectorAll(".step-contrast").length, 1);
+
+  // Toggle back to document mode: the step returns home whole, the card with it — still
+  // one card, now back in the single layered document (a lossless round-trip).
+  click(document.querySelector(".deck-toggle"));
+  assert.equal(document.querySelectorAll(".step-contrast").length, 1, "card not duplicated");
+  assert.ok(
+    document.querySelector("main details.step .step-contrast"),
+    "the card round-trips home"
+  );
 });
 
 test("the Map reuses each thread's renderer-derived impact summary", () => {
