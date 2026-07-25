@@ -84,6 +84,13 @@ IMPACTS = (
 # and mechanical-change, where a forced prompt would only breed boilerplate.
 PROMPT_REQUIRED_IMPACTS = frozenset({"behavior-change", "behavior-preserving", "unknown-impact"})
 
+# The impacts a before/after ``contrast`` card may ride on (issue #107): only
+# ``behavior-change`` — the one impact with an observable delta to state. A named
+# partition over ``IMPACTS`` beside ``PROMPT_REQUIRED_IMPACTS``, so the "which impacts
+# get treatment X" rule is a single grep-able constant (like ``CORE_IMPACTS`` in render),
+# never a bare literal buried in the validator.
+CONTRAST_ALLOWED_IMPACTS = frozenset({"behavior-change"})
+
 # The agent's stated confidence in a step (ADR-0012: confidence, never a verdict).
 CONFIDENCE_LEVELS = ("high", "medium", "low")
 
@@ -322,7 +329,7 @@ def _validate_contrast(value: object, loc: str, impact: object) -> list[Analysis
     behavior rather than paraphrasing the summary (the narrator's earn-it rule) is prose
     quality the prompt owns, exactly as it owns whether a ``summary`` scans well.
     """
-    if impact != "behavior-change":
+    if impact not in CONTRAST_ALLOWED_IMPACTS:
         return [
             AnalysisError(
                 loc,

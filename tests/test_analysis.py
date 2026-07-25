@@ -16,6 +16,7 @@ import pytest
 
 from branch_review.analysis import (
     CONFIDENCE_LEVELS,
+    CONTRAST_ALLOWED_IMPACTS,
     IMPACTS,
     PROMPT_REQUIRED_IMPACTS,
     SCHEMA,
@@ -548,3 +549,6 @@ def test_vocabularies_are_canonical() -> None:
     assert set(CONFIDENCE_LEVELS) == {"high", "medium", "low"}
     # Prompts are required exactly where the reviewer has a comparison to make.
     assert {"behavior-change", "behavior-preserving", "unknown-impact"} == PROMPT_REQUIRED_IMPACTS
+    # A contrast rides only on behavior-change — the one impact with an observable delta.
+    assert {"behavior-change"} == CONTRAST_ALLOWED_IMPACTS
+    assert set(IMPACTS) >= CONTRAST_ALLOWED_IMPACTS  # it partitions the closed vocabulary
