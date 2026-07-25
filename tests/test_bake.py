@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from branch_review.bake import (
     QA_SEAM_CLOSE,
@@ -387,7 +388,9 @@ def test_markdown_carries_before_after_contrast_table() -> None:
     # untrusted-shaped prose can never break the table structure.
     import copy
 
-    analysis = copy.deepcopy(_ANALYSIS)
+    # Annotate the copy as a mutable str-keyed mapping: _ANALYSIS's inferred nested type
+    # is not indexable under strict mypy, so the deep index-assign below needs Any.
+    analysis: dict[str, Any] = copy.deepcopy(_ANALYSIS)
     analysis["threads"][0]["steps"][0]["contrast"] = {
         "before": "delay 1s | always",
         "after": "base * 2**n\ncapped 60s",
