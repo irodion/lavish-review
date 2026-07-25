@@ -24,6 +24,10 @@ from branch_review.classify import (
 )
 from branch_review.config import (
     DEFAULT_STYLING,
+    EDITOR_SCHEMES,
+    EDITORS,
+    NO_EDITOR,
+    VALID_EDITORS,
     ConfigError,
     load_machine_config,
     load_repo_config,
@@ -244,6 +248,13 @@ _INVALID_CONFIGS: list[tuple[str, dict[str, object], dict[str, object]]] = [
     ("focus wrong type", {"focus": ["a"]}, {}),
     ("goal_remote_fetch not bool (repo)", {"goal_remote_fetch": "no"}, {}),
     ("goal_remote_fetch not bool (machine)", {}, {"goal_remote_fetch": 1}),
+    # An unrecognized editor is a located error, never a silent "no links" — a typo'd
+    # `vscodee` would otherwise be indistinguishable from the default (issue #108).
+    ("unknown editor", {}, {"editor": "vscodee"}),
+    ("editor wrong type", {}, {"editor": True}),
+    # `editor` is machine scope only: it names a locally-installed app, so a repo that
+    # tried to commit one is an unknown key there.
+    ("editor in repo scope", {"editor": "vscode"}, {}),
 ]
 
 
@@ -294,6 +305,33 @@ def test_resolve_config_reads_both_scopes(tmp_path: Path) -> None:
     assert resolved.sessionstart_hook is True
 
 
+@pytest.mark.parametrize("editor", sorted(EDITORS))
+def test_machine_editor_resolves(editor: str) -> None:
+    assert resolve(machine={"editor": editor}).editor == editor
+
+
+def test_editor_defaults_to_none() -> None:
+    # Absent and explicit `none` are the same policy: no deep link at all, so a cockpit
+    # renders exactly as it did before editor links existed.
+    assert resolve().editor == NO_EDITOR
+    assert resolve(machine={"editor": NO_EDITOR}).editor == NO_EDITOR
+
+
+def test_editor_vocabulary_is_the_scheme_table_plus_none() -> None:
+    # One table owns which editors exist; VALID_EDITORS (config) and EDITOR_SCHEMES (the
+    # linter's allowlist) are both derived from it, never re-typed beside it.
+    assert (NO_EDITOR, *EDITORS) == VALID_EDITORS
+    assert {scheme for scheme, _label in EDITORS.values()} == EDITOR_SCHEMES
+    assert NO_EDITOR not in EDITOR_SCHEMES
+
+
+def test_resolve_config_reads_machine_editor(tmp_path: Path) -> None:
+    machine_dir = tmp_path / ".review-agent"
+    machine_dir.mkdir()
+    (machine_dir / "config.yaml").write_text("editor: cursor\n", encoding="utf-8")
+    assert resolve_config(tmp_path, home=tmp_path).editor == "cursor"
+
+
 def test_resolve_config_arg_overrides_repo_base(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
@@ -318,6 +356,7 @@ def test_resolved_config_dict_shape() -> None:
         "language_hints": [],
         "pause": None,
         "lavish_version": None,
+        "editor": "none",
         "sessionstart_hook": False,
         "goal_remote_fetch": True,
     }

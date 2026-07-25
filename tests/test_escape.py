@@ -24,6 +24,7 @@ from branch_review.escape import (
     fragment_index_entry,
     goal_fragment,
     hunk_anchor_id,
+    hunk_new_start,
 )
 
 # (label, raw input, substrings that MUST appear, substrings that MUST NOT appear)
@@ -367,6 +368,41 @@ def test_file_diff_fragment_splits_each_hunk_into_an_anchored_section() -> None:
     assert html.count('<section class="hunk"') == 2
     assert f'<section class="hunk" id="{hunk_anchor_id(fid, 1)}">' in html
     assert '<pre class="diff diff-preamble">' in html
+
+
+def test_file_diff_fragment_records_the_new_side_start_line() -> None:
+    # The manifest carries each hunk's new-side start line (issue #108) — the `:line` of
+    # the cockpit's copyable `path:line` and its editor deep link.
+    fid = file_fragment_id("m.py")
+    _html, hunks = file_diff_fragment(_TWO_HUNK_DIFF, fid)
+    assert [h["new_start"] for h in hunks] == [1, 20]
+
+
+@pytest.mark.parametrize(
+    ("label", "header", "expected"),
+    [
+        ("both sides counted", "@@ -1,3 +12,4 @@", 12),
+        ("single-line sides", "@@ -1 +7 @@", 7),
+        ("with function context", "@@ -1,3 +12,4 @@ def head():", 12),
+        # A deleted file's hunk has no new side at all; 0 is what git writes and what the
+        # renderer must recognize as "there is no line to point at".
+        ("wholly deleted file", "@@ -1,5 +0,0 @@", 0),
+        # A combined-merge header is a shape this two-way model does not speak: no start
+        # line rather than a guessed one.
+        ("combined merge header", "@@@ -1,3 -1,3 +1,4 @@@", None),
+        ("not a header", "context line", None),
+    ],
+    ids=lambda c: c if isinstance(c, str) else str(c),
+)
+def test_hunk_new_start(label: str, header: str, expected: int | None) -> None:
+    assert hunk_new_start(f"{header}\n context\n+added\n") == expected
+
+
+def test_file_diff_fragment_omits_new_start_for_an_unparseable_header() -> None:
+    fid = file_fragment_id("m.py")
+    _html, hunks = file_diff_fragment("@@@ -1,3 -1,3 +1,4 @@@\n+x\n", fid)
+    assert [h["index"] for h in hunks] == [1]
+    assert "new_start" not in hunks[0]  # absent, never a wrong line number
 
 
 def test_file_diff_fragment_records_moved_positions_when_given() -> None:

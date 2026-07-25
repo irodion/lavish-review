@@ -44,6 +44,12 @@
 // vocabulary (matched against `STEP_ID`); the reviewer's free-text question only
 // ever reaches an `<input>`/`<textarea>` value, never markup. Same served-only gate
 // as dispositions: absent on `file://`.
+//
+// Hunk locators (issue #108): the renderer puts each hunk's `path:line` (and, when the
+// machine config names an `editor`, a deep link) on the page; this script adds the copy
+// button beside it. Deliberately NOT presence-gated — copying a location needs no session,
+// so the affordance is identical served and on a `file://` record — and wired through one
+// delegated click listener, so the deck's cloned hunks carry a live button too.
 
 (function () {
   "use strict";
@@ -577,6 +583,134 @@
 
   function setupPromptTicks() {
     forEachServedStep(injectPromptTicks); // a file:// record shows prompts as plain list items
+  }
+
+  // --- Hunk locators: copy path:line (issue #108) ---------------------------
+  //
+  // The review is local, but the cockpit is otherwise a dead end: verifying a hunk means
+  // alt-tabbing to an editor and re-finding the location by hand. The renderer puts the
+  // coordinates at every hunk — `<div class="hunk-locator"><code class="hunk-path">
+  // path:line</code>` plus, when the machine config names an `editor`, a deep link. This
+  // adds the one part that needs script: a copy button beside that text.
+  //
+  // Unlike the disposition/ask controls, this is NOT presence-gated. Copying a location
+  // needs no session, so the affordance is identical served and on a `file://` (portable
+  // or baked) copy — one of the acceptance criteria of #108.
+  //
+  // The click is handled by ONE delegated listener rather than a per-button one, because
+  // the deck CLONES hunk sections onto the Stage (inline evidence, the un-narrated tail)
+  // and a clone carries no listeners. Delegation makes the cloned buttons live too, and
+  // each copies its own sibling's text.
+  const COPY_LABEL = "copy";
+
+  // The button whose label currently reads "copied" — reset when another is used, so
+  // exactly one affordance ever claims the clipboard's contents. Tracked (rather than
+  // reset by a timer) because there is no timer in this script's world, and a stale
+  // "copied" on a *different* hunk would be a lie about where the clipboard points.
+  let copiedButton = null;
+
+  // Copy through a hidden field + execCommand — the fallback for a browser without the
+  // async Clipboard API, or one that refuses it in this context. Returns whether the copy
+  // took. The field is removed again whatever happens, so a failed copy leaves no trace.
+  function legacyCopy(text) {
+    if (typeof document.execCommand !== "function" || !document.body) {
+      return false;
+    }
+    const field = document.createElement("textarea");
+    field.className = "copy-shuttle"; // parked offscreen by the stylesheet, never visible
+    field.setAttribute("aria-hidden", "true");
+    field.value = text;
+    document.body.appendChild(field);
+    let copied = false;
+    try {
+      if (typeof field.select === "function") {
+        field.select();
+      }
+      copied = document.execCommand("copy") === true;
+    } catch (_err) {
+      copied = false;
+    }
+    if (typeof document.body.removeChild === "function") {
+      document.body.removeChild(field);
+    }
+    return copied;
+  }
+
+  // Put `text` on the clipboard, resolving to whether it landed. Prefers the async
+  // Clipboard API (a `file://` document is a trustworthy origin, so this is the same path
+  // in both modes) and falls back to the legacy copy when it is absent or rejects — a
+  // rejection is the ordinary outcome of a browser that gates clipboard writes, not an
+  // error worth surfacing before the fallback has had its turn.
+  function copyText(text) {
+    const clipboard = typeof navigator !== "undefined" && navigator ? navigator.clipboard : null;
+    if (clipboard && typeof clipboard.writeText === "function") {
+      try {
+        return Promise.resolve(clipboard.writeText(text)).then(
+          function () {
+            return true;
+          },
+          function () {
+            return legacyCopy(text);
+          }
+        );
+      } catch (_err) {
+        // A synchronous throw (a browser that rejects the call outright) — fall through.
+      }
+    }
+    return Promise.resolve(legacyCopy(text));
+  }
+
+  // Report the outcome on the button itself: the label becomes "copied", or "copy failed"
+  // when the clipboard refused — never a silent no-op that leaves the reviewer pasting
+  // whatever was there before. aria-live announces the change to a screen reader.
+  function markCopied(button, copied) {
+    if (copiedButton && copiedButton !== button) {
+      copiedButton.textContent = COPY_LABEL;
+      copiedButton.classList.remove("copied");
+    }
+    button.textContent = copied ? "copied" : "copy failed";
+    button.classList.toggle("copied", copied);
+    copiedButton = copied ? button : null;
+  }
+
+  // Inject the copy button into every locator the renderer authored. Idempotent (the
+  // guard mirrors the disposition/ask/tick injections), and run BEFORE the deck is built
+  // so the Stage's clones carry the button too.
+  function injectCopyButtons() {
+    Array.prototype.forEach.call(document.querySelectorAll(".hunk-locator"), function (locator) {
+      const path = locator.querySelector(".hunk-path");
+      if (!path || locator.querySelector(".hunk-copy")) {
+        return;
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "hunk-copy";
+      // The path is already-escaped document text; it only ever reaches an attribute
+      // value and a text node here, never markup.
+      button.setAttribute("aria-label", "Copy " + path.textContent);
+      button.textContent = COPY_LABEL;
+      locator.insertBefore(button, path.nextSibling);
+    });
+  }
+
+  function setupHunkCopy() {
+    injectCopyButtons();
+    document.addEventListener("click", function (event) {
+      const target = event.target;
+      const button = target && target.closest ? target.closest(".hunk-copy") : null;
+      if (!button) {
+        return;
+      }
+      const locator = button.closest(".hunk-locator");
+      const path = locator ? locator.querySelector(".hunk-path") : null;
+      const text = path ? path.textContent : "";
+      if (!text) {
+        return;
+      }
+      copyText(text).then(function (copied) {
+        markCopied(button, copied);
+      });
+    });
   }
 
   // --- Deck Mode (ADR-0014/0016) --------------------------------------------
@@ -2557,6 +2691,9 @@
     setupDispositions();
     setupStepQuestions();
     setupPromptTicks();
+    // Not presence-gated (a location needs no session) and injected before the deck, so
+    // the Stage's cloned hunks carry the copy affordance too — issue #108.
+    setupHunkCopy();
     // Built last: the deck relocates steps that already carry their injected
     // controls, and clones hunk sections the diff rebuild has already annotated.
     buildDeck();

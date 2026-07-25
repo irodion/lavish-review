@@ -847,6 +847,55 @@ a.narrating-step:hover { color: var(--accent); text-decoration: underline; }
 .hunk-unnarrated { font-style: italic; }
 .hunk-unnarrated .unnarrated-marker::before { content: "\25E6"; margin-right: 0.3em; } /* ◦ */
 
+/* Hunk locators (issue #108): every hunk carries its `path:line` — copyable, and on a
+   machine that configured an `editor`, an open-in-editor deep link. Navigation plumbing,
+   not narration, so it sits in the same muted mono register as the margin above it and
+   never competes with the diff for attention; the affordances only gain contrast on
+   hover/focus. The copy button is injected by app.js (served AND file://), so the row
+   holds just the text when script never runs. */
+.hunk-locator {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  margin: 0 0 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.hunk-path { color: inherit; word-break: break-all; }
+.hunk-copy,
+.hunk-editor {
+  flex: none;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  text-decoration: none;
+  cursor: pointer;
+}
+.hunk-copy:hover,
+.hunk-copy:focus-visible,
+.hunk-editor:hover,
+.hunk-editor:focus-visible { color: var(--accent); text-decoration: underline; }
+/* Copied: the label itself changes word ("copy" → "copied"), so the state never reads by
+   colour alone; the brighten to --fg is neutral emphasis, not a judgment hue. */
+.hunk-copy.copied { color: var(--fg); }
+.hunk-editor::before { content: "\2197"; margin-right: 0.25em; } /* ↗ leaves the page */
+/* The offscreen field the legacy execCommand copy borrows for one tick. Never visible,
+   never focusable by the reviewer — parked, not display:none (a hidden field cannot be
+   selected, which is the whole point of it). */
+.copy-shuttle {
+  position: fixed;
+  top: 0;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
 /* Narrated-hunk coverage (issue #104): the L0 meter and the generated Un-narrated changes
    queue. Coverage is emphasis, not a verdict — how much of the diff the narration reaches,
    and which hunks it doesn't — so it stays in the neutral palette (fg/muted/accent), never
