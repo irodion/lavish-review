@@ -412,8 +412,12 @@ def inject_qa(html: str, qa_section: str) -> str:
 # …>label</a>``, matched by its renderer-authored class and closed at the first ``</a>``
 # (its body is a fixed trusted word — no nesting to worry about). Tolerant of attribute
 # order and of single/double quotes, since the class attribute is what identifies it.
+# ``hunk-editor`` must be a whole class token: the lookarounds exclude a neighbouring
+# ``-`` (which ``\b`` would treat as a boundary), so a future ``hunk-editor-icon`` class
+# is not silently swept away with the link it decorates.
 _EDITOR_LINK = re.compile(
-    r"<a\b[^>]*\bclass\s*=\s*[\"'][^\"']*\bhunk-editor\b[^\"']*[\"'][^>]*>.*?</a\s*>",
+    r"<a\b[^>]*\bclass\s*=\s*[\"'][^\"']*(?<![\w-])hunk-editor(?![\w-])[^\"']*[\"'][^>]*>"
+    r".*?</a\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 

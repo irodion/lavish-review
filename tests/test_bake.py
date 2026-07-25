@@ -637,6 +637,21 @@ def test_strip_editor_links_is_idempotent_and_leaves_other_links_alone() -> None
     assert 'class="hunk-path"' in once
 
 
+def test_strip_editor_links_matches_a_whole_class_token_only() -> None:
+    # `hunk-editor` must be the class, not a prefix of one: a future `hunk-editor-icon`
+    # (or a `js-hunk-editor` wrapper) is a different element and must survive the bake.
+    neighbours = (
+        '<a class="hunk-editor-icon" href="#x">i</a>'
+        '<a class="js-hunk-editor" href="#y">j</a>'
+        '<span class="hunk-editorial">note</span>'
+    )
+    assert strip_editor_links(neighbours) == neighbours
+    # ...while the real link is still stripped when it sits among them, including when
+    # it carries other classes and the attribute order differs.
+    real = '<a href="vscode://file/repo/a.py:1" class="chip hunk-editor">open</a>'
+    assert strip_editor_links(neighbours + real) == neighbours
+
+
 def test_bake_leaves_a_locator_without_an_editor_link_untouched() -> None:
     # The overwhelmingly common case (no `editor` configured): nothing to strip, and the
     # locator region round-trips byte-for-byte.
