@@ -369,6 +369,25 @@ def test_file_diff_fragment_splits_each_hunk_into_an_anchored_section() -> None:
     assert '<pre class="diff diff-preamble">' in html
 
 
+def test_file_diff_fragment_records_moved_positions_when_given() -> None:
+    # The move detector's per-hunk verdict rides into the manifest as structural data
+    # (issue #106): sorted for a stable serialization, present only on hunks with moves.
+    fid = file_fragment_id("m.py")
+    _html, hunks = file_diff_fragment(_TWO_HUNK_DIFF, fid, moved={1: [2, 1]})
+    assert hunks[0]["moved"] == [1, 2]  # deduped/sorted from the caller's order
+    assert "moved" not in hunks[1]  # hunk 2 has no relocated line → key absent
+
+
+def test_file_diff_fragment_without_moved_is_unchanged() -> None:
+    # No move detection (moved=None) degrades to today's manifest exactly — no key added.
+    fid = file_fragment_id("m.py")
+    _html, hunks = file_diff_fragment(_TWO_HUNK_DIFF, fid)
+    assert all("moved" not in h for h in hunks)
+    # An empty per-hunk mapping is likewise a no-op — a moveless file writes no key.
+    _html2, hunks2 = file_diff_fragment(_TWO_HUNK_DIFF, fid, moved={})
+    assert all("moved" not in h for h in hunks2)
+
+
 def test_file_diff_fragment_is_byte_lossless() -> None:
     # The reviewed change must render byte-for-byte: unescaping every untrusted region
     # back and concatenating must reproduce the original diff exactly.

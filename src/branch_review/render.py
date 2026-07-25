@@ -32,6 +32,7 @@ from branch_review.escape import (
     hunk_section_open,
 )
 from branch_review.lint import lint_cockpit
+from branch_review.moves import MOVE_IDENTITY_RULE, MOVE_LEGEND
 from branch_review.weight import (
     LINES_PER_MINUTE,
     StepWeight,
@@ -358,29 +359,72 @@ def _hunk_margin(step_ids: Sequence[str] | None) -> str:
     )
 
 
+def _moved_positions(hunk: Mapping[str, object]) -> list[int]:
+    """A hunk's relocated body-line positions (issue #106), sanitized for a data attribute.
+
+    Reads the manifest's ``moved`` (the move detector's per-hunk verdict) and keeps only
+    non-negative integers — ``bool`` is excluded (a JSON ``true`` is an ``int`` in Python
+    but never a line position). Missing/malformed → ``[]``, so a moveless (or older)
+    manifest simply yields no dimming, degrading to today's rendering exactly.
+    """
+    moved = hunk.get("moved")
+    if not isinstance(moved, list):
+        return []
+    return [i for i in moved if isinstance(i, int) and not isinstance(i, bool) and i >= 0]
+
+
+def _moved_section_open(opening: str, hunk: Mapping[str, object]) -> str:
+    """The hunk's ``<section>`` opening tag, with a ``data-moved`` attribute when it moved.
+
+    The move classification is **structural data** — non-negative integer line positions —
+    stamped on the trusted ``<section>`` frame (outside the ``<pre>``'s untrusted region),
+    so the client diff rebuild can dim exactly those rows and the Escape Boundary is
+    untouched. Inserted before the tag's closing ``>``; a hunk with no moves is returned
+    verbatim, so the string the splice below matches on is unchanged for a moveless diff.
+    """
+    positions = _moved_positions(hunk)
+    if not positions:
+        return opening
+    value = escape_text(",".join(str(i) for i in positions))
+    return f'{opening[:-1]} data-moved="{value}">'
+
+
+def _has_moved_lines(files: Sequence[Mapping[str, object]]) -> bool:
+    """True if any hunk in the changeset carries relocated lines (issue #106).
+
+    The legend and its dimming are shown only then — a moveless (or older) manifest reads
+    exactly as before the detector existed. Reuses :func:`_moved_positions` so "has a move"
+    and "which rows dim" can never disagree on what counts as a move.
+    """
+    return any(_moved_positions(hunk) for entry in files for hunk in _items(entry.get("hunks")))
+
+
 def _annotate_hunks(
     fragment_html: str,
     entry: Mapping[str, object],
     by_hunk: Mapping[str, Sequence[str]],
 ) -> str:
-    """Splice each hunk's narrating-step margin into a file's pre-escaped diff fragment.
+    """Splice each hunk's narrating-step margin (and move classification) into a file's
+    pre-escaped diff fragment.
 
     The fragment is opaque escaped HTML the collector wrote; its one structured handle is
     the per-hunk ``<section class="hunk" id=…>`` whose id the manifest also carries (the
     Hunk Anchorer, :func:`branch_review.escape.file_diff_fragment`). For every hunk in the
-    manifest we insert a margin — the narrating step(s) or the neutral un-narrated marker —
-    directly after that section's opening tag, matched via the shared
+    manifest we rewrite that section's opening tag to carry its ``data-moved`` positions
+    (issue #106) and insert a margin — the narrating step(s) or the neutral un-narrated
+    marker — directly after it, matched via the shared
     :func:`branch_review.escape.hunk_section_open` so the writer and this splice can't
-    desync. The match is the collision-free hunk id (not a parse) and lands outside the
-    ``<pre>``'s untrusted region, so the Escape Boundary is untouched.
+    desync. The match is the collision-free hunk id (not a parse) and both the rewrite and
+    the margin land outside the ``<pre>``'s untrusted region, so the Escape Boundary is
+    untouched.
     """
     for hunk in _items(entry.get("hunks")):
         anchor = _text(hunk.get("anchor"))
         if not anchor:
             continue
         opening = hunk_section_open(anchor)
-        margin = _hunk_margin(by_hunk.get(anchor))
-        fragment_html = fragment_html.replace(opening, opening + margin, 1)
+        replacement = _moved_section_open(opening, hunk) + _hunk_margin(by_hunk.get(anchor))
+        fragment_html = fragment_html.replace(opening, replacement, 1)
     return fragment_html
 
 
@@ -725,6 +769,15 @@ def _render_files(
     if manifest.get("too_large") is True:
         rendered.append(
             f'<p class="too-large">{fragment(_text(manifest.get("too_large_reason")))}</p>'
+        )
+    # A small legend for the dimmed relocated lines (issue #106), shown only when the move
+    # detector actually classified some — trusted tool prose (not narrator text), with the
+    # identity rule as its tooltip so the whitespace decision is stated where the dimming is.
+    if _has_moved_lines(files):
+        rendered.append(
+            f'<p class="moved-legend" title="{escape_text(MOVE_IDENTITY_RULE)}">'
+            '<span class="moved-swatch" aria-hidden="true"></span> '
+            f"{escape_text(MOVE_LEGEND)}</p>"
         )
     for entry in files:
         anchor = _file_anchor(entry)

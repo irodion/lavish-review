@@ -50,6 +50,7 @@ from branch_review.goal import (
     read_goal_file,
     resolve_goal,
 )
+from branch_review.moves import detect_moves
 
 # Base auto-detect fallbacks, tried in order when origin/HEAD is absent.
 _BASE_CANDIDATES = ("main", "develop", "master")
@@ -423,20 +424,39 @@ def _write_file_fragments(
 
     entries: list[dict[str, object]] = []
     seen: dict[str, str] = {}
-    for record, (_path, stats, classification) in zip(files, classified, strict=True):
-        omitted = classification.omitted
+
+    # First pass over included files: read each per-file diff once (keyed by its fragment
+    # id) so the changeset-wide move detector (issue #106) sees every hunk before any
+    # fragment is built, and the same diff feeds the fragment build below without a second
+    # git call. The fid-collision guard runs for every file (omitted included) exactly as
+    # before — an omitted file has no diff but must still not shadow another's fragment id.
+    included_diffs: dict[str, str] = {}
+    for record, (_path, _stats, classification) in zip(files, classified, strict=True):
         fid = file_fragment_id(record["path"])
         if seen.get(fid, record["path"]) != record["path"]:
             raise GitError(f"fragment id collision on {fid!r}: {seen[fid]!r} vs {record['path']!r}")
         seen[fid] = record["path"]
+        if not classification.omitted:
+            included_diffs[fid] = _per_file_diff(diff_range, record, cwd)
+
+    # The changeset-wide relocated-line verdict, computed once over all included hunks so a
+    # block moved between files dims on both ends. Empty (``{}``) when nothing moved — the
+    # fragment build then writes no ``moved`` keys and rendering is byte-for-byte today's.
+    moved_by_fid = detect_moves(included_diffs)
+
+    for record, (_path, stats, classification) in zip(files, classified, strict=True):
+        omitted = classification.omitted
+        fid = file_fragment_id(record["path"])
         # An included body is split into anchored per-hunk blocks (the Hunk Anchorer,
         # ADR-0014); the returned hunk index rides into the manifest entry so a
-        # ``{path, hunk}`` evidence ref can link the exact hunk. An omitted body has no
+        # ``{path, hunk}`` evidence ref can link the exact hunk, and each hunk carries the
+        # move detector's relocated body positions (issue #106). An omitted body has no
         # fragment and therefore no hunk ids (``hunks`` stays None → key absent).
         hunks: list[dict[str, object]] | None = None
         if not omitted:
-            diff_text = _per_file_diff(diff_range, record, cwd)
-            fragment_html, hunks = file_diff_fragment(diff_text, fid)
+            fragment_html, hunks = file_diff_fragment(
+                included_diffs[fid], fid, moved=moved_by_fid.get(fid)
+            )
             (frag_dir / f"{fid}.html").write_text(fragment_html, encoding="utf-8")
         entry = fragment_index_entry(
             record,

@@ -220,6 +220,37 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 
+def test_render_cockpit_stamps_moved_lines_and_legend(tmp_path: Path) -> None:
+    # The move detector's per-hunk verdict (issue #106) rides onto the trusted <section>
+    # frame as `data-moved` structural data (the client rebuild dims those rows), and a
+    # single legend explains the dimming — with the identity rule as its tooltip.
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["hunks"][0]["moved"] = [1, 2]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+    anchor = f"hunk-{file_fragment_id('src/app.py')}-1"
+    assert f'<section class="hunk" id="{anchor}" data-moved="1,2">' in html
+    assert html.count('class="moved-legend"') == 1
+    assert "relocated unchanged" in html
+    # Structural data on the trusted frame keeps the page linting clean (Escape Boundary
+    # untouched — the classification never enters the escaped hunk body).
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_no_move_dimming_without_relocation(tmp_path: Path) -> None:
+    # A moveless manifest (the default fixture carries no `moved`) renders byte-for-byte as
+    # before the detector existed: no legend, no data-moved attribute anywhere.
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+    assert "moved-legend" not in html
+    assert "data-moved" not in html
+
+
 def test_render_cockpit_stamps_run_identity_meta(tmp_path: Path) -> None:
     run_dir = tmp_path / ".review-agent"
     analysis = _write_run(run_dir)

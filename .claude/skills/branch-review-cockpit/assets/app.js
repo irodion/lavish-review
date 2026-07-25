@@ -64,6 +64,26 @@
     return el;
   }
 
+  // Parse a hunk section's `data-moved` list (issue #106) — comma-separated 0-based
+  // body-line positions the collector classified as relocated-but-identical — into a Set
+  // for O(1) membership. Only a COMPLETE run of digits is accepted: `parseInt` would read
+  // "1junk"/"1.5" as 1 and dim a real row, so a partially-numeric (or otherwise malformed
+  // or empty) token is skipped instead — a corrupt attribute at worst dims nothing rather
+  // than mis-dims or throws. Returns null when there is nothing to dim.
+  function parseMovedPositions(value) {
+    const set = new Set();
+    const parts = value.split(",");
+    for (let i = 0; i < parts.length; i++) {
+      if (/^\d+$/.test(parts[i])) {
+        const n = Number(parts[i]);
+        if (Number.isSafeInteger(n)) {
+          set.add(n);
+        }
+      }
+    }
+    return set.size ? set : null;
+  }
+
   // A full-width row that spans both gutters and the code column — used for the
   // preamble (diff --git / index / --- / +++ / rename headers) and hunk headers.
   function spanRow(className, child) {
@@ -80,7 +100,24 @@
     const section = pre.closest ? pre.closest("section.hunk") : null;
     const anchor = section && section.id ? section.id : null;
 
+    // Relocated-but-identical line positions the collector classified (issue #106),
+    // relayed on the hunk section as `data-moved` (0-based positions after the `@@`
+    // header — the same enumeration the collector recorded). Dimming exactly those rows
+    // lets a genuine edit inside a moved block stand out. Absent on a moveless / older
+    // page (or on the preamble/whole-diff pre, which is in no hunk section) → no dimming,
+    // today's rendering exactly.
+    const movedAttr = section && section.getAttribute ? section.getAttribute("data-moved") : null;
+    const moved = movedAttr ? parseMovedPositions(movedAttr) : null;
+
     const lines = pre.textContent.split("\n");
+    // Split on "\n" to mirror the collector's own `hunk_text.split("\n")` line model, so a
+    // row's index here equals the 0-based body position the collector recorded (the basis
+    // for `data-moved` dimming and the line-number gutters). Known shared limitation of
+    // this ADR-0014 rebuild: the HTML input-stream stage normalizes a BARE "\r" (a CR not
+    // in a CRLF pair — e.g. classic-Mac endings) to "\n" before we read textContent, which
+    // the collector counts as in-line. Such a line would shift subsequent rows by one; a
+    // proper fix would encode "\r" at the Escape Boundary (out of scope here). CRLF is
+    // unaffected (it collapses to one "\n"), so ordinary diffs align exactly.
     // A unified diff ends in a trailing newline, so the final split element is an
     // empty string — dropping it avoids a spurious blank row at the diff's foot.
     if (lines.length && lines[lines.length - 1] === "") {
@@ -146,6 +183,12 @@
 
       const tr = document.createElement("tr");
       tr.className = cls;
+      // `i - 1` is this line's 0-based position after the `@@` header (lines[0]) — the
+      // index the collector recorded. Dim a relocated + / - line so drift beside it pops.
+      // Only + / - lines are ever classified, so context rows never match.
+      if (moved && (marker === "+" || marker === "-") && moved.has(i - 1)) {
+        tr.className += " dl-moved";
+      }
       tr.appendChild(cell("td", "lno", oldCell));
       tr.appendChild(cell("td", "lno", newCell));
       tr.appendChild(cell("td", "code", line)); // full raw line, prefix kept, text only

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from html import escape as _html_escape
 
 # Sentinel markers delimiting one untrusted region in the raw HTML source.
@@ -292,6 +292,48 @@ def file_fragment_id(path: str) -> str:
 _HUNK_HEADER_RE = re.compile(r"(?m)^@@")
 
 
+def _hunk_spans(diff_text: str) -> list[tuple[int, int]]:
+    """The ``(start, end)`` byte spans of each ``@@`` hunk in ``diff_text``.
+
+    Everything from one hunk header up to (but excluding) the next — or EOF for the
+    last — so the spans concatenate back to ``diff_text[starts[0]:]`` verbatim. The
+    one definition of "where the hunks are", shared by :func:`file_diff_fragment` (which
+    also needs the preamble before ``starts[0]``) and :func:`iter_hunks` (the move
+    detector's substrate), so the two can never disagree on hunk boundaries.
+    """
+    starts = [match.start() for match in _HUNK_HEADER_RE.finditer(diff_text)]
+    return [
+        (start, starts[i + 1] if i + 1 < len(starts) else len(diff_text))
+        for i, start in enumerate(starts)
+    ]
+
+
+def iter_hunks(diff_text: str) -> Iterator[tuple[int, str]]:
+    """Yield ``(index, hunk_text)`` for each ``@@`` hunk — 1-based, in file order.
+
+    ``hunk_text`` is the exact slice from a hunk header up to the next (or EOF), so
+    ``hunk_text.split("\\n")[0]`` is its ``@@`` line and ``[1:]`` its body lines. The
+    move detector (:mod:`branch_review.moves`) walks these to classify relocated lines,
+    and it must split hunks the same way the renderer does — so both go through here.
+    """
+    for index, (start, end) in enumerate(_hunk_spans(diff_text), start=1):
+        yield index, diff_text[start:end]
+
+
+def hunk_body_lines(hunk_text: str) -> list[str]:
+    """A hunk's body lines — everything after its ``@@`` header (``split("\\n")[1:]``).
+
+    The single definition of "the lines a hunk body comprises", shared by the renderer's
+    per-hunk ``lines`` count (:func:`file_diff_fragment`) and the move detector
+    (:mod:`branch_review.moves`). The 0-based position of a line here is the same index the
+    client diff rebuild re-derives, so ``data-moved`` dimming lands on the matching row —
+    keeping that alignment as one definition rather than three prose assertions that it
+    holds. Split on ``\\n`` alone (never ``str.splitlines``) so an embedded ``\\r`` or
+    Unicode separator in a body cannot forge an extra line and shift every later position.
+    """
+    return hunk_text.split("\n")[1:]
+
+
 def hunk_anchor_id(fragment_id: str, index: int) -> str:
     """The deterministic element id of the ``index``-th hunk (1-based) in a file's diff.
 
@@ -317,7 +359,12 @@ def hunk_section_open(anchor: str) -> str:
     return f'<section class="hunk" id="{anchor}">'
 
 
-def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict[str, object]]]:
+def file_diff_fragment(
+    diff_text: str,
+    fragment_id: str,
+    *,
+    moved: Mapping[int, Iterable[int]] | None = None,
+) -> tuple[str, list[dict[str, object]]]:
     """Render one changed file's diff as anchored per-hunk blocks + its hunk index.
 
     Splits the file's unified diff at each hunk header so every hunk becomes an
@@ -330,30 +377,40 @@ def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict
     per hunk).
 
     Returns ``(html, hunks)`` where each ``hunks`` entry is
-    ``{index, anchor, header_html, lines}`` — the 1-based index, the :func:`hunk_anchor_id`
-    element id, the ``@@`` header line **crossed through the boundary** (escaped,
-    marker-wrapped), and ``lines`` (the count of rendered diff-body lines, for the
-    derived reading weight — issue #100) — the per-file hunk index the manifest carries
-    and the cockpit links evidence to. A diff with no hunk (a pure rename or a mode-only
-    change) yields just its preamble and an empty index; an empty ``diff_text`` (never
-    written for an omitted body) degrades to the trusted empty notice with no hunks.
+    ``{index, anchor, header_html, lines[, moved]}`` — the 1-based index, the
+    :func:`hunk_anchor_id` element id, the ``@@`` header line **crossed through the
+    boundary** (escaped, marker-wrapped), ``lines`` (the count of rendered diff-body
+    lines, for the derived reading weight — issue #100), and — when the caller supplies
+    ``moved`` — the 0-based body-line positions this hunk contributes to the changeset's
+    relocated-but-identical set (issue #106, the move detector's verdict). The per-file
+    hunk index the manifest carries and the cockpit links evidence to. A diff with no
+    hunk (a pure rename or a mode-only change) yields just its preamble and an empty
+    index; an empty ``diff_text`` (never written for an omitted body) degrades to the
+    trusted empty notice with no hunks.
+
+    ``moved`` maps a 1-based hunk index to the body-line positions (0-based into
+    ``hunk_text.split("\\n")[1:]`` — the same enumeration ``lines`` counts and the client
+    diff rebuild re-derives) the changeset-wide detector classified as relocations. The
+    key ``moved`` is written on a hunk entry only when non-empty, so a changeset with no
+    moves produces byte-for-byte today's manifest (the detector finding nothing degrades
+    to today's rendering exactly). It is structural data, never prose — the Escape
+    Boundary is untouched; the classification never enters the escaped hunk body.
     """
     if not diff_text:
         return diff_fragment(diff_text), []
 
-    starts = [match.start() for match in _HUNK_HEADER_RE.finditer(diff_text)]
+    spans = _hunk_spans(diff_text)
     parts: list[str] = ['<div class="file-diff">']
     hunks: list[dict[str, object]] = []
 
     # Everything before the first hunk header is the preamble — the whole diff when
     # there is no hunk (a pure rename / mode change), and possibly empty when the diff
     # opens straight on a hunk. Each hunk then runs to the next header or to EOF.
-    preamble = diff_text[: starts[0]] if starts else diff_text
+    preamble = diff_text[: spans[0][0]] if spans else diff_text
     if preamble:
         parts.append(f'<pre class="diff diff-preamble">{fragment(preamble)}</pre>')
 
-    for i, start in enumerate(starts):
-        end = starts[i + 1] if i + 1 < len(starts) else len(diff_text)
+    for i, (start, end) in enumerate(spans):
         hunk_text = diff_text[start:end]
         index = i + 1
         anchor = hunk_anchor_id(fragment_id, index)
@@ -368,11 +425,24 @@ def file_diff_fragment(diff_text: str, fragment_id: str) -> tuple[str, list[dict
         # ``@@`` header itself and git's ``\ No newline at end of file`` meta lines.
         # Counted from the raw bytes because the header's ``-a,b +c,d`` counts cannot
         # recover it: a modify-in-place hunk shares context in both sides, so ``max(b, d)``
-        # drops the overlap and undercounts. Split on ``\n`` alone — never ``str.splitlines``
-        # (see the module note above) — so a ``\r`` or Unicode separator embedded in a hunk
-        # body cannot forge an extra line and inflate this otherwise-exact count.
-        lines = sum(1 for line in hunk_text.split("\n")[1:] if line[:1] in (" ", "+", "-"))
-        hunks.append({"index": index, "anchor": anchor, "header_html": header_html, "lines": lines})
+        # drops the overlap and undercounts. :func:`hunk_body_lines` owns the ``\n``-only
+        # split (its docstring explains why) — one body-line model shared with the detector.
+        lines = sum(1 for line in hunk_body_lines(hunk_text) if line[:1] in (" ", "+", "-"))
+        hunk_entry: dict[str, object] = {
+            "index": index,
+            "anchor": anchor,
+            "header_html": header_html,
+            "lines": lines,
+        }
+        # The move detector's per-hunk verdict (issue #106): the body-line positions this
+        # hunk contributes to the changeset-wide relocated-but-identical set. Recorded only
+        # when non-empty so a moveless changeset is byte-for-byte today's manifest. Sorted
+        # for a deterministic, stable serialization regardless of the caller's iteration.
+        if moved is not None:
+            moved_here = sorted(moved.get(index, ()))
+            if moved_here:
+                hunk_entry["moved"] = moved_here
+        hunks.append(hunk_entry)
         parts.append(
             f'{hunk_section_open(anchor)}<pre class="diff">{fragment(hunk_text)}</pre></section>'
         )
@@ -404,14 +474,18 @@ def fragment_index_entry(
     merged verbatim into the entry — the classifier's per-file line counts (``added``,
     ``deleted``, ``binary``) that survive even when the body does. ``hunks`` (when
     given) is the file's per-hunk index from :func:`file_diff_fragment` —
-    ``[{index, anchor, header_html, lines}, …]`` (``lines`` is the hunk's rendered
-    diff-body count, consumed by :mod:`branch_review.weight`), the manifest side of the
+    ``[{index, anchor, header_html, lines[, moved]}, …]`` (``lines`` is the hunk's
+    rendered diff-body count, consumed by :mod:`branch_review.weight`; ``moved`` the
+    move detector's relocated body positions, issue #106), the manifest side of the
     Hunk Anchorer (ADR-0014) that lets a ``{path, hunk}`` evidence ref link to the exact
     hunk. It rides only on
     an included body — an **omitted** file has no fragment, hence no hunk ids (the key
     is simply absent, never ``[]`` masquerading as "no hunks in a shown diff"). Keeping
     the whole entry schema in this one builder is deliberate: ``fragments.json`` has a
-    single authoring site. ``path``/``old_path`` are the raw agent-facing strings;
+    single authoring site. A hunk may also carry ``moved`` (the move detector's 0-based
+    body-line positions, issue #106) — present only when non-empty, so a moveless
+    changeset's entries are unchanged. ``path``/``old_path`` are the raw agent-facing
+    strings;
     ``path_html``/``old_path_html`` are the same values having crossed the boundary
     (escaped, marker-wrapped) for injection into cockpit headings.
     """
