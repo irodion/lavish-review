@@ -511,12 +511,51 @@ def _inline(text: str) -> str:
     return " ".join(text.split())
 
 
+def _md_cell(text: str) -> str:
+    """Collapse whitespace and escape pipes so trusted prose is safe in a Markdown table cell.
+
+    The Analysis is the agent's own prose (``build_markdown`` escapes only reviewer-typed
+    Q&A), but a raw newline would end the table row and a bare ``|`` would open a spurious
+    column — both are *structural* breakage, not content — so both are neutralised while the
+    prose still reads verbatim. The same posture :func:`_inline` takes for a heading, applied
+    to a cell.
+
+    Backslashes are escaped **before** pipes so a prose ``\\|`` (a regex alternation, a Windows
+    path) survives intact: escaping the pipe alone would turn ``a\\|b`` into ``a\\\\|b``, whose
+    ``\\\\`` GFM reads as one literal backslash — consuming the escape and leaving the ``|`` a
+    live delimiter that splits the row. Escaping ``\\``→``\\\\`` first makes each subsequent
+    ``\\|`` a genuinely escaped pipe.
+    """
+    return _inline(text).replace("\\", "\\\\").replace("|", "\\|")
+
+
+def _contrast_table(step: Mapping[str, object]) -> str:
+    """A behavior-change step's before/after ``contrast`` as a two-column table, or ``""``.
+
+    The Markdown counterpart of the cockpit's contrast card (issue #107): a compact
+    two-column table that renders as the two-cell delta when the export is pasted into a
+    PR. Tolerant like the HTML renderer — a missing or malformed contrast yields no table —
+    so a step without one exports exactly as before.
+    """
+    contrast = step.get("contrast")
+    if not isinstance(contrast, Mapping):
+        return ""
+    before = contrast.get("before")
+    after = contrast.get("after")
+    if not isinstance(before, str) or not before or not isinstance(after, str) or not after:
+        return ""
+    return "\n".join(
+        ["| Before | After |", "| --- | --- |", f"| {_md_cell(before)} | {_md_cell(after)} |"]
+    )
+
+
 def _format_step_block(step: Mapping[str, object], disposition: str | None = None) -> str:
     """One Review Step as a ``### [impact] summary`` heading with its narration (ADR-0016).
 
     A Review Step is a guided stop, not a finding, so it renders as a heading block:
-    the Behavior Impact and analyst confidence as badges, the ``detail`` narration,
-    a ``why_now`` line (why the step sits here on the route), its ``review_prompts``
+    the Behavior Impact and analyst confidence as badges, an optional before/after
+    ``contrast`` table (issue #107) above the narration, the ``detail`` narration, a
+    ``why_now`` line (why the step sits here on the route), its ``review_prompts``
     (what the reviewer should compare) as bullets, and any ``attention_notes`` as
     muted asides. A reviewer disposition, when set, joins the badges as ``reviewer:
     …`` — the per-step judgment stays attributed to the human, beside the agent's
@@ -530,6 +569,9 @@ def _format_step_block(step: Mapping[str, object], disposition: str | None = Non
     label = f"[{impact}] {step.get('summary', '')} ({'; '.join(badges)})"
 
     lines = [f"### {label}", ""]
+    contrast = _contrast_table(step)
+    if contrast:
+        lines += [contrast, ""]
     detail = str(step.get("detail", ""))
     if detail:
         lines += [detail, ""]

@@ -257,6 +257,30 @@ def test_matching_schema_is_not_schema_stale() -> None:
     )
 
 
+def test_additive_optional_field_is_not_a_clean_break() -> None:
+    # The schema-evolution decision for the before/after contrast card (issue #107,
+    # ADR-0017): adding a purely additive-optional field stays WITHIN the 0.4 tag, so
+    # it must not bump the schema and must not trip the Session Evaluator's clean break.
+    # The tag is unchanged...
+    assert ANALYSIS_SCHEMA == "review-analysis/0.4"
+    # ...so a session authored under 0.4 *before* the contrast field existed carries the
+    # same tag this code speaks and stays resumable (fresh on a matching diff) rather than
+    # being force-regenerated as stale-schema. This is the evaluator implication the ticket
+    # requires be recorded and tested; a real breaking bump would still trip stale-schema
+    # (test_schema_mismatch_regenerates_with_no_resume, above).
+    pre_contrast_session = _session(analysis_schema="review-analysis/0.4")
+    assert (
+        evaluate(
+            pre_contrast_session,
+            current_head=_HEAD,
+            current_branch="feat/x",
+            current_base=_BASE,
+            current_merge_base=_MERGE_BASE,
+        )
+        is SessionDisposition.FRESH
+    )
+
+
 # (disposition, offers_restore, restore_is_default) — the policy each verdict carries.
 _POLICY_CASES: list[tuple[SessionDisposition, bool, bool]] = [
     (SessionDisposition.NONE, False, False),

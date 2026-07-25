@@ -445,6 +445,45 @@ details.step > summary {
 details.step > summary:hover { background: var(--panel); }
 details.step[open] > summary { border-bottom: 1px solid var(--border); }
 details.step > .step-body { padding: 0.75rem 1rem; }
+/* Before/after contrast card (issue #107): a structured two-cell delta on a
+   behavior-change step, rendered above the narration so the reviewer absorbs the
+   change at a glance instead of parsing the detail sentence. It states observable
+   behavior, not a verdict — so it stays neutral, out of the reserved judgment
+   palette (--warn / --level-*), keyed to the same surface tokens as every other
+   panel so it re-themes for light/dark automatically. The 1px grid gap over a
+   --border background paints the hairline divider between the two cells. Since the
+   Stage relocates the whole step element, this card travels onto the Stage as-is. */
+.step-contrast {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  margin: 0 0 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--border);
+}
+.contrast-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.45rem 0.65rem;
+  background: var(--panel);
+}
+.contrast-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+/* The "after" side leads with a subtle arrow so the direction reads even when the
+   two cells wrap to one column on a narrow viewport (a shape cue, never colour). */
+.contrast-after .contrast-label::before { content: "\2192 "; } /* → */
+.contrast-value { font-size: 0.9rem; color: var(--fg); }
+/* On a narrow viewport the two cells stack; the divider becomes a horizontal rule. */
+@media (max-width: 34rem) {
+  .step-contrast { grid-template-columns: 1fr; }
+}
 .step-body .detail { margin: 0 0 0.6rem; }
 .step-body h4 {
   margin: 0.6rem 0 0.25rem;

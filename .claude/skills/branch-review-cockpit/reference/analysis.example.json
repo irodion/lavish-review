@@ -19,6 +19,7 @@
           "impact": "behavior-change",
           "summary": "Retry delay changes from a fixed 1s to exponential backoff.",
           "detail": "Before: every retry waited a constant 1s. After: the wait is base * 2**attempt, clamped to 60s. A caller that used to retry 5 times in 5s now spreads those retries across roughly a minute.",
+          "contrast": { "before": "retry delay constant 1s", "after": "delay = base * 2**attempt, capped at 60s" },
           "confidence": "high",
           "why_now": "Start here — this is the observable behavior change the whole branch exists to make; every other step is downstream of it.",
           "review_prompts": [

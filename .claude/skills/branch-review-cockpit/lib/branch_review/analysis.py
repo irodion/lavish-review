@@ -51,6 +51,12 @@ from pathlib import Path
 # 0.3's threads > claims > evidence. The break is clean — this validator encodes only
 # 0.4, so a 0.3 (or older) document is refused with a located error, not silently
 # revalidated under rules it predates. There is no dual-schema path.
+#
+# ADR-0017 fixes the evolution rule this tag follows: a purely **additive-optional**
+# field — one older readers safely ignore and newer readers render only when present,
+# like the ``contrast`` card (issue #107) — stays within the *same* tag, so no version
+# bump and no Session Evaluator clean break. Only a *breaking* change (a renamed,
+# removed, or re-typed field) bumps the suffix and trips ``stale-schema``.
 SCHEMA = "review-analysis/0.4"
 
 # The Behavior Impact a step may carry (ADR-0016's L2 vocabulary) — a closed set so
@@ -296,6 +302,45 @@ def _validate_attention_notes(value: object, loc: str) -> list[AnalysisError]:
     return errors
 
 
+def _validate_contrast(value: object, loc: str, impact: object) -> list[AnalysisError]:
+    """A step's optional before/after ``contrast`` — a structured behavior delta (issue #107).
+
+    Additive-optional within ``review-analysis/0.4`` (ADR-0017): a ``behavior-change`` step
+    may carry ``{before, after}``, both non-empty strings, so the cockpit can render the
+    delta as a two-cell card a reviewer absorbs at a glance instead of parsing a sentence.
+
+    It rides **only** on a ``behavior-change`` step — the one impact that *has* an
+    observable before/after to state. A ``behavior-preserving`` step asserts nothing
+    changed; ``test-change`` / ``mechanical-change`` carry no runtime delta; and
+    ``unknown-impact`` means the delta is precisely what could not be pinned down. So a
+    contrast on any other impact — or on a step whose ``impact`` is missing or malformed,
+    which is a defect the impact rule already locates — is rejected at ``<loc>``: there is
+    no behavior delta for it to carry. When it does belong, both fields are required and
+    each is a non-empty string, located as ``<loc>.before`` / ``<loc>.after``.
+
+    This validates *shape*, not editorial honesty: whether the contrast states observable
+    behavior rather than paraphrasing the summary (the narrator's earn-it rule) is prose
+    quality the prompt owns, exactly as it owns whether a ``summary`` scans well.
+    """
+    if impact != "behavior-change":
+        return [
+            AnalysisError(
+                loc,
+                "a contrast may ride only on a behavior-change step — no other impact has "
+                "an observable before/after to state (issue #107)",
+            )
+        ]
+    if not isinstance(value, Mapping):
+        return [AnalysisError(loc, f"expected an object, got {_typename(value)}")]
+    errors: list[AnalysisError] = []
+    for key in ("before", "after"):
+        if key not in value:
+            errors.append(AnalysisError(f"{loc}.{key}", "required key is missing"))
+        else:
+            errors.extend(_require_str(value[key], f"{loc}.{key}"))
+    return errors
+
+
 def _validate_step(
     step: Mapping[str, object],
     loc: str,
@@ -311,7 +356,8 @@ def _validate_step(
     evidence reference, and — where the reviewer has a comparison to make
     (behavior-change / behavior-preserving / unknown-impact) — at least one
     ``review_prompt``. ``relates_to`` links (validated for id integrity after every
-    step is known) and ``attention_notes`` are optional.
+    step is known), ``attention_notes``, and a before/after ``contrast`` (issue #107,
+    ``behavior-change`` only) are optional.
     """
     errors: list[AnalysisError] = []
 
@@ -349,6 +395,11 @@ def _validate_step(
         errors.extend(_require_str_list(step["review_prompts"], f"{loc}.review_prompts"))
 
     errors.extend(_validate_evidence(step.get("evidence"), f"{loc}.evidence"))
+
+    # contrast: optional before/after delta, additive-optional within 0.4 (ADR-0017) and
+    # allowed only where there is an observable delta to state — a behavior-change step.
+    if "contrast" in step:
+        errors.extend(_validate_contrast(step["contrast"], f"{loc}.contrast", impact))
 
     if "attention_notes" in step:
         errors.extend(_validate_attention_notes(step["attention_notes"], f"{loc}.attention_notes"))

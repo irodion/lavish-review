@@ -174,6 +174,39 @@ def test_render_cockpit_builds_a_safe_step_document(tmp_path: Path) -> None:
     )
 
 
+def test_render_cockpit_renders_before_after_contrast_card(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    # Add a before/after contrast to the behavior-change step (issue #107). Hostile text
+    # proves the card's cells cross the Escape Boundary like every other narrator string.
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    analysis["threads"][0]["steps"][0]["contrast"] = {
+        "before": "delay 1s <b>always</b>",
+        "after": "base * 2**n, capped 60s",
+    }
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+    # A successful render also proves the card is lint-clean (render_cockpit lints and
+    # raises on any failure before returning).
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # The two-cell card renders inside the behavior-change step, above its narration —
+    # bounded to t1.s1's own <details> block so "above" is checked where it must hold.
+    s1 = html.index('id="t1.s1"')
+    block = html[s1 : html.index("</details>", s1)]
+    assert '<div class="step-contrast"' in block
+    assert '<span class="contrast-label">before</span>' in block
+    assert '<span class="contrast-label">after</span>' in block
+    assert block.index("step-contrast") < block.index('class="detail"'), "card above narration"
+    # Escaped: the <b> in the before-cell is visible text, never markup.
+    assert "<b>always</b>" not in html
+    assert "&lt;b&gt;always&lt;/b&gt;" in html
+    # A step with no contrast (t1.s2, a test-change) renders no card.
+    s2 = html.index('id="t1.s2"')
+    assert "step-contrast" not in html[s2 : html.index("</details>", s2)]
+
+
 def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -> None:
     run_dir = tmp_path / ".review-agent"
     analysis = _write_run(run_dir)
