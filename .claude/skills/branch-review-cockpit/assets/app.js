@@ -66,15 +66,19 @@
 
   // Parse a hunk section's `data-moved` list (issue #106) — comma-separated 0-based
   // body-line positions the collector classified as relocated-but-identical — into a Set
-  // for O(1) membership. Malformed/empty tokens are skipped, so a corrupt attribute at
-  // worst dims nothing rather than throwing. Returns null when there is nothing to dim.
+  // for O(1) membership. Only a COMPLETE run of digits is accepted: `parseInt` would read
+  // "1junk"/"1.5" as 1 and dim a real row, so a partially-numeric (or otherwise malformed
+  // or empty) token is skipped instead — a corrupt attribute at worst dims nothing rather
+  // than mis-dims or throws. Returns null when there is nothing to dim.
   function parseMovedPositions(value) {
     const set = new Set();
     const parts = value.split(",");
     for (let i = 0; i < parts.length; i++) {
-      const n = parseInt(parts[i], 10);
-      if (!isNaN(n) && n >= 0) {
-        set.add(n);
+      if (/^\d+$/.test(parts[i])) {
+        const n = Number(parts[i]);
+        if (Number.isSafeInteger(n)) {
+          set.add(n);
+        }
       }
     }
     return set.size ? set : null;

@@ -51,11 +51,13 @@ test("a hunk with no data-moved gets no dimming — degrades to today exactly (i
 
 test("a malformed data-moved dims nothing rather than throwing (issue #106)", () => {
   const doc = buildFixtureDocument();
-  doc.getElementById("hunk-a1").setAttribute("data-moved", "nope,,-3");
+  // Includes partially-numeric tokens: "1junk"/"1.5" parseInt to 1 and would wrongly dim
+  // row 1 (the +payload line) — only a complete digit run is a valid position.
+  doc.getElementById("hunk-a1").setAttribute("data-moved", "nope,,-3,1junk,1.5");
   const { document } = loadCockpit({ doc });
   assert.equal(
     document.getElementById("hunk-a1").querySelectorAll("tr.dl-moved").length,
     0,
-    "unparseable positions are skipped, not applied"
+    "unparseable and partially-numeric positions are skipped, not applied"
   );
 });
