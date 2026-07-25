@@ -145,6 +145,32 @@ def _fragments_index(out: Path) -> dict[str, dict[str, object]]:
     return {rec["path"]: rec for rec in data["files"]}
 
 
+def _hunks(index: dict[str, dict[str, object]], path: str) -> list[dict[str, object]]:
+    """A file's hunk index, narrowed from the ``object``-typed decoded manifest.
+
+    ``fragments.json`` decodes as ``object`` values, so a bare ``index[path]["hunks"]``
+    iteration fails ``mypy --strict``; assert the shape once here so the move-position
+    assertions below stay readable.
+    """
+    hunks = index[path]["hunks"]
+    assert isinstance(hunks, list)
+    result: list[dict[str, object]] = []
+    for hunk in hunks:
+        assert isinstance(hunk, dict)
+        result.append(hunk)
+    return result
+
+
+def _moved_positions(index: dict[str, dict[str, object]], path: str) -> list[int]:
+    """Every ``moved`` body position across a file's hunks (empty when it relocated nothing)."""
+    positions: list[int] = []
+    for hunk in _hunks(index, path):
+        moved = hunk.get("moved", [])
+        assert isinstance(moved, list)
+        positions.extend(moved)
+    return positions
+
+
 def test_per_file_fragments_written_in_changed_files_order(repo: Path) -> None:
     _git(repo, "checkout", "feature")
     _commit(repo, "b.py", "b = 1\n", "feat: add b")
@@ -216,10 +242,8 @@ def test_collect_records_moved_lines_across_files(tmp_path: Path) -> None:
     collect(root, out_dir=out)
     index = _fragments_index(out)
 
-    mover_moved = [pos for h in index["mover.py"]["hunks"] for pos in h.get("moved", [])]
-    holder_moved = [pos for h in index["holder.py"]["hunks"] for pos in h.get("moved", [])]
-    assert mover_moved, "the relocated-away lines should be dimmed in mover.py"
-    assert holder_moved, "the relocated-in lines should be dimmed in holder.py"
+    assert _moved_positions(index, "mover.py"), "the relocated-away lines should dim in mover.py"
+    assert _moved_positions(index, "holder.py"), "the relocated-in lines should dim in holder.py"
 
 
 def test_collect_records_relocation_with_edit(tmp_path: Path) -> None:
@@ -245,9 +269,9 @@ def test_collect_records_relocation_with_edit(tmp_path: Path) -> None:
 
     # holder.py hunk body after the @@ header (0-based): 0=" keep_b", 1="+alpha()",
     # 2="+beta(x)", 3="+gamma()". Only 1 and 3 relocate; 2 (the edit) is genuine drift.
-    holder_hunks = index["holder.py"]["hunks"]
-    holder_moved = sorted(pos for h in holder_hunks for pos in h.get("moved", []))
-    assert holder_moved == [1, 3], "the edited line must stay full-contrast, not dim"
+    assert sorted(_moved_positions(index, "holder.py")) == [1, 3], (
+        "the edited line must stay full-contrast, not dim"
+    )
 
 
 def test_collect_writes_no_moved_key_without_relocation(repo: Path) -> None:
@@ -256,7 +280,7 @@ def test_collect_writes_no_moved_key_without_relocation(repo: Path) -> None:
     _git(repo, "checkout", "feature")
     collect(repo)
     index = _fragments_index(repo / ".review-agent")
-    assert all("moved" not in h for h in index["app.py"]["hunks"])
+    assert all("moved" not in hunk for hunk in _hunks(index, "app.py"))
 
 
 def test_per_file_fragment_handles_unusual_path(repo: Path) -> None:
