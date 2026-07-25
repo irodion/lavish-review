@@ -329,7 +329,12 @@ def _validate_contrast(value: object, loc: str, impact: object) -> list[Analysis
     behavior rather than paraphrasing the summary (the narrator's earn-it rule) is prose
     quality the prompt owns, exactly as it owns whether a ``summary`` scans well.
     """
-    if impact not in CONTRAST_ALLOWED_IMPACTS:
+    # Guard the type before the frozenset membership test: a malformed ``impact`` (a list
+    # or object) is unhashable and would raise on ``in`` — but validate_analysis must
+    # return located errors, never raise. A non-string impact is never behavior-change, so
+    # it takes this reject branch (its own malformedness is already located by the impact
+    # rule), exactly as a wrong string impact does.
+    if not isinstance(impact, str) or impact not in CONTRAST_ALLOWED_IMPACTS:
         return [
             AnalysisError(
                 loc,
@@ -393,8 +398,11 @@ def _validate_step(
     errors.extend(_require_str(step.get("why_now"), f"{loc}.why_now"))
 
     # review_prompts: required (≥1) where the reviewer has a comparison to make;
-    # optional on test-change / mechanical-change, but well-formed if present.
-    if impact in PROMPT_REQUIRED_IMPACTS:
+    # optional on test-change / mechanical-change, but well-formed if present. Guard the
+    # type before the frozenset membership test — a malformed (unhashable) ``impact`` must
+    # fall through to the optional-if-present branch, not raise (its own error is already
+    # located above); the validator returns located errors, never raises.
+    if isinstance(impact, str) and impact in PROMPT_REQUIRED_IMPACTS:
         errors.extend(
             _require_str_list(step.get("review_prompts"), f"{loc}.review_prompts", min_len=1)
         )

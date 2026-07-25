@@ -406,6 +406,19 @@ def test_markdown_carries_before_after_contrast_table() -> None:
     assert md.count("| Before | After |") == 1
 
 
+def test_contrast_table_rejects_malformed_and_whitespace_values() -> None:
+    from branch_review.bake import _contrast_table
+
+    # Missing, partial, or wrong-typed → no table (tolerant, like the HTML renderer).
+    assert _contrast_table({}) == ""
+    assert _contrast_table({"contrast": {"before": "a"}}) == ""
+    assert _contrast_table({"contrast": {"before": "a", "after": 5}}) == ""
+    # Whitespace-only is treated as empty, matching the validator's _require_str.
+    assert _contrast_table({"contrast": {"before": "  ", "after": "b"}}) == ""
+    # A well-formed pair renders the two-column table.
+    assert "| Before | After |" in _contrast_table({"contrast": {"before": "a", "after": "b"}})
+
+
 def test_md_cell_escapes_backslash_before_pipe() -> None:
     from branch_review.bake import _md_cell
 

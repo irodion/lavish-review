@@ -251,6 +251,19 @@ def test_contrast_is_optional_and_valid_on_behavior_change() -> None:
     assert validate_analysis(doc) == []
 
 
+def test_non_string_impact_does_not_crash_validation() -> None:
+    # validate_analysis returns located errors, never raises — even when a malformed
+    # ``impact`` (a list, which is unhashable) reaches the frozenset-membership gates for
+    # review_prompts and contrast. Both gates guard the type first (CodeRabbit, #107).
+    doc = _valid()
+    doc["threads"][0]["steps"][0]["impact"] = ["behavior-change"]
+    doc["threads"][0]["steps"][0]["contrast"] = {"before": "a", "after": "b"}
+    errors = validate_analysis(doc)  # must not raise
+    locations = [e.location for e in errors]
+    assert "threads[0].steps[0].impact" in locations  # the bad impact is located
+    assert "threads[0].steps[0].contrast" in locations  # contrast rejected on a non-bc impact
+
+
 def test_hunk_anchored_evidence_is_optional_and_passes() -> None:
     # A {path} ref may carry a 1-based hunk index, or omit it entirely — a path-only
     # ref keeps file-level anchoring. Both shapes are valid.

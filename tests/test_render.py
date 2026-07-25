@@ -207,6 +207,20 @@ def test_render_cockpit_renders_before_after_contrast_card(tmp_path: Path) -> No
     assert "step-contrast" not in html[s2 : html.index("</details>", s2)]
 
 
+def test_render_contrast_rejects_malformed_and_whitespace_values() -> None:
+    from branch_review.render import _render_contrast
+
+    # Missing, partial, or wrong-typed → no card (the tolerant renderer degrades cleanly).
+    assert _render_contrast({}) == ""
+    assert _render_contrast({"contrast": {"before": "a"}}) == ""
+    assert _render_contrast({"contrast": {"before": "a", "after": 5}}) == ""
+    # Whitespace-only is treated as empty, matching the validator's _require_str, so a
+    # value the validator would reject never renders as an empty card.
+    assert _render_contrast({"contrast": {"before": "  ", "after": "b"}}) == ""
+    # A well-formed pair renders the card.
+    assert "step-contrast" in _render_contrast({"contrast": {"before": "a", "after": "b"}})
+
+
 def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -> None:
     run_dir = tmp_path / ".review-agent"
     analysis = _write_run(run_dir)

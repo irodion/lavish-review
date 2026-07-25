@@ -542,7 +542,15 @@ def _contrast_table(step: Mapping[str, object]) -> str:
         return ""
     before = contrast.get("before")
     after = contrast.get("after")
-    if not isinstance(before, str) or not before or not isinstance(after, str) or not after:
+    # Non-empty means strip-non-empty, matching the validator's ``_require_str`` — so a
+    # whitespace-only value yields no table rather than an empty one, consistent with the
+    # HTML renderer's contrast guard.
+    if (
+        not isinstance(before, str)
+        or not before.strip()
+        or not isinstance(after, str)
+        or not after.strip()
+    ):
         return ""
     return "\n".join(
         ["| Before | After |", "| --- | --- |", f"| {_md_cell(before)} | {_md_cell(after)} |"]

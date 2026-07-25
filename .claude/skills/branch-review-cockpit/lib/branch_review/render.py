@@ -508,7 +508,15 @@ def _render_contrast(step: Mapping[str, object]) -> str:
         return ""
     before = contrast.get("before")
     after = contrast.get("after")
-    if not isinstance(before, str) or not before or not isinstance(after, str) or not after:
+    # Non-empty means strip-non-empty, matching the validator's ``_require_str`` — so a
+    # whitespace-only value yields no card rather than an empty one, keeping the tolerant
+    # renderer consistent with what the validator would have rejected.
+    if (
+        not isinstance(before, str)
+        or not before.strip()
+        or not isinstance(after, str)
+        or not after.strip()
+    ):
         return ""
     return (
         '<div class="step-contrast" role="group" aria-label="Before and after">'

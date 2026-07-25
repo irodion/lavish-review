@@ -108,6 +108,10 @@ test("the before/after contrast card relocates onto the Stage with its step (#10
     stage.querySelector(".contrast-before .contrast-value").textContent,
     "retry delay constant 1s"
   );
+  assert.equal(
+    stage.querySelector(".contrast-after .contrast-value").textContent,
+    "delay = base * 2^n, capped 60s"
+  );
   // Relocated, never cloned: exactly one card in the whole document while staged.
   assert.equal(document.querySelectorAll(".step-contrast").length, 1);
 
