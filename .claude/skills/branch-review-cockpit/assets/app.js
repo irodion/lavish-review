@@ -662,7 +662,9 @@
 
   // Report the outcome on the button itself: the label becomes "copied", or "copy failed"
   // when the clipboard refused — never a silent no-op that leaves the reviewer pasting
-  // whatever was there before. aria-live announces the change to a screen reader.
+  // whatever was there before. The word changes, never the colour alone. The aria-label
+  // keeps naming the action ("Copy src/app.py:42") so the button stays findable by what it
+  // does rather than by the outcome of its last press.
   function markCopied(button, copied) {
     if (copiedButton && copiedButton !== button) {
       copiedButton.textContent = COPY_LABEL;

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from branch_review.analysis import SCHEMA, step_ids
+from branch_review.config import EDITORS
 from branch_review.coverage import COVERAGE_RULE
 from branch_review.escape import INTERACTIVE_CSP, file_fragment_id, fragment
 from branch_review.lint import lint_cockpit
@@ -324,14 +325,11 @@ def test_render_cockpit_links_hunks_into_the_configured_editor(tmp_path: Path) -
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
 
 
+# Driven off the config table itself, not a copy of it: a newly sanctioned editor gets
+# render coverage the moment it is added, instead of silently having none.
 @pytest.mark.parametrize(
     ("editor", "scheme"),
-    [
-        ("vscode", "vscode"),
-        ("vscode-insiders", "vscode-insiders"),
-        ("cursor", "cursor"),
-        ("zed", "zed"),
-    ],
+    sorted((name, scheme) for name, (scheme, _label) in EDITORS.items()),
 )
 def test_render_cockpit_uses_each_editors_own_scheme(
     tmp_path: Path, editor: str, scheme: str
@@ -370,6 +368,18 @@ def test_render_cockpit_percent_encodes_a_hostile_path_in_the_editor_url(tmp_pat
     assert 'href="vscode://file/repo/src/a%20b%23c%22%3Cd%3E.py:3"' in html
     assert '"<d>' not in html  # neither the attribute nor the visible text carries raw markup
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_links_from_a_repo_at_the_filesystem_root(tmp_path: Path) -> None:
+    # `/` normalizes to an EMPTY prefix — the join still yields an absolute `/src/app.py`.
+    # Pinned because "empty prefix" and "no repo root recorded" are easy to conflate, and
+    # conflating them would silently drop every link on such a checkout.
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _with_new_start(run_dir, 5)
+    _configure_editor(run_dir, "vscode", "/")
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+    assert 'href="vscode://file/src/app.py:5"' in html
 
 
 def test_render_cockpit_windows_root_keeps_a_leading_slash(tmp_path: Path) -> None:

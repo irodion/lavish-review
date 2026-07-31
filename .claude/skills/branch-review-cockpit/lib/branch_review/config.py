@@ -78,9 +78,9 @@ EDITORS: dict[str, tuple[str, str]] = {
     "cursor": ("cursor", "Cursor"),
     "zed": ("zed", "Zed"),
 }
+# ``none`` is both a member of the vocabulary and the default — one name, not two.
 NO_EDITOR = "none"
 VALID_EDITORS = (NO_EDITOR, *EDITORS)
-DEFAULT_EDITOR = NO_EDITOR
 # The URL schemes the sanctioned editors use — the linter's allowlist, derived from
 # the table above rather than re-typed beside it.
 EDITOR_SCHEMES = frozenset(scheme for scheme, _label in EDITORS.values())
@@ -334,7 +334,7 @@ class ResolvedConfig:
     # The local editor cockpit hunks deep-link into (issue #108), one of
     # :data:`VALID_EDITORS`. ``none`` (the default) emits no link at all — the copy
     # ``path:line`` affordance is always there, the link is the opt-in.
-    editor: str = DEFAULT_EDITOR
+    editor: str = NO_EDITOR
     # Whether Goal Evidence may reach the tracker via ``gh`` (ADR-0010). Defaults on;
     # either scope can switch it off wholesale — repo (committed policy) wins over
     # machine when both set it. Even when on, the collector only fetches when local
@@ -416,7 +416,7 @@ def _editor(value: object, where: str) -> str:
     default. Same posture as ``styling`` and every unknown key in this module.
     """
     if value is None:
-        return DEFAULT_EDITOR
+        return NO_EDITOR
     if value not in VALID_EDITORS:
         raise ConfigError(f"{where}: editor must be one of {list(VALID_EDITORS)}, got {value!r}")
     return str(value)

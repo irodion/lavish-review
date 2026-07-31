@@ -130,7 +130,23 @@ def _isolation_note(run_dir: Path) -> str:
     )
 
 
-def _run_meta(run_dir: Path) -> str:
+def _context(run_dir: Path) -> Mapping[str, object]:
+    """The collector's ``context.json`` as a mapping, or ``{}`` when absent/malformed.
+
+    The one read of that file the renderer makes: the run-identity meta (:func:`_run_meta`)
+    and the editor deep-link root (:func:`_editor_policy`) both consume it, so it is parsed
+    once per render rather than once per consumer. Both readers are tolerant by design —
+    a missing file degrades each feature on its own terms — so "absent" and "not an object"
+    collapse to the same empty mapping here.
+    """
+    path = run_dir / "context.json"
+    if not path.exists():
+        return {}
+    context = _load_json(path)
+    return context if isinstance(context, Mapping) else {}
+
+
+def _run_meta(context: Mapping[str, object]) -> str:
     """A ``<meta name="brc-run">`` stamping this run's diff identity, or ``""``.
 
     The served cockpit's client store (``assets/app.js``, issue #112) keys its
@@ -154,12 +170,6 @@ def _run_meta(run_dir: Path) -> str:
     ``context.json`` is), the meta is omitted and the store stays inert (absence
     discards) rather than fall back to a weaker, reusable identity.
     """
-    path = run_dir / "context.json"
-    if not path.exists():
-        return ""
-    context = _load_json(path)
-    if not isinstance(context, Mapping):
-        return ""
     head = context.get("head_sha")
     generated_at = context.get("generated_at")
     if not isinstance(head, str) or not head:
@@ -416,9 +426,16 @@ class EditorPolicy:
       broken one: a relative editor URL addresses nothing.
 
     ``scheme``/``label`` come from :data:`branch_review.config.EDITORS` (the sanctioned
-    vocabulary the Cockpit Linter allows), ``root`` from ``context.json``. :data:`NO_EDITOR`
-    is the default and yields :data:`DISABLED` — a cockpit byte-identical to one rendered
-    before editor links existed.
+    vocabulary the Cockpit Linter allows); ``root`` is ``context.json``'s ``repo_root``,
+    already normalized by :func:`_editor_policy` into the POSIX prefix the URL needs, so
+    the per-hunk :func:`_editor_href` only concatenates. :data:`NO_EDITOR` is the default
+    and yields :data:`DISABLED_EDITOR` — a cockpit byte-identical to one rendered before
+    editor links existed.
+
+    ``enabled`` keys on the **scheme** alone, because :func:`_editor_policy` only ever
+    names one after validating the root: an empty ``root`` is the legitimate normalization
+    of a repo checked out at ``/`` (the prefix is nothing; the join still yields an
+    absolute ``/path``), not the absence of a root, and the two must not be conflated.
     """
 
     scheme: str = ""
@@ -427,13 +444,30 @@ class EditorPolicy:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.scheme and self.root)
+        return bool(self.scheme)
 
 
 DISABLED_EDITOR = EditorPolicy()
 
 
-def _editor_policy(config: Mapping[str, object], run_dir: Path) -> EditorPolicy:
+def _editor_root(raw: str) -> str:
+    """``raw`` as the absolute POSIX prefix an editor URL is built on.
+
+    Git speaks ``/`` separators, so a Windows root's backslashes are normalized to match,
+    any trailing slash is dropped (the join adds exactly one), and a leading ``/`` is
+    forced — that is what makes a drive-lettered root form ``vscode://file/C:/repo/…``, the
+    shape VS Code and its forks parse. A root of ``/`` normalizes to the **empty** prefix,
+    which is correct: the join then yields ``/path``, still absolute. Done **once per run**
+    rather than per hunk — it depends only on the root, and a large changeset renders
+    hundreds of hunks.
+    """
+    root = raw.replace("\\", "/").rstrip("/")
+    if not root or root.startswith("/"):
+        return root
+    return f"/{root}"
+
+
+def _editor_policy(config: Mapping[str, object], context: Mapping[str, object]) -> EditorPolicy:
     """Resolve the run's editor deep-link policy from ``resolved-config.json`` + ``context.json``.
 
     Tolerant, like the rest of the renderer: an absent, ``none``, or unrecognized ``editor``
@@ -444,34 +478,27 @@ def _editor_policy(config: Mapping[str, object], run_dir: Path) -> EditorPolicy:
     editor = config.get("editor")
     if not isinstance(editor, str) or editor not in EDITORS:
         return DISABLED_EDITOR
+    # Validate what the collector RECORDED (a non-blank string), then normalize — the
+    # normalized prefix is legitimately empty for a repo at ``/``, so testing it instead
+    # would read that as "no root" and drop the links.
+    raw_root = context.get("repo_root")
+    if not isinstance(raw_root, str) or not raw_root.strip():
+        return DISABLED_EDITOR
     scheme, label = EDITORS[editor]
-    context = run_dir / "context.json"
-    if not context.exists():
-        return DISABLED_EDITOR
-    loaded = _load_json(context)
-    root = loaded.get("repo_root") if isinstance(loaded, Mapping) else None
-    if not isinstance(root, str) or not root:
-        return DISABLED_EDITOR
-    return EditorPolicy(scheme=scheme, label=label, root=root)
+    return EditorPolicy(scheme=scheme, label=label, root=_editor_root(raw_root))
 
 
 def _editor_href(policy: EditorPolicy, path: str, line: int) -> str:
     """The absolute ``<scheme>://file/<abs path>:<line>`` URL for one hunk.
 
-    The repo root and the repo-relative path are joined with ``/`` (git speaks POSIX
-    separators; a Windows root's backslashes are normalized to match) and forced to a
-    leading ``/`` so a drive-lettered root still forms ``vscode://file/C:/repo/...``, the
-    shape VS Code and its forks parse. The path is percent-encoded — it is untrusted data,
-    and a ``#``/``?``/space in a filename would otherwise truncate or mangle the URL —
-    keeping ``/`` and ``:`` literal so the separators and the drive letter survive. The
-    ``:<line>`` suffix is appended after encoding: it is the URL's own syntax, not part of
-    the file name.
+    The repo-relative path is joined onto the run's already-normalized absolute ``root``
+    (:func:`_editor_root`) and percent-encoded — it is untrusted data, and a ``#``/``?``/
+    space in a filename would otherwise truncate or mangle the URL — keeping ``/`` and
+    ``:`` literal so the separators and a drive letter survive. The ``:<line>`` suffix is
+    appended after encoding: it is the URL's own syntax, not part of the file name.
     """
-    root = policy.root.replace("\\", "/").rstrip("/")
-    absolute = f"{root}/{path}"
-    if not absolute.startswith("/"):
-        absolute = f"/{absolute}"
-    return f"{policy.scheme}://file{quote(absolute, safe='/:')}:{line}"
+    absolute = quote(f"{policy.root}/{path}", safe="/:")
+    return f"{policy.scheme}://file{absolute}:{line}"
 
 
 def _hunk_locator(
@@ -514,7 +541,7 @@ def _annotate_hunks(
     fragment_html: str,
     entry: Mapping[str, object],
     by_hunk: Mapping[str, Sequence[str]],
-    policy: EditorPolicy = DISABLED_EDITOR,
+    policy: EditorPolicy,
 ) -> str:
     """Splice each hunk's narrating-step margin (and move classification) into a file's
     pre-escaped diff fragment.
@@ -929,7 +956,7 @@ def _render_files(
     manifest: Mapping[str, object],
     by_hunk: Mapping[str, Sequence[str]],
     by_file: Mapping[str, Sequence[str]],
-    policy: EditorPolicy = DISABLED_EDITOR,
+    policy: EditorPolicy,
 ) -> str:
     rendered = ['<section class="evidence-files">', "<h2>Evidence</h2>"]
     if manifest.get("too_large") is True:
@@ -1069,7 +1096,7 @@ def _document(
     analysis: Mapping[str, object],
     manifest: Mapping[str, object],
     fragments_source: str,
-    policy: EditorPolicy = DISABLED_EDITOR,
+    config: Mapping[str, object],
 ) -> str:
     files = _manifest_files(manifest)
     files_by_path = _file_by_path(files)
@@ -1079,7 +1106,11 @@ def _document(
     meta_html = _fragment_block(fragments_source, "meta")
     goal_html = _fragment_block(fragments_source, "goal")
     isolation_note = _isolation_note(run_dir)
-    run_meta = _run_meta(run_dir)
+    # ``context.json`` is read once here and shared: the run-identity meta and the editor
+    # deep-link root are its only two consumers.
+    context = _context(run_dir)
+    policy = _editor_policy(config, context)
+    run_meta = _run_meta(context)
     threads = _items(analysis.get("threads"))
     # The reverse hunk↔step join, computed once here where both the analysis (steps) and
     # the manifest (hunk ids) are in hand, then handed to the L3 files section (#103).
@@ -1142,7 +1173,7 @@ def render_cockpit(run_dir: Path = DEFAULT_RUN_DIR) -> Path:
     except OSError as exc:
         raise RenderError(f"cannot read {run_dir / 'fragments.html'}: {exc}") from exc
 
-    html = _document(run_dir, analysis, manifest, fragments_source, _editor_policy(config, run_dir))
+    html = _document(run_dir, analysis, manifest, fragments_source, config)
     lint_errors = lint_cockpit(
         html,
         styling=styling,
