@@ -291,6 +291,26 @@ def file_fragment_id(path: str) -> str:
 # ``str.splitlines`` — so an embedded ``\r`` inside a hunk body can't forge a split.
 _HUNK_HEADER_RE = re.compile(r"(?m)^@@")
 
+# The new-side start line inside a ``@@ -old[,len] +new[,len] @@`` header — the line the
+# hunk begins at *in the working tree*, and so the ``:line`` half of the cockpit's
+# copyable ``path:line`` and its editor deep link (issue #108). Two-way (base…HEAD)
+# diffs only ever open with ``@@``; a combined-merge ``@@@`` header (a different number
+# of sides) simply does not match, and the hunk then carries no start line rather than a
+# guessed one. The client-side diff rebuild reads the same field out of the same header
+# (``HUNK_NUMS`` in ``app.js``) for its line-number gutters.
+_HUNK_NEW_START_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def hunk_new_start(hunk_text: str) -> int | None:
+    """The 1-based new-side start line of ``hunk_text``, or ``None`` for an unparseable header.
+
+    Reads only the ``@@`` line (``hunk_text``'s first line). ``None`` is the honest answer
+    for a header shape this two-way-diff model does not speak (a combined-merge ``@@@``),
+    and every consumer degrades to "no line reference" rather than inventing one.
+    """
+    match = _HUNK_NEW_START_RE.match(hunk_text.split("\n", 1)[0])
+    return int(match.group(1)) if match else None
+
 
 def _hunk_spans(diff_text: str) -> list[tuple[int, int]]:
     """The ``(start, end)`` byte spans of each ``@@`` hunk in ``diff_text``.
@@ -377,10 +397,12 @@ def file_diff_fragment(
     per hunk).
 
     Returns ``(html, hunks)`` where each ``hunks`` entry is
-    ``{index, anchor, header_html, lines[, moved]}`` — the 1-based index, the
+    ``{index, anchor, header_html, lines[, new_start][, moved]}`` — the 1-based index, the
     :func:`hunk_anchor_id` element id, the ``@@`` header line **crossed through the
     boundary** (escaped, marker-wrapped), ``lines`` (the count of rendered diff-body
-    lines, for the derived reading weight — issue #100), and — when the caller supplies
+    lines, for the derived reading weight — issue #100), ``new_start`` (the new-side start
+    line the ``@@`` header names, present only when that header parses — the ``:line`` of
+    the cockpit's copyable ``path:line``, issue #108), and — when the caller supplies
     ``moved`` — the 0-based body-line positions this hunk contributes to the changeset's
     relocated-but-identical set (issue #106, the move detector's verdict). The per-file
     hunk index the manifest carries and the cockpit links evidence to. A diff with no
@@ -434,6 +456,13 @@ def file_diff_fragment(
             "header_html": header_html,
             "lines": lines,
         }
+        # The hunk's new-side start line (issue #108) — the manifest side of the cockpit's
+        # copyable ``path:line`` and its optional editor deep link. Recorded only when the
+        # header parses, so a shape this diff model does not speak yields no locator rather
+        # than a wrong line number.
+        new_start = hunk_new_start(hunk_text)
+        if new_start is not None:
+            hunk_entry["new_start"] = new_start
         # The move detector's per-hunk verdict (issue #106): the body-line positions this
         # hunk contributes to the changeset-wide relocated-but-identical set. Recorded only
         # when non-empty so a moveless changeset is byte-for-byte today's manifest. Sorted

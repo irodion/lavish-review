@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from branch_review.config import MACHINE_CONFIG_REL
+from branch_review.config import MACHINE_CONFIG_REL, VALID_EDITORS
 from branch_review.feedback import LAVISH_PKG
 
 # Derived from the one authoritative pin, ``feedback.LAVISH_PKG`` (which drives the
@@ -72,8 +72,11 @@ def machine_config_text(*, sessionstart_hook: bool = False) -> str:
     lines = [
         "# Machine-scope review policy — created by the Branch Review Cockpit installer.",
         "# Recognized keys: pause, styling, lavish_version, sessionstart_hook,",
-        "# goal_remote_fetch. See the skill's SKILL.md.",
+        "# goal_remote_fetch, editor. See the skill's SKILL.md.",
         f"lavish_version: {PINNED_LAVISH_VERSION}",
+        # Commented, not set: the deep links are opt-in, and the reviewer names the editor
+        # they actually have. Left in the file so the key is discoverable without the docs.
+        f"# editor: {' | '.join(VALID_EDITORS)}   # open-in-editor links on each hunk",
     ]
     if sessionstart_hook:
         lines.append("sessionstart_hook: true")

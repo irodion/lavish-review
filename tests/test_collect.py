@@ -139,6 +139,28 @@ def test_collect_writes_context_and_files(repo: Path) -> None:
     assert "feat: bump x" in (out / "commits.txt").read_text()
 
 
+def test_collect_records_the_repo_root_and_hunk_start_lines(repo: Path) -> None:
+    # The two machine-side facts the cockpit's hunk locators need (issue #108): where this
+    # checkout lives (an editor URL must be absolute) and where each hunk starts on the new
+    # side (the `:line` of the copyable `path:line`).
+    collect(repo, home=repo)  # hermetic: never read the developer's real machine config
+    out = repo / ".review-agent"
+
+    written = json.loads((out / "context.json").read_text())
+    assert Path(written["repo_root"]) == repo.resolve()
+    assert Path(written["repo_root"]).is_absolute()
+
+    hunks = _hunks(_fragments_index(out), "app.py")
+    assert hunks
+    starts = [hunk["new_start"] for hunk in hunks]
+    assert all(isinstance(start, int) and start >= 1 for start in starts)
+
+    # The machine `editor` policy travels to the renderer through resolved-config.json;
+    # unset (this fixture's home) it is the no-link default.
+    resolved = json.loads((out / "resolved-config.json").read_text())
+    assert resolved["editor"] == "none"
+
+
 def _fragments_index(out: Path) -> dict[str, dict[str, object]]:
     """Load fragments.json keyed by path for assertions (order checked separately)."""
     data = json.loads((out / "fragments.json").read_text())

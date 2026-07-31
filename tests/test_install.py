@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from branch_review.config import load_config_file, resolve
+from branch_review.config import NO_EDITOR, load_config_file, resolve
 from branch_review.install import (
     GITIGNORE_ENTRIES,
     GITIGNORE_HEADER,
@@ -42,6 +42,11 @@ def test_machine_config_round_trips_through_the_strict_loader(tmp_path: Path) ->
     resolved = resolve(machine=load_config_file(path))
     assert resolved.lavish_version == PINNED_LAVISH_VERSION
     assert resolved.sessionstart_hook is False
+    # The `editor` key is advertised as a comment, so it is discoverable in the file the
+    # installer writes while staying opt-in — a commented line must resolve to no editor
+    # (and must not trip the strict loader).
+    assert "# editor:" in path.read_text(encoding="utf-8")
+    assert resolved.editor == NO_EDITOR
 
     path.write_text(machine_config_text(sessionstart_hook=True), encoding="utf-8")
     assert resolve(machine=load_config_file(path)).sessionstart_hook is True

@@ -107,7 +107,7 @@ function step(doc, { id, impact, summary, confidence, whyNow, prompts, evidence,
 
 // One L3 file panel with a single hunk section whose <pre class="diff"> holds the
 // raw (pre-escaped) diff text — the caller supplies the diff body verbatim.
-export function filePanel(doc, { id, path, added, deleted, hunkId, diffText }) {
+export function filePanel(doc, { id, path, added, deleted, hunkId, diffText, line, editorHref }) {
   const stats = h(doc, "span.file-stats", null, [
     h(doc, "span.added", null, ["+" + added]),
     " ",
@@ -115,7 +115,19 @@ export function filePanel(doc, { id, path, added, deleted, hunkId, diffText }) {
   ]);
   const summary = h(doc, "summary", null, [path + " ", stats]);
   const pre = h(doc, "pre.diff", null, [diffText]);
-  const hunk = h(doc, "section.hunk#" + hunkId, null, [pre]);
+  const hunkChildren = [];
+  // The renderer's hunk locator (issue #108): the copyable `path:line` and, when the
+  // machine configured an `editor`, its deep link. `line` absent → no locator at all
+  // (a hunk with no new-side start line), which is also what a pre-#108 page looks like.
+  if (line !== undefined) {
+    const locatorChildren = [h(doc, "code.hunk-path", null, [path + ":" + line])];
+    if (editorHref) {
+      locatorChildren.push(h(doc, "a.hunk-editor", { href: editorHref }, ["open"]));
+    }
+    hunkChildren.push(h(doc, "div.hunk-locator", null, locatorChildren));
+  }
+  hunkChildren.push(pre);
+  const hunk = h(doc, "section.hunk#" + hunkId, null, hunkChildren);
   const fileBody = h(doc, "div.file-body", null, [hunk]);
   return h(doc, "details.file#" + id, null, [summary, fileBody]);
 }
@@ -229,6 +241,7 @@ export function buildFixtureDocument() {
       added: 12,
       deleted: 3,
       hunkId: "hunk-a1",
+      line: 1, // the `@@ -1,3 +1,4 @@` header's new-side start (issue #108)
       // A hostile diff line: if the presenter ever built markup from this string it
       // would execute; because it only ever relocates/clones text nodes, it stays text.
       diffText:
@@ -242,6 +255,7 @@ export function buildFixtureDocument() {
       added: 4,
       deleted: 0,
       hunkId: "hunk-b0",
+      line: 11,
       diffText: "@@ -10,0 +11,4 @@\n+    added = True\n",
     })
   );
@@ -252,6 +266,7 @@ export function buildFixtureDocument() {
       added: 7,
       deleted: 7,
       hunkId: "hunk-b1",
+      line: 5,
       diffText: "@@ -5,7 +5,7 @@\n context\n-    before()\n+    after()\n",
     })
   );
@@ -298,6 +313,23 @@ export function memoryStorage(seed = null) {
   };
 }
 
+// A dependency-free stand-in for `navigator.clipboard` (issue #108): records what the
+// copy affordance wrote, or refuses every write when `reject` is set — the browser that
+// gates clipboard access, which must fall through to the legacy copy path.
+export function memoryClipboard({ reject = false } = {}) {
+  const writes = [];
+  return {
+    writes,
+    writeText(text) {
+      if (reject) {
+        return Promise.reject(new Error("clipboard denied"));
+      }
+      writes.push(String(text));
+      return Promise.resolve();
+    },
+  };
+}
+
 // Run app.js against a document in the given protocol (default served/"http:").
 // `dispositions`, when given, is the `{stepId: state}` map a resumed session's
 // dispositions.json would carry — the harness serves it back through fetch so the
@@ -313,6 +345,7 @@ export function loadCockpit({
   resumeSeq = null,
   sessionStorage = null,
   run = "run-1",
+  clipboard = memoryClipboard(),
 } = {}) {
   const location = { protocol, hash: "", pathname: "/review.html" };
   const window = {
@@ -368,13 +401,18 @@ export function loadCockpit({
   };
 
   const sandbox = { window, document: doc, location, fetch, console, Promise };
+  // `navigator` exists only when a clipboard is supplied — pass `clipboard: null` to model
+  // a browser with no Clipboard API at all (the legacy-copy fallback, issue #108).
+  if (clipboard) {
+    sandbox.navigator = { clipboard };
+  }
   window.document = doc;
   vm.runInNewContext(readFileSync(APP_JS, "utf8"), sandbox, { filename: "app.js" });
 
   // Fire DOMContentLoaded — annotateDiff, dispositions, questions, then the deck.
   doc.dispatchEvent(new DomEvent("DOMContentLoaded", { bubbles: false }));
 
-  return { document: doc, window, location };
+  return { document: doc, window, location, clipboard };
 }
 
 // Dispatch a bubbling click on an element and return the event.

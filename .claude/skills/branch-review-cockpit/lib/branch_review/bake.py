@@ -408,6 +408,35 @@ def inject_qa(html: str, qa_section: str) -> str:
     return html[:idx] + insert + html[idx:]
 
 
+# One rendered open-in-editor deep link (issue #108): the whole ``<a class="hunk-editor"
+# …>label</a>``, matched by its renderer-authored class and closed at the first ``</a>``
+# (its body is a fixed trusted word — no nesting to worry about). Tolerant of attribute
+# order and of single/double quotes, since the class attribute is what identifies it.
+# ``hunk-editor`` must be a whole class token: the lookarounds exclude a neighbouring
+# ``-`` (which ``\b`` would treat as a boundary), so a future ``hunk-editor-icon`` class
+# is not silently swept away with the link it decorates.
+_EDITOR_LINK = re.compile(
+    r"<a\b[^>]*\bclass\s*=\s*[\"'][^\"']*(?<![\w-])hunk-editor(?![\w-])[^\"']*[\"'][^>]*>"
+    r".*?</a\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_editor_links(html: str) -> str:
+    """Remove every open-in-editor deep link, leaving the copyable ``path:line`` (issue #108).
+
+    An editor link encodes **this machine's** absolute path to the repository, so it is
+    exactly the kind of thing a portable artifact must not carry: on any other machine (or
+    after the repo moves) it addresses a file that isn't there, and the artifact is meant
+    to be a self-contained record, not a control surface bound to one checkout. The
+    locator's ``path:line`` text — repo-relative and true anywhere — stays, so the baked
+    record still tells a later reader exactly where each hunk lived.
+
+    Idempotent: a second bake finds no links and changes nothing.
+    """
+    return _EDITOR_LINK.sub("", html)
+
+
 # A ``<meta …>`` tag (DOTALL: the authored CSP meta spans two lines) and the ``content``
 # attribute within it. The CSP is identified by ``http-equiv`` rather than attribute
 # order, so a meta with ``content`` before ``http-equiv`` is still matched.
@@ -468,11 +497,16 @@ def bake_html(
     Q&A log, injected together at the seam so re-baking stays idempotent. When
     ``dispositions`` is given, each step's state is also stamped onto its own
     ``<details>`` tag (:func:`bake_dispositions_html`) so the saved page shows the
-    tints without script. Pure string→string: the I/O lives in :func:`bake_review`.
+    tints without script. Machine-bound editor deep links are stripped
+    (:func:`strip_editor_links`) so the record stays portable. Pure string→string: the
+    I/O lives in :func:`bake_review`.
     Returns the baked HTML and whether the CSP was swapped.
     """
     if dispositions is not None:
         html = bake_dispositions_html(html, dispositions)
+    # Machine-bound deep links never travel with the artifact (issue #108); the copyable
+    # path:line they sat beside does.
+    html = strip_editor_links(html)
     html = inject_qa(html, outcome_html + render_qa_html(exchanges))
     csp_swapped = False
     if swap_to_strict:

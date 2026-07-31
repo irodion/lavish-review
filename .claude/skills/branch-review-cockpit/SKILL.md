@@ -207,8 +207,9 @@ a failed fetch never fails the review. The repo config also folds its
 relay it and stop. The collector computes the `base...HEAD` diff and writes to
 `.review-agent/`:
 
-- `context.json` — base, branch, head SHA, merge-base, changed-file count, and the
-  **`goal` block** — the resolved Goal Evidence `{text, source, provenance}`, or
+- `context.json` — base, branch, head SHA, merge-base, changed-file count, this
+  machine's absolute `repo_root` (what the renderer makes editor deep links absolute
+  with), and the **`goal` block** — the resolved Goal Evidence `{text, source, provenance}`, or
   `null` when none was found. Goal text is **untrusted data** (issue bodies and
   commit messages are attacker-writable): never hand-paste `goal.text` into HTML —
   use the pre-escaped goal block in `fragments.html`.
@@ -230,8 +231,10 @@ relay it and stop. The collector computes the `base...HEAD` diff and writes to
   never hand-type `old_path`. `hunks` (on an included body only) is that file's hunk
   index `[{index, anchor, header_html}, …]` — the 1-based `index` an evidence `hunk`
   ref names, the `anchor` element id its link targets (**read it here, never hand-type
-  it**), and `header_html`, the `@@` header line already escaped and marker-wrapped
-  (like `path_html`) for a hunk label if you show one; an omitted body has no `hunks`.
+  it**), `header_html`, the `@@` header line already escaped and marker-wrapped
+  (like `path_html`) for a hunk label if you show one, and `new_start`, the hunk's
+  new-side start line (absent when the header is not a two-way `@@` — the renderer's
+  copy-`path:line` and editor deep link ride on it); an omitted body has no `hunks`.
   `disposition` is the Change Classifier's verdict
   (`include-body` / `omit:lockfile` / `omit:excluded` / `omit:too-large`); `added`/
   `deleted` are the file's line stats (always present, even when the body is
@@ -239,7 +242,7 @@ relay it and stop. The collector computes the `base...HEAD` diff and writes to
   fallback — when `true`, **every** file's body is omitted and the cockpit shows a
   file-list + stats banner (carry `too_large_reason` into it) rather than diffs.
 - `resolved-config.json` — the resolved policy for this run: `{base, styling, focus,
-  language_hints, pause, lavish_version, sessionstart_hook, goal_remote_fetch}`.
+  language_hints, pause, lavish_version, sessionstart_hook, editor, goal_remote_fetch}`.
   Read it after collecting:
   `styling` drives the renderer/linter policy and step 6's `--styling`; `focus`/`language_hints`
   are the authoring lenses for step 3; a non-null `lavish_version` pins the Lavish
@@ -361,7 +364,9 @@ python3 .claude/skills/branch-review-cockpit/scripts/lint_cockpit.py .review-age
 Pass `--styling cdn` **only** when `resolved-config.json` resolved `styling: cdn`;
 otherwise omit it (the default `vendored` rejects any remote asset). It fails on
 unescaped `<`/`>` in an untrusted region, inline JS, a remote `src`/`href` under
-vendored styling, or a missing/weak CSP. `--csp-mode interactive`
+vendored styling, a `src`/`href` naming an unsanctioned URL scheme (only `http(s)`,
+`mailto`, and the local editor schemes the machine `editor` key can select are
+allowed — a `data:`/`file:`/other app scheme fails), or a missing/weak CSP. `--csp-mode interactive`
 accepts the interactive CSP from step 5 (still bounded — a wildcard or arbitrary
 remote host fails); omit it (or pass `--csp-mode strict`) only for a portable
 `file://` export. `--analysis` points at the `analysis.json` you validated in step 4
@@ -530,6 +535,8 @@ attributed to the reviewer (ADR-0012/0016: the tool prints no verdict of its
 own) — followed by the Q&A log (disposition updates filtered out: they are state,
 not conversation). Each step's disposition is also stamped onto its `<details>`
 tag, so the saved page shows the tints statically — no script runs on `file://`.
+Any open-in-editor deep link is stripped (it encodes this machine's absolute checkout
+path, so it would address nothing elsewhere); each hunk's copyable `path:line` stays.
 `--md` also writes `review.md` (the review + outcome + Q&A) for pasting into a PR
 as the *human's* review. The strict lint is the post-bake tripwire — never share a
 cockpit that fails it.

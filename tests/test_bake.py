@@ -32,6 +32,7 @@ from branch_review.bake import (
     render_outcome_html,
     render_qa_html,
     render_qa_markdown,
+    strip_editor_links,
     swap_csp,
 )
 from branch_review.escape import (
@@ -599,6 +600,63 @@ def test_bake_carries_the_contrast_card_into_the_self_contained_record() -> None
     assert 'data-disposition="looks-right"' in baked  # the bake still stamped the step
     # Self-contained with the card in place: the strict linter passes over the baked record.
     assert lint_cockpit(baked, csp_mode="strict") == []
+
+
+_LOCATOR = (
+    '<div class="hunk-locator">'
+    f'<code class="hunk-path">{fragment("src/app.py:42")}</code>'
+    '<a class="hunk-editor" href="vscode://file/Users/me/repo/src/app.py:42"'
+    ' title="Open in VS Code">open</a>'
+    "</div>"
+)
+
+
+def test_bake_strips_editor_links_and_keeps_the_copy_target() -> None:
+    # An editor link encodes THIS machine's absolute checkout path, so it must not travel
+    # with the portable record (issue #108) — while the repo-relative `path:line` the
+    # reviewer copies stays, because it is true on any machine.
+    cockpit = _BASE_COCKPIT.replace("<p>prose</p>", f"<p>prose</p>{_LOCATOR}")
+
+    baked, _swapped = bake_html(cockpit, [])
+
+    assert "hunk-editor" not in baked
+    assert "vscode://" not in baked
+    assert "/Users/me/repo" not in baked  # no machine path survives anywhere
+    assert f'<code class="hunk-path">{fragment("src/app.py:42")}</code>' in baked
+    assert '<div class="hunk-locator">' in baked
+    # Still self-contained and lint-green under the strict policy.
+    assert lint_cockpit(baked, csp_mode="strict") == []
+
+
+def test_strip_editor_links_is_idempotent_and_leaves_other_links_alone() -> None:
+    other = '<a class="narrating-step" href="#t1.s1">t1.s1</a>'
+    html = f"{_LOCATOR}{other}"
+    once = strip_editor_links(html)
+    assert once == strip_editor_links(once)  # a second bake changes nothing
+    assert other in once  # only the editor link is removed
+    assert 'class="hunk-path"' in once
+
+
+def test_strip_editor_links_matches_a_whole_class_token_only() -> None:
+    # `hunk-editor` must be the class, not a prefix of one: a future `hunk-editor-icon`
+    # (or a `js-hunk-editor` wrapper) is a different element and must survive the bake.
+    neighbours = (
+        '<a class="hunk-editor-icon" href="#x">i</a>'
+        '<a class="js-hunk-editor" href="#y">j</a>'
+        '<span class="hunk-editorial">note</span>'
+    )
+    assert strip_editor_links(neighbours) == neighbours
+    # ...while the real link is still stripped when it sits among them, including when
+    # it carries other classes and the attribute order differs.
+    real = '<a href="vscode://file/repo/a.py:1" class="chip hunk-editor">open</a>'
+    assert strip_editor_links(neighbours + real) == neighbours
+
+
+def test_bake_leaves_a_locator_without_an_editor_link_untouched() -> None:
+    # The overwhelmingly common case (no `editor` configured): nothing to strip, and the
+    # locator region round-trips byte-for-byte.
+    plain = f'<div class="hunk-locator"><code class="hunk-path">{fragment("a.py:1")}</code></div>'
+    assert strip_editor_links(plain) == plain
 
 
 _TOON_DISPOSITION = (

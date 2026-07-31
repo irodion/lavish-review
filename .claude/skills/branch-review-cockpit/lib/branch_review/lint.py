@@ -22,6 +22,15 @@ Rules enforced:
   default), any remote ``src``/``href`` (``http(s):`` or protocol-relative ``//``)
   fails — the cockpit must render with local vendored assets only. ``styling: cdn``
   is the opt-in that relaxes this.
+* **Only sanctioned URL schemes.** A ``src``/``href`` that names a scheme at all must
+  name one of a closed set: ``http``/``https`` (governed by the remote rule above),
+  ``mailto``, or one of the local **editor** schemes the machine ``editor`` config key
+  can select (:data:`~branch_review.config.EDITOR_SCHEMES`, issue #108 — the cockpit's
+  open-in-editor deep links). Anything else — ``data:``, ``file:``, ``ftp:``, an
+  unsanctioned app scheme — fails. Relative paths and ``#`` fragments name no scheme and
+  are unaffected. The editor allowlist is *derived from* the config vocabulary, so
+  sanctioning a new editor is a single edit and the tripwire can never drift from what
+  the resolver accepts.
 * **Strict CSP.** A ``<meta http-equiv="Content-Security-Policy">`` must be present
   and meet the full baseline of :data:`~branch_review.escape.STRICT_CSP`, not just
   constrain scripts: ``default-src 'none'`` (deny every resource type by default),
@@ -77,6 +86,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
+from branch_review.config import EDITOR_SCHEMES
 from branch_review.escape import (
     LAVISH_CDN,
     QA_SEAM_CLOSE,
@@ -90,6 +100,20 @@ from branch_review.escape import (
 # or a protocol-relative ``//host`` one. Local relative paths (``assets/app.js``),
 # fragments (``#x``), and ``mailto:`` links are not remote resource loads.
 _REMOTE_PREFIXES = ("http://", "https://", "//")
+
+# A leading URL scheme, per RFC 3986: a letter followed by letters/digits/``+-.`` then
+# ``:``. A value with no match names no scheme (a relative path, a ``#`` fragment, a
+# ``//host`` protocol-relative reference) and is governed by the remote rule instead.
+_SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
+
+# The complete set of schemes a cockpit URL may name. ``http``/``https`` are here because
+# the remote rule (not this one) decides whether they are allowed under the current
+# styling; ``mailto`` is a navigation intent that loads nothing. The editor schemes come
+# straight from the config vocabulary (issue #108), so the linter allows exactly the
+# editors the Config Resolver accepts — one table, two readers. Everything else fails:
+# ``data:``/``file:``/``ftp:``/an arbitrary app scheme has no business in a cockpit, and
+# ``javascript:`` is caught earlier by the inline-JS rule with its own message.
+_ALLOWED_SCHEMES = frozenset({"http", "https", "mailto"}) | EDITOR_SCHEMES
 
 # The WHATWG URL parser strips ASCII tab and newlines (U+0009/000A/000D) from
 # anywhere in a URL before resolving its scheme, so ``java\tscript:`` and
@@ -355,6 +379,21 @@ class _TagAuditor(HTMLParser):
                             f"<{tag}> {name}={value!r} is remote under styling: vendored",
                         )
                     )
+                else:
+                    # Whatever the styling, the scheme itself must be sanctioned: the
+                    # remote rule bounds where http(s) may load from, this bounds which
+                    # protocols may appear at all — so an editor deep link is allowed by
+                    # name while ``data:``/``file:``/an unsanctioned app scheme is not.
+                    # ``javascript:`` never reaches here: the branch above already named
+                    # it as inline JS, and one attribute earns one error.
+                    scheme = _SCHEME_RE.match(value)
+                    if scheme and scheme.group(1).lower() not in _ALLOWED_SCHEMES:
+                        self.errors.append(
+                            LintError(
+                                "unsanctioned-scheme",
+                                f"<{tag}> {name}={value!r} uses an unsanctioned URL scheme",
+                            )
+                        )
                 # An in-page anchor (<a href="#frag">) — the fragment must resolve to
                 # an element id. Bare "#" (scroll-to-top) carries no fragment to check.
                 if tag == "a" and name == "href" and value.startswith("#") and len(value) > 1:

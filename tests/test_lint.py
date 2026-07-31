@@ -195,6 +195,82 @@ def test_remote_asset_rules(
         assert expected in _rules(errors), f"{label}: {_rules(errors)}"
 
 
+# --- sanctioned URL schemes (issue #108) -------------------------------------
+
+# (label, body html, styling, expected rule or None). The editor deep links the cockpit
+# renders are local app URLs, so the tripwire has to learn *exactly* those schemes without
+# opening the door to any other protocol — and without loosening the remote rule.
+_SCHEME_CASES = [
+    (
+        "vscode-link-ok",
+        '<a class="hunk-editor" href="vscode://file/Users/me/repo/src/app.py:12">open</a>',
+        "vendored",
+        None,
+    ),
+    (
+        "cursor-link-ok",
+        '<a class="hunk-editor" href="cursor://file/Users/me/repo/src/app.py:12">open</a>',
+        "vendored",
+        None,
+    ),
+    (
+        "zed-link-ok",
+        '<a class="hunk-editor" href="zed://file/Users/me/repo/src/app.py:12">open</a>',
+        "vendored",
+        None,
+    ),
+    ("mailto-ok", '<a href="mailto:someone@example.com">mail</a>', "vendored", None),
+    # An editor that is NOT in the config vocabulary is not sanctioned, however
+    # plausible it looks — the allowlist is the config table, not "app-ish schemes".
+    (
+        "unsanctioned-editor-scheme",
+        '<a class="hunk-editor" href="idea://open?file=/repo/src/app.py">open</a>',
+        "vendored",
+        "unsanctioned-scheme",
+    ),
+    ("data-uri", '<img src="data:image/svg+xml,<svg/>">', "vendored", "unsanctioned-scheme"),
+    ("file-uri", '<a href="file:///etc/passwd">x</a>', "vendored", "unsanctioned-scheme"),
+    ("ftp-uri", '<img src="ftp://example.com/x.png">', "vendored", "unsanctioned-scheme"),
+    # Relaxing styling to `cdn` relaxes only *where http(s) may load from*; it never
+    # sanctions another protocol.
+    ("data-uri-still-fails-under-cdn", '<img src="data:,x">', "cdn", "unsanctioned-scheme"),
+    # ...and the remote rule keeps its own verdict: an http(s) URL is judged by styling,
+    # never waved through as "a known scheme".
+    (
+        "remote-still-fails-under-vendored",
+        '<img src="https://cdn.example/x.png">',
+        "vendored",
+        "remote-asset",
+    ),
+]
+
+
+@pytest.mark.parametrize(("label", "body", "styling", "expected"), _SCHEME_CASES, ids=lambda c: c)
+def test_url_scheme_rules(label: str, body: str, styling: str, expected: str | None) -> None:
+    errors = lint_cockpit(_cockpit(body=body), styling=styling)
+    if expected is None:
+        assert _rules(errors) == set(), f"{label}: {errors}"
+    else:
+        assert expected in _rules(errors), f"{label}: {_rules(errors)}"
+
+
+def test_javascript_uri_is_reported_once_as_inline_js() -> None:
+    # `javascript:` is a scheme the allowlist also excludes, but it already has a rule of
+    # its own with a clearer message; one attribute must earn exactly one error.
+    errors = lint_cockpit(_cockpit(body='<a href="javascript:alert(1)">x</a>'))
+    assert _rules(errors) == {"inline-js"}
+    assert len(errors) == 1
+
+
+def test_sanctioned_schemes_are_exactly_the_config_editors() -> None:
+    # The linter's allowlist is derived from the Config Resolver's editor table, so a new
+    # editor cannot be accepted by config while its links fail lint (or vice versa).
+    from branch_review.config import EDITORS
+    from branch_review.lint import _ALLOWED_SCHEMES
+
+    assert {"http", "https", "mailto"} | {s for s, _label in EDITORS.values()} == _ALLOWED_SCHEMES
+
+
 # --- CSP ---------------------------------------------------------------------
 
 # A baseline-complete strict policy; each case below perturbs one directive off it.

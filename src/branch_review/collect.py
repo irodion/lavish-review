@@ -250,6 +250,12 @@ class ReviewContext:
     # ``{text, source, provenance}`` — or ``None`` when no goal was found (the
     # cockpit's L0 then says so rather than dressing an inferred intent up as one).
     goal: dict[str, str] | None = None
+    # This machine's absolute path to the repository root (issue #108). The cockpit's
+    # optional open-in-editor deep links are built from it — an editor URL must address
+    # the file on disk, which no repo-relative path can. It is machine-specific by
+    # nature, which is exactly why it is run metadata (regenerated every collection)
+    # rather than anything committed, and why the bake strips the links it produces.
+    repo_root: str | None = None
 
 
 def _build_context(
@@ -273,6 +279,7 @@ def _build_context(
         generated_at=now.isoformat(),
         changed_file_count=len(files),
         is_empty=not files,
+        repo_root=str(cwd),
     )
     return context, files
 

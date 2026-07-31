@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from branch_review.analysis import SCHEMA, step_ids
+from branch_review.config import EDITORS
 from branch_review.coverage import COVERAGE_RULE
 from branch_review.escape import INTERACTIVE_CSP, file_fragment_id, fragment
 from branch_review.lint import lint_cockpit
@@ -265,6 +266,177 @@ def test_render_cockpit_derives_reading_weight_from_real_hunks(tmp_path: Path) -
         ' data-coverage-label="1 of 1 hunk narrated" data-coverage-rule=' in html
     )
     assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+# --- hunk locators + editor deep links (issue #108) ---------------------------
+
+
+def _with_new_start(run_dir: Path, line: int) -> None:
+    """Give the fixture's single hunk a new-side start line, as the collector records."""
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["hunks"][0]["new_start"] = line
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _configure_editor(run_dir: Path, editor: str, root: str) -> None:
+    """Point the run at a machine editor + repo root — the two inputs a deep link needs."""
+    (run_dir / "resolved-config.json").write_text(
+        json.dumps({"styling": "vendored", "editor": editor}), encoding="utf-8"
+    )
+    (run_dir / "context.json").write_text(
+        json.dumps(
+            {"head_sha": "abc123", "generated_at": "2026-07-25T00:00:00", "repo_root": root}
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_render_cockpit_gives_every_hunk_a_copyable_path_line(tmp_path: Path) -> None:
+    # The copy target is machine-independent and unconditional: no editor configured, no
+    # session — the reviewer can still take the coordinates with them (issue #108).
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)
+    _with_new_start(run_dir, 42)
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert '<div class="hunk-locator">' in html
+    assert f'<code class="hunk-path">{fragment("src/app.py:42")}</code>' in html
+    assert "hunk-editor" not in html  # no editor configured → no link at all
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_links_hunks_into_the_configured_editor(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)
+    _with_new_start(run_dir, 42)
+    _configure_editor(run_dir, "vscode", "/Users/me/repo")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert (
+        '<a class="hunk-editor" href="vscode://file/Users/me/repo/src/app.py:42"'
+        ' title="Open in VS Code">open</a>' in html
+    )
+    # The copy target rides alongside — the link is the addition, never the replacement.
+    assert f'<code class="hunk-path">{fragment("src/app.py:42")}</code>' in html
+    # And the linter's scheme allowlist passes it (the sanctioned-scheme criterion).
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+# Driven off the config table itself, not a copy of it: a newly sanctioned editor gets
+# render coverage the moment it is added, instead of silently having none.
+@pytest.mark.parametrize(
+    ("editor", "scheme"),
+    sorted((name, scheme) for name, (scheme, _label) in EDITORS.items()),
+)
+def test_render_cockpit_uses_each_editors_own_scheme(
+    tmp_path: Path, editor: str, scheme: str
+) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _with_new_start(run_dir, 7)
+    _configure_editor(run_dir, editor, "/repo")
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+    assert f'href="{scheme}://file/repo/src/app.py:7"' in html
+
+
+def test_render_cockpit_percent_encodes_a_hostile_path_in_the_editor_url(tmp_path: Path) -> None:
+    # A file name is untrusted: a `#` would truncate the URL at a fragment, a space would
+    # break it, and a quote would break out of the attribute. Encoding + escaping covers all
+    # three; the separators and a drive-letter colon stay literal.
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    hostile = 'src/a b#c"<d>.py'
+    manifest["files"][0]["path"] = hostile
+    manifest["files"][0]["path_html"] = fragment(hostile)
+    manifest["files"][0]["hunks"][0]["new_start"] = 3
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    # The analysis cites src/app.py; repoint it at the renamed fixture path.
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    analysis["threads"][0]["paths"] = [hostile]
+    analysis["threads"][0]["steps"][0]["evidence"][0]["path"] = hostile
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+    _configure_editor(run_dir, "vscode", "/repo")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert 'href="vscode://file/repo/src/a%20b%23c%22%3Cd%3E.py:3"' in html
+    assert '"<d>' not in html  # neither the attribute nor the visible text carries raw markup
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_links_from_a_repo_at_the_filesystem_root(tmp_path: Path) -> None:
+    # `/` normalizes to an EMPTY prefix — the join still yields an absolute `/src/app.py`.
+    # Pinned because "empty prefix" and "no repo root recorded" are easy to conflate, and
+    # conflating them would silently drop every link on such a checkout.
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _with_new_start(run_dir, 5)
+    _configure_editor(run_dir, "vscode", "/")
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+    assert 'href="vscode://file/src/app.py:5"' in html
+
+
+def test_render_cockpit_windows_root_keeps_a_leading_slash(tmp_path: Path) -> None:
+    # `vscode://file/C:/repo/...` — a drive-lettered root still forms an absolute file URL,
+    # and the backslashes git never emits are normalized rather than encoded.
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _with_new_start(run_dir, 5)
+    _configure_editor(run_dir, "vscode", "C:\\repo")
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+    assert 'href="vscode://file/C:/repo/src/app.py:5"' in html
+
+
+@pytest.mark.parametrize(
+    ("label", "new_start"),
+    [("absent (unparseable header)", None), ("no new side (deleted file)", 0)],
+    ids=lambda c: c if isinstance(c, str) else str(c),
+)
+def test_render_cockpit_omits_the_locator_without_a_real_line(
+    tmp_path: Path, label: str, new_start: int | None
+) -> None:
+    # No line to point at → no locator at all, rather than a `path:0` that opens nothing.
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    if new_start is not None:
+        _with_new_start(run_dir, new_start)
+    _configure_editor(run_dir, "vscode", "/repo")
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+    assert "hunk-locator" not in html
+    assert "hunk-editor" not in html
+
+
+@pytest.mark.parametrize(
+    ("label", "config", "context"),
+    [
+        ("editor none", {"styling": "vendored", "editor": "none"}, {"repo_root": "/repo"}),
+        ("editor absent", {"styling": "vendored"}, {"repo_root": "/repo"}),
+        ("no repo root", {"styling": "vendored", "editor": "vscode"}, {}),
+        # A hand-edited artifact naming an editor the resolver would have rejected: the
+        # renderer stays tolerant and emits no link rather than inventing a scheme.
+        ("unknown editor", {"styling": "vendored", "editor": "emacs"}, {"repo_root": "/repo"}),
+    ],
+    ids=lambda c: c if isinstance(c, str) else str(c),
+)
+def test_render_cockpit_emits_no_editor_link_without_both_inputs(
+    tmp_path: Path, label: str, config: dict[str, str], context: dict[str, str]
+) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _with_new_start(run_dir, 9)
+    (run_dir / "resolved-config.json").write_text(json.dumps(config), encoding="utf-8")
+    (run_dir / "context.json").write_text(json.dumps(context), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert "hunk-editor" not in html
+    assert 'class="hunk-path"' in html  # the copy affordance never depends on an editor
 
 
 def test_render_cockpit_stamps_moved_lines_and_legend(tmp_path: Path) -> None:

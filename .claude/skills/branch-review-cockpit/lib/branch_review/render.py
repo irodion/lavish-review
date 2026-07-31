@@ -13,9 +13,12 @@ import json
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from branch_review.analysis import step_ids, validate_analysis
+from branch_review.config import EDITORS
 from branch_review.coverage import (
     COVERAGE_RULE,
     Coverage,
@@ -127,7 +130,23 @@ def _isolation_note(run_dir: Path) -> str:
     )
 
 
-def _run_meta(run_dir: Path) -> str:
+def _context(run_dir: Path) -> Mapping[str, object]:
+    """The collector's ``context.json`` as a mapping, or ``{}`` when absent/malformed.
+
+    The one read of that file the renderer makes: the run-identity meta (:func:`_run_meta`)
+    and the editor deep-link root (:func:`_editor_policy`) both consume it, so it is parsed
+    once per render rather than once per consumer. Both readers are tolerant by design —
+    a missing file degrades each feature on its own terms — so "absent" and "not an object"
+    collapse to the same empty mapping here.
+    """
+    path = run_dir / "context.json"
+    if not path.exists():
+        return {}
+    context = _load_json(path)
+    return context if isinstance(context, Mapping) else {}
+
+
+def _run_meta(context: Mapping[str, object]) -> str:
     """A ``<meta name="brc-run">`` stamping this run's diff identity, or ``""``.
 
     The served cockpit's client store (``assets/app.js``, issue #112) keys its
@@ -151,12 +170,6 @@ def _run_meta(run_dir: Path) -> str:
     ``context.json`` is), the meta is omitted and the store stays inert (absence
     discards) rather than fall back to a weaker, reusable identity.
     """
-    path = run_dir / "context.json"
-    if not path.exists():
-        return ""
-    context = _load_json(path)
-    if not isinstance(context, Mapping):
-        return ""
     head = context.get("head_sha")
     generated_at = context.get("generated_at")
     if not isinstance(head, str) or not head:
@@ -399,10 +412,136 @@ def _has_moved_lines(files: Sequence[Mapping[str, object]]) -> bool:
     return any(_moved_positions(hunk) for entry in files for hunk in _items(entry.get("hunks")))
 
 
+@dataclass(frozen=True)
+class EditorPolicy:
+    """How this machine turns a hunk into a place you can open (issue #108).
+
+    Two affordances ride on every rendered hunk, and this carries what the second needs:
+
+    * the **copy ``path:line``** target — always rendered, machine-independent, and the
+      one thing that survives the bake; and
+    * an optional **open-in-editor** deep link — ``<scheme>://file<abs path>:<line>`` —
+      emitted only when the machine config names an ``editor`` *and* the collector
+      recorded a ``repo_root`` to make absolute. Either missing means no link, never a
+      broken one: a relative editor URL addresses nothing.
+
+    ``scheme``/``label`` come from :data:`branch_review.config.EDITORS` (the sanctioned
+    vocabulary the Cockpit Linter allows); ``root`` is ``context.json``'s ``repo_root``,
+    already normalized by :func:`_editor_policy` into the POSIX prefix the URL needs, so
+    the per-hunk :func:`_editor_href` only concatenates. :data:`NO_EDITOR` is the default
+    and yields :data:`DISABLED_EDITOR` — a cockpit byte-identical to one rendered before
+    editor links existed.
+
+    ``enabled`` keys on the **scheme** alone, because :func:`_editor_policy` only ever
+    names one after validating the root: an empty ``root`` is the legitimate normalization
+    of a repo checked out at ``/`` (the prefix is nothing; the join still yields an
+    absolute ``/path``), not the absence of a root, and the two must not be conflated.
+    """
+
+    scheme: str = ""
+    label: str = ""
+    root: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.scheme)
+
+
+DISABLED_EDITOR = EditorPolicy()
+
+
+def _editor_root(raw: str) -> str:
+    """``raw`` as the absolute POSIX prefix an editor URL is built on.
+
+    Git speaks ``/`` separators, so a Windows root's backslashes are normalized to match,
+    any trailing slash is dropped (the join adds exactly one), and a leading ``/`` is
+    forced — that is what makes a drive-lettered root form ``vscode://file/C:/repo/…``, the
+    shape VS Code and its forks parse. A root of ``/`` normalizes to the **empty** prefix,
+    which is correct: the join then yields ``/path``, still absolute. Done **once per run**
+    rather than per hunk — it depends only on the root, and a large changeset renders
+    hundreds of hunks.
+    """
+    root = raw.replace("\\", "/").rstrip("/")
+    if not root or root.startswith("/"):
+        return root
+    return f"/{root}"
+
+
+def _editor_policy(config: Mapping[str, object], context: Mapping[str, object]) -> EditorPolicy:
+    """Resolve the run's editor deep-link policy from ``resolved-config.json`` + ``context.json``.
+
+    Tolerant, like the rest of the renderer: an absent, ``none``, or unrecognized ``editor``
+    (the Config Resolver already rejects an unknown value loudly at collect time, so reaching
+    here means a hand-edited artifact) yields :data:`DISABLED_EDITOR` — no links, never a
+    guessed scheme. Same for a missing ``repo_root``: an editor URL must be absolute.
+    """
+    editor = config.get("editor")
+    if not isinstance(editor, str) or editor not in EDITORS:
+        return DISABLED_EDITOR
+    # Validate what the collector RECORDED (a non-blank string), then normalize — the
+    # normalized prefix is legitimately empty for a repo at ``/``, so testing it instead
+    # would read that as "no root" and drop the links.
+    raw_root = context.get("repo_root")
+    if not isinstance(raw_root, str) or not raw_root.strip():
+        return DISABLED_EDITOR
+    scheme, label = EDITORS[editor]
+    return EditorPolicy(scheme=scheme, label=label, root=_editor_root(raw_root))
+
+
+def _editor_href(policy: EditorPolicy, path: str, line: int) -> str:
+    """The absolute ``<scheme>://file/<abs path>:<line>`` URL for one hunk.
+
+    The repo-relative path is joined onto the run's already-normalized absolute ``root``
+    (:func:`_editor_root`) and percent-encoded — it is untrusted data, and a ``#``/``?``/
+    space in a filename would otherwise truncate or mangle the URL — keeping ``/`` and
+    ``:`` literal so the separators and a drive letter survive. The ``:<line>`` suffix is
+    appended after encoding: it is the URL's own syntax, not part of the file name.
+    """
+    absolute = quote(f"{policy.root}/{path}", safe="/:")
+    return f"{policy.scheme}://file{absolute}:{line}"
+
+
+def _hunk_locator(
+    entry: Mapping[str, object], hunk: Mapping[str, object], policy: EditorPolicy
+) -> str:
+    """The hunk's location affordances: a copyable ``path:line`` and, when configured, a link.
+
+    The review is local, but the cockpit is otherwise a dead end — verifying a hunk means
+    re-finding it in an editor by hand (issue #108). This renders the coordinates *at* the
+    hunk: the ``path:line`` text a reviewer can copy (``app.js`` injects the copy button, so
+    the affordance exists identically served and on ``file://``), plus the machine's
+    open-in-editor link when one is configured.
+
+    ``line`` is the hunk's **new-side start** from the manifest (``new_start``). It is absent
+    for a header shape this diff model does not speak, and ``0`` for a hunk with no new side
+    at all (a wholly deleted file's ``+0,0``); both yield no locator rather than a location
+    that does not exist. The path crosses the Escape Boundary through :func:`fragment` — a
+    file name is untrusted — and the whole block sits on the trusted ``<section>`` frame,
+    outside the ``<pre>``'s untrusted region, exactly like the narrated margin beside it.
+    """
+    line = hunk.get("new_start")
+    if not isinstance(line, int) or isinstance(line, bool) or line < 1:
+        return ""
+    path = _text(entry.get("path"))
+    if not path:
+        return ""
+    link = ""
+    if policy.enabled:
+        href = escape_text(_editor_href(policy, path, line))
+        label = escape_text(f"Open in {policy.label}")
+        link = f'<a class="hunk-editor" href="{href}" title="{label}">open</a>'
+    return (
+        '<div class="hunk-locator">'
+        f'<code class="hunk-path">{fragment(f"{path}:{line}")}</code>{link}'
+        "</div>"
+    )
+
+
 def _annotate_hunks(
     fragment_html: str,
     entry: Mapping[str, object],
     by_hunk: Mapping[str, Sequence[str]],
+    policy: EditorPolicy,
 ) -> str:
     """Splice each hunk's narrating-step margin (and move classification) into a file's
     pre-escaped diff fragment.
@@ -411,8 +550,9 @@ def _annotate_hunks(
     the per-hunk ``<section class="hunk" id=…>`` whose id the manifest also carries (the
     Hunk Anchorer, :func:`branch_review.escape.file_diff_fragment`). For every hunk in the
     manifest we rewrite that section's opening tag to carry its ``data-moved`` positions
-    (issue #106) and insert a margin — the narrating step(s) or the neutral un-narrated
-    marker — directly after it, matched via the shared
+    (issue #106) and insert, directly after it, the hunk's location affordances
+    (:func:`_hunk_locator`, issue #108) and a margin — the narrating step(s) or the neutral
+    un-narrated marker — matched via the shared
     :func:`branch_review.escape.hunk_section_open` so the writer and this splice can't
     desync. The match is the collision-free hunk id (not a parse) and both the rewrite and
     the margin land outside the ``<pre>``'s untrusted region, so the Escape Boundary is
@@ -423,7 +563,11 @@ def _annotate_hunks(
         if not anchor:
             continue
         opening = hunk_section_open(anchor)
-        replacement = _moved_section_open(opening, hunk) + _hunk_margin(by_hunk.get(anchor))
+        replacement = (
+            _moved_section_open(opening, hunk)
+            + _hunk_locator(entry, hunk, policy)
+            + _hunk_margin(by_hunk.get(anchor))
+        )
         fragment_html = fragment_html.replace(opening, replacement, 1)
     return fragment_html
 
@@ -812,6 +956,7 @@ def _render_files(
     manifest: Mapping[str, object],
     by_hunk: Mapping[str, Sequence[str]],
     by_file: Mapping[str, Sequence[str]],
+    policy: EditorPolicy,
 ) -> str:
     rendered = ['<section class="evidence-files">', "<h2>Evidence</h2>"]
     if manifest.get("too_large") is True:
@@ -841,8 +986,9 @@ def _render_files(
                 fragment_html = fragment_path.read_text(encoding="utf-8")
             except OSError as exc:
                 raise RenderError(f"cannot read {fragment_path}: {exc}") from exc
-            # Splice each hunk's narrating-step margin into the pre-escaped diff (#103).
-            body = _annotate_hunks(fragment_html, entry, by_hunk)
+            # Splice each hunk's location affordances (#108) and narrating-step margin
+            # (#103) into the pre-escaped diff.
+            body = _annotate_hunks(fragment_html, entry, by_hunk, policy)
         # A file-level ``{path}`` ref annotates the file *header*, not any hunk — the
         # reviewer sees which step narrates the file as a whole beside its path/stats.
         file_steps = by_file.get(_text(entry.get("path")))
@@ -950,6 +1096,7 @@ def _document(
     analysis: Mapping[str, object],
     manifest: Mapping[str, object],
     fragments_source: str,
+    config: Mapping[str, object],
 ) -> str:
     files = _manifest_files(manifest)
     files_by_path = _file_by_path(files)
@@ -959,7 +1106,11 @@ def _document(
     meta_html = _fragment_block(fragments_source, "meta")
     goal_html = _fragment_block(fragments_source, "goal")
     isolation_note = _isolation_note(run_dir)
-    run_meta = _run_meta(run_dir)
+    # ``context.json`` is read once here and shared: the run-identity meta and the editor
+    # deep-link root are its only two consumers.
+    context = _context(run_dir)
+    policy = _editor_policy(config, context)
+    run_meta = _run_meta(context)
     threads = _items(analysis.get("threads"))
     # The reverse hunk↔step join, computed once here where both the analysis (steps) and
     # the manifest (hunk ids) are in hand, then handed to the L3 files section (#103).
@@ -986,7 +1137,7 @@ def _document(
                 analysis, goal_html, isolation_note, files, files_by_path, coverage
             ),
             *[_render_thread(thread, files_by_path, drive_by) for thread in threads],
-            _render_files(run_dir, files, manifest, by_hunk, by_file),
+            _render_files(run_dir, files, manifest, by_hunk, by_file, policy),
             _render_unnarrated(coverage, files_by_path),
             _render_runner(analysis),
             f"{QA_SEAM_OPEN}{QA_SEAM_CLOSE}",
@@ -1022,7 +1173,7 @@ def render_cockpit(run_dir: Path = DEFAULT_RUN_DIR) -> Path:
     except OSError as exc:
         raise RenderError(f"cannot read {run_dir / 'fragments.html'}: {exc}") from exc
 
-    html = _document(run_dir, analysis, manifest, fragments_source)
+    html = _document(run_dir, analysis, manifest, fragments_source, config)
     lint_errors = lint_cockpit(
         html,
         styling=styling,

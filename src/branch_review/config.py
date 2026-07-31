@@ -15,7 +15,9 @@ Two non-overlapping scopes (DESIGN "Configuration"):
   (the built-in dir/glob excludes — never lockfiles or ``.gitattributes``; see
   :mod:`branch_review.classify`).
 - **Machine policy** (``~/.review-agent/config.yaml``): the ``pause`` sentinel, a
-  default ``styling``, the pinned Lavish version, and whether the SessionStart hook is on.
+  default ``styling``, the pinned Lavish version, whether the SessionStart hook is on,
+  and the ``editor`` this machine opens hunks in (issue #108 — machine-scoped because
+  it names a locally-installed application and produces machine-absolute links).
 
 ``goal_remote_fetch`` (Goal Evidence's tracker access, ADR-0010) is the one key both
 scopes accept — a repo can pin its policy, a machine can go network-free wholesale;
@@ -57,6 +59,32 @@ MACHINE_CONFIG_REL = Path(".review-agent") / "config.yaml"
 VALID_STYLING = ("vendored", "cdn")
 DEFAULT_STYLING = "vendored"
 
+# The sanctioned local editors an ``editor:`` machine key may name, each mapped to
+# ``(url scheme, human label)`` (issue #108). A cockpit hunk can then carry an
+# open-in-editor deep link — ``<scheme>://file<abs path>:<line>`` — beside its
+# copyable ``path:line``, so verifying a hunk does not mean re-finding it by hand.
+#
+# This table is the **one** definition of that vocabulary, and three readers share it:
+# the Config Resolver validates the key against it (an unknown editor is a located
+# error, never a silently-dropped link), the renderer builds the href from it, and the
+# Cockpit Linter's URL tripwire allows exactly these schemes and no others
+# (:data:`EDITOR_SCHEMES`). Adding an editor here is the only way to sanction a scheme —
+# the linter can never drift from what the config accepts. ``none`` (the default) is the
+# deliberate absence: no key, no link, and a cockpit that renders identically to one
+# built before this existed.
+EDITORS: dict[str, tuple[str, str]] = {
+    "vscode": ("vscode", "VS Code"),
+    "vscode-insiders": ("vscode-insiders", "VS Code Insiders"),
+    "cursor": ("cursor", "Cursor"),
+    "zed": ("zed", "Zed"),
+}
+# ``none`` is both a member of the vocabulary and the default — one name, not two.
+NO_EDITOR = "none"
+VALID_EDITORS = (NO_EDITOR, *EDITORS)
+# The URL schemes the sanctioned editors use — the linter's allowlist, derived from
+# the table above rather than re-typed beside it.
+EDITOR_SCHEMES = frozenset(scheme for scheme, _label in EDITORS.values())
+
 # The recognized keys per scope. Anything else is a typo or an unsupported key and is
 # rejected loudly (never silently ignored) so a misspelled ``base_brnach`` can't quietly
 # fall back to auto-detect.
@@ -74,7 +102,7 @@ _REPO_KEYS = frozenset(
 )
 _LIMITS_KEYS = frozenset({"max_file_diff_lines", "max_total_diff_lines"})
 _MACHINE_KEYS = frozenset(
-    {"pause", "styling", "lavish_version", "sessionstart_hook", "goal_remote_fetch"}
+    {"pause", "styling", "lavish_version", "sessionstart_hook", "goal_remote_fetch", "editor"}
 )
 
 _RESOLVED_CONFIG_SCHEMA = "review-resolved-config/0.1"
@@ -303,6 +331,10 @@ class ResolvedConfig:
     pause: str | None
     lavish_version: str | None
     sessionstart_hook: bool = False
+    # The local editor cockpit hunks deep-link into (issue #108), one of
+    # :data:`VALID_EDITORS`. ``none`` (the default) emits no link at all — the copy
+    # ``path:line`` affordance is always there, the link is the opt-in.
+    editor: str = NO_EDITOR
     # Whether Goal Evidence may reach the tracker via ``gh`` (ADR-0010). Defaults on;
     # either scope can switch it off wholesale — repo (committed policy) wins over
     # machine when both set it. Even when on, the collector only fetches when local
@@ -375,6 +407,21 @@ def _styling(value: object, where: str) -> str | None:
     return str(value)
 
 
+def _editor(value: object, where: str) -> str:
+    """Validate a machine ``editor`` value against :data:`VALID_EDITORS`.
+
+    Absent → ``none`` (no deep link). An unrecognized editor is a **located error**, not
+    a silent fallback: a reviewer who typed ``vscodee`` would otherwise get a cockpit with
+    no links and no reason why, and the mistake would be indistinguishable from the
+    default. Same posture as ``styling`` and every unknown key in this module.
+    """
+    if value is None:
+        return NO_EDITOR
+    if value not in VALID_EDITORS:
+        raise ConfigError(f"{where}: editor must be one of {list(VALID_EDITORS)}, got {value!r}")
+    return str(value)
+
+
 def _classifier(repo: dict[str, object]) -> ClassifierConfig:
     """Fold the repo scope's excludes and limits into the Change Classifier policy."""
     limits_raw = repo.get("limits")
@@ -413,7 +460,8 @@ def resolve(
     Each key is resolved by the scopes that define it: ``base_branch`` from the arg or the
     repo; ``styling`` from repo then machine then the built-in default; ``focus``,
     ``language_hints``, and the classifier policy from the repo; ``pause``,
-    ``lavish_version``, and ``sessionstart_hook`` from the machine. Pure: no filesystem —
+    ``lavish_version``, ``sessionstart_hook``, and ``editor`` from the machine. Pure: no
+    filesystem —
     :func:`resolve_config` is the shell that reads the files.
     """
     repo = repo or {}
@@ -447,6 +495,7 @@ def resolve(
         sessionstart_hook=_as_bool(
             machine.get("sessionstart_hook"), "sessionstart_hook", default=False
         ),
+        editor=_editor(machine.get("editor"), "machine config"),
         goal_remote_fetch=goal_remote_fetch,
     )
 
@@ -510,5 +559,6 @@ def resolved_config_dict(resolved: ResolvedConfig, *, base: str) -> dict[str, ob
         "pause": resolved.pause,
         "lavish_version": resolved.lavish_version,
         "sessionstart_hook": resolved.sessionstart_hook,
+        "editor": resolved.editor,
         "goal_remote_fetch": resolved.goal_remote_fetch,
     }
