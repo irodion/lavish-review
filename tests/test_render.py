@@ -638,6 +638,81 @@ def _rewrite_app_fragment(run_dir: Path, sections: str) -> str:
     return fid
 
 
+def _cite_lines(run_dir: Path, start: int, end: int, *, new_start: int, body: int) -> None:
+    """Have t1.s1 cite an inclusive new-side range, and size the hunk it narrows."""
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["hunks"][0]["new_start"] = new_start
+    manifest["files"][0]["hunks"][0]["lines"] = body
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    analysis_path = run_dir / "analysis.json"
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    analysis["threads"][0]["steps"][0]["evidence"][0]["lines"] = [start, end]
+    analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
+
+
+def test_render_cockpit_shows_the_cited_line_range_beside_the_hunk_link(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / ".review-agent"
+    analysis = _write_run(run_dir)
+    _cite_lines(run_dir, 184, 191, new_start=172, body=26)
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    # The range rides beside the link, so the anchor's own text stays the bare file path —
+    # what makes two steps citing one hunk tell themselves apart (rung 1's ambiguity).
+    assert '<span class="evidence-lines">lines 184–191</span>' in html
+    fid = file_fragment_id("src/app.py")
+    assert f'<a href="#hunk-{fid}-1">' in html  # the hunk anchor is unchanged by the range
+    assert lint_cockpit(html, csp_mode="interactive", step_ids=step_ids(analysis)) == []
+
+
+def test_render_cockpit_renders_a_single_cited_line_in_the_singular(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _cite_lines(run_dir, 191, 191, new_start=172, body=26)
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert '<span class="evidence-lines">line 191</span>' in html
+    assert "lines 191" not in html
+
+
+def test_render_cockpit_rejects_a_cited_range_outside_its_hunk(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    # The hunk covers new-side 172..197; a range in the 900s names some other part of the
+    # file entirely. The renderer resolves against the manifest, so this is its to catch.
+    _cite_lines(run_dir, 900, 905, new_start=172, body=26)
+
+    with pytest.raises(RenderError) as excinfo:
+        render_cockpit(run_dir)
+
+    message = str(excinfo.value)
+    assert "lines [900, 905]" in message
+    assert "[172, 197]" in message  # the bound it was measured against, for repair
+
+
+def test_render_cockpit_accepts_a_cited_range_when_the_hunk_has_no_new_start(
+    tmp_path: Path,
+) -> None:
+    # A header this two-way diff model cannot parse records no ``new_start`` (issue #108),
+    # so there is nothing to bound against — the range renders unchecked rather than being
+    # refused on a technicality.
+    run_dir = tmp_path / ".review-agent"
+    _write_run(run_dir)
+    _cite_lines(run_dir, 900, 905, new_start=1, body=1)
+    manifest_path = run_dir / "fragments.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["files"][0]["hunks"][0]["new_start"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    html = render_cockpit(run_dir).read_text(encoding="utf-8")
+
+    assert '<span class="evidence-lines">lines 900–905</span>' in html
+
+
 def test_render_cockpit_narrates_hunks_in_the_margin(tmp_path: Path) -> None:
     run_dir = tmp_path / ".review-agent"
     analysis = _write_run(run_dir)  # t1.s1 anchors src/app.py hunk 1

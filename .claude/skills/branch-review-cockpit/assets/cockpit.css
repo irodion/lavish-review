@@ -566,6 +566,14 @@ details.step > .step-body { padding: 0.75rem 1rem; }
 }
 .evidence-list a:hover { text-decoration: underline; }
 .evidence-list .note { color: var(--muted); }
+/* The cited new-side line range, beside (never inside) the hunk link: monospace so it
+   reads as a location like the hunk locator's path:line, muted so the file path still
+   leads. */
+.evidence-list .evidence-lines {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  color: var(--muted);
+}
 
 /* L3 — per-file evidence: every changed file, body behind <details>. */
 details.file {
