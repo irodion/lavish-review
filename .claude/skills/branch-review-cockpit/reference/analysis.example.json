@@ -27,7 +27,7 @@
             "Confirm the 60s cap is applied after the doubling, so no single wait can exceed 60s."
           ],
           "evidence": [
-            { "path": "src/retry.py", "hunk": 1 }
+            { "path": "src/retry.py", "hunk": 1, "lines": [58, 63] }
           ],
           "attention_notes": [
             { "text": "No test in the diff exercises the new timing — the behavior change is unverified by the suite.", "evidence": [{ "note": "tests/test_retry.py exists but is untouched" }] },
@@ -84,14 +84,14 @@
           "id": "t3.s1",
           "impact": "behavior-preserving",
           "summary": "The delay arithmetic is lifted verbatim into a compute_delay() helper.",
-          "detail": "The extracted body is the same expression, in the same order (double, then clamp). No new branch, no changed constant; the retry loop now calls the helper. The intent is a readability refactor with no behavior change.",
+          "detail": "The extracted body is the same expression, in the same order (double, then clamp). No new branch, no changed constant; the retry loop now calls the helper. The helper is defined just above the loop, so it lands in the *same hunk* as the backoff change — hence the line range: this step is the helper (44-52), t1.s1 is the call site (58-63). Without those ranges both steps would cite one block and neither could show which half it meant. The intent is a readability refactor with no behavior change.",
           "confidence": "high",
           "why_now": "Read alongside the backoff change: this is the same math relocated, so confirming it here lets you trust t1.s1 without re-reading the arithmetic twice.",
           "review_prompts": [
             "Confirm compute_delay() applies the cap after doubling, exactly as the inline version did."
           ],
           "evidence": [
-            { "path": "src/retry.py", "hunk": 2 }
+            { "path": "src/retry.py", "hunk": 1, "lines": [44, 52] }
           ]
         }
       ]
