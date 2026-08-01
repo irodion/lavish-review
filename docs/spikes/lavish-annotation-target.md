@@ -30,7 +30,7 @@ function normalizeTarget(target) {                        // cli.mjs:1332
 }
 ```
 
-Any JSON-serializable object the caller hands to `queuePrompt({target})` survives verbatim. The SDK populates `target` on its own in exactly one case — a **text-range** selection (`cli.mjs:927`):
+A non-array JSON-serializable object passed as `queuePrompt(prompt, { target })` is copied through a JSON clone — note both bounds: an **array is rejected outright** (`normalizeTarget` returns `null`), and a clone is not a verbatim passthrough, so anything JSON drops on the way through (`undefined` members, functions, a `Date` becoming a string) does not survive. The SDK populates `target` on its own in exactly one case — a **text-range** selection (`cli.mjs:927`):
 
 ```js
 const target = { type: "text-range", text, selector, commonAncestorSelector,
@@ -88,7 +88,9 @@ lavish.queuePrompt(text, {
 })
 ```
 
-A line note is the same call with a different `data` payload. **So #109 does not reduce to host wiring — but the machinery it needs is already proven in this repo**, which is the next best answer. Element annotation stays available as a host feature; it is simply not the path line notes take, consistent with ADR-0015 having already demoted it for id-addressable feedback.
+A line note is the same call with a different `data` payload — **but not the same `queueKey`.** That key is per-*step* because a step has one ask box, so a rapid edit-and-resend should collapse to the latest text. Lines are finer: several notes on different lines of one step can sit in the queue together (sends are presence-gated, so they batch), and a shared key would silently discard all but the last. The key must therefore carry the note's own anchor — settled as `"line:<path>:<hunk>:<pos>"` in [The queued payload, and how an untrusted anchor is validated](https://github.com/irodion/lavish-review/issues/131).
+
+**So #109 does not reduce to host wiring — but the machinery it needs is already proven in this repo**, which is the next best answer. Element annotation stays available as a host feature; it is simply not the path line notes take, consistent with ADR-0015 having already demoted it for id-addressable feedback.
 
 ## Corrections this spike makes to earlier docs
 
