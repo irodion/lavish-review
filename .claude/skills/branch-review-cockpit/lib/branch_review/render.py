@@ -294,6 +294,17 @@ def _cited_lines_html(entry: Mapping[str, object], ref: Mapping[str, object]) ->
         raise RenderError(f"cited lines must be integers, got {cited!r}")
     if not isinstance(start, int) or not isinstance(end, int):
         raise RenderError(f"cited lines must be integers, got {cited!r}")
+    if start < 1 or end < 1:
+        raise RenderError(f"cited lines must be 1-based line numbers, got {cited!r}")
+    # Ordering is checked *before* the manifest bound, because the bound cannot catch it:
+    # a reversed pair whose endpoints both sit inside the hunk passes every range test and
+    # renders "lines 191–184".
+    if start > end:
+        raise RenderError(f"cited lines must have start <= end, got {cited!r}")
+    # ``lines`` narrows a hunk, so the ref must name one. Without this the lookup below
+    # raises a bare KeyError instead of a located RenderError the analyst can repair.
+    if "hunk" not in ref:
+        raise RenderError(f"cited lines {cited!r} need a hunk to narrow")
     hunk = _hunk_entry(entry, ref["hunk"])
     new_start = hunk.get("new_start")
     body_lines = hunk.get("lines")

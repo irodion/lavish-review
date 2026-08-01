@@ -12,7 +12,13 @@ from branch_review.config import EDITORS
 from branch_review.coverage import COVERAGE_RULE
 from branch_review.escape import INTERACTIVE_CSP, file_fragment_id, fragment
 from branch_review.lint import lint_cockpit
-from branch_review.render import RenderError, _route_estimate, main, render_cockpit
+from branch_review.render import (
+    RenderError,
+    _cited_lines_html,
+    _route_estimate,
+    main,
+    render_cockpit,
+)
 from branch_review.weight import StepWeight
 
 
@@ -711,6 +717,39 @@ def test_render_cockpit_accepts_a_cited_range_when_the_hunk_has_no_new_start(
     html = render_cockpit(run_dir).read_text(encoding="utf-8")
 
     assert '<span class="evidence-lines">lines 900–905</span>' in html
+
+
+# A manifest file entry whose single hunk spans new-side 172..197 — the fixture the
+# direct ``_cited_lines_html`` checks below resolve against.
+_LINE_CITE_ENTRY = {
+    "path": "src/app.py",
+    "hunks": [{"index": 1, "anchor": "hunk-abc-1", "new_start": 172, "lines": 26}],
+}
+
+
+@pytest.mark.parametrize(
+    ("cited", "expected"),
+    [
+        # A reversed pair the manifest bound cannot catch: both endpoints sit inside the
+        # hunk, so every range test passes and it would render "lines 191–184".
+        ([191, 184], "start <= end"),
+        ([0, 180], "1-based"),
+        ([180, 0], "1-based"),
+    ],
+)
+def test_cited_lines_reject_a_malformed_range(cited: list[int], expected: str) -> None:
+    # Called directly: ``render_cockpit`` validates the analysis first, so these shapes
+    # never reach here through the front door. This is the renderer honouring its own
+    # contract — it narrows the structured input it resolves rather than assuming the
+    # validator ran — so the guard is only reachable, and only testable, from here.
+    with pytest.raises(RenderError, match=expected):
+        _cited_lines_html(_LINE_CITE_ENTRY, {"path": "src/app.py", "hunk": 1, "lines": cited})
+
+
+def test_cited_lines_require_a_hunk_to_narrow() -> None:
+    # Without the guard the lookup raises a bare KeyError instead of a located RenderError.
+    with pytest.raises(RenderError, match="need a hunk"):
+        _cited_lines_html(_LINE_CITE_ENTRY, {"path": "src/app.py", "lines": [184, 191]})
 
 
 def test_render_cockpit_narrates_hunks_in_the_margin(tmp_path: Path) -> None:
