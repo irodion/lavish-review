@@ -274,6 +274,48 @@ def test_hunk_anchored_evidence_is_optional_and_passes() -> None:
     assert validate_analysis(doc) == []
 
 
+def test_cited_lines_are_optional_and_pass_on_a_hunk_ref() -> None:
+    # A {path, hunk} ref may narrow to an inclusive new-side range, or omit it — every ref
+    # written before ``lines`` existed keeps validating (ADR-0017, additive-optional).
+    doc = _valid()
+    step = doc["threads"][0]["steps"][0]
+    step["evidence"] = [{"path": "src/retry.py", "hunk": 1, "lines": [12, 19]}]
+    assert validate_analysis(doc) == []
+    step["evidence"] = [{"path": "src/retry.py", "hunk": 1, "lines": [12, 12]}]  # one line
+    assert validate_analysis(doc) == []
+
+
+@pytest.mark.parametrize(
+    ("lines_value", "reason"),
+    [
+        ([19, 12], "start after end"),
+        ([0, 4], "0 is not a 1-based line number"),
+        ([1], "not a pair"),
+        ([1, 2, 3], "not a pair"),
+        ("1-2", "not a list"),
+        ([1, True], "bool is not a line number"),
+        ([1, "4"], "string is not a line number"),
+    ],
+)
+def test_malformed_cited_lines_are_located(lines_value: Any, reason: str) -> None:
+    doc = _valid()
+    doc["threads"][0]["steps"][0]["evidence"] = [
+        {"path": "src/retry.py", "hunk": 1, "lines": lines_value}
+    ]
+    errors = validate_analysis(doc)
+    assert [e.location for e in errors] == ["threads[0].steps[0].evidence[0].lines"], reason
+
+
+def test_cited_lines_require_a_hunk_to_narrow() -> None:
+    # A range means nothing without the hunk it narrows — on a file-level ref, and on a
+    # note ref (which has no diff fragment at all), it is rejected.
+    doc = _valid()
+    doc["threads"][0]["steps"][0]["evidence"] = [{"path": "src/retry.py", "lines": [12, 19]}]
+    assert [e.location for e in validate_analysis(doc)] == ["threads[0].steps[0].evidence[0].lines"]
+    doc["threads"][0]["steps"][0]["evidence"] = [{"note": "widened", "lines": [12, 19]}]
+    assert "threads[0].steps[0].evidence[0].lines" in [e.location for e in validate_analysis(doc)]
+
+
 # (label, mutate(doc), expected location substring) — each trips exactly one rule.
 def _drop(key: str) -> Mutator:
     def mutate(doc: dict[str, Any]) -> None:

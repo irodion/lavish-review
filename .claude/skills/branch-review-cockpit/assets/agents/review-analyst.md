@@ -222,6 +222,19 @@ Route policy below, not by copying the example's particular sequence. Structure:
       diff to anchor into), and a plain `{path}` with no `hunk` still anchors at
       file level — reach for a hunk when a step is about one specific region of a
       multi-hunk file.
+    - **Cited lines (ADR-0017, additive-optional):** a `{path, hunk}` ref may add
+      `"lines": [start, end]` — the **inclusive new-side line range** that actually
+      substantiates the step. Read `new_start` from the file's `hunks` entry (the
+      hunk's first new-side line) and count forward through `diff.patch`, skipping
+      `-` rows, which consume no new-side number. **Cite lines whenever you split
+      one hunk across more than one step**: without it both steps point at the same
+      block and the cockpit asserts a distinction it cannot show — the reviewer has
+      to ask which lines you meant. It is optional otherwise; a single step owning a
+      whole hunk needs no range. `lines` requires a `hunk` (a range means nothing
+      without the hunk it narrows), and the range must lie inside that hunk — the
+      renderer refuses one that names lines elsewhere in the file. When a step is
+      about **removed** code, the deleted rows have no new-side number: cite the
+      hunk alone rather than inventing a range.
   - `attention_notes` — optional muted asides, `[{text, evidence?}]`. These are the
     only default flags (untested behavior change; goal-unserved work — see "Narrate
     by default" above). A note is plain narration, not a finding: it carries no

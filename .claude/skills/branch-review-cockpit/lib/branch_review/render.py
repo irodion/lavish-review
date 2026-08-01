@@ -246,15 +246,77 @@ def _file_anchor(entry: Mapping[str, object]) -> str:
     return f"file-{fid}"
 
 
-def _hunk_anchor(entry: Mapping[str, object], index: object) -> str:
+def _hunk_entry(entry: Mapping[str, object], index: object) -> Mapping[str, object]:
+    """The manifest entry for a file's ``index``-th hunk, or a located :class:`RenderError`.
+
+    The one place a hunk index is resolved against ``fragments.json``, shared by the anchor
+    lookup and the ``lines`` bound check so the two can never disagree about which hunk a
+    ref names.
+    """
     if isinstance(index, bool) or not isinstance(index, int):
         raise RenderError(f"hunk index must be an integer, got {index!r}")
     for hunk in _items(entry.get("hunks")):
         if hunk.get("index") == index:
-            anchor = _text(hunk.get("anchor"))
-            if anchor:
-                return anchor
+            return hunk
     raise RenderError(f"{_text(entry.get('path'))!r} has no hunk {index}")
+
+
+def _hunk_anchor(entry: Mapping[str, object], index: object) -> str:
+    anchor = _text(_hunk_entry(entry, index).get("anchor"))
+    if not anchor:
+        raise RenderError(f"{_text(entry.get('path'))!r} hunk {index!r} has no anchor")
+    return anchor
+
+
+def _cited_lines_html(entry: Mapping[str, object], ref: Mapping[str, object]) -> str:
+    """Render (and bound) a ``{path, hunk, lines}`` ref's inclusive new-side range.
+
+    The validator checked the pair's *shape*; here it meets the manifest, which is the only
+    thing that knows where the hunk actually sits. The bound is deliberately **conservative**:
+    a hunk's manifest ``lines`` counts every rendered body row — context, added *and*
+    removed — while only context and added rows consume a new-side number, so
+    ``new_start + lines - 1`` is an upper estimate of the hunk's last new-side line. It
+    therefore never rejects a range that is genuinely inside the hunk, and still catches the
+    failure that matters: a range naming lines from some other part of the file.
+
+    A hunk whose ``@@`` header did not parse carries no ``new_start`` (a combined-merge
+    header, issue #108), so there is nothing to bound against and the range renders unchecked
+    rather than being refused on a technicality.
+    """
+    cited = ref["lines"]
+    # Narrow here rather than trusting the validator ran — ``render_cockpit`` is callable on
+    # any run dir, so the renderer checks the structured input it resolves, exactly as
+    # :func:`_hunk_anchor` rejects a non-integer index.
+    if not isinstance(cited, list) or len(cited) != 2:
+        raise RenderError(f"cited lines must be an [start, end] pair, got {cited!r}")
+    start, end = cited
+    if isinstance(start, bool) or isinstance(end, bool):
+        raise RenderError(f"cited lines must be integers, got {cited!r}")
+    if not isinstance(start, int) or not isinstance(end, int):
+        raise RenderError(f"cited lines must be integers, got {cited!r}")
+    if start < 1 or end < 1:
+        raise RenderError(f"cited lines must be 1-based line numbers, got {cited!r}")
+    # Ordering is checked *before* the manifest bound, because the bound cannot catch it:
+    # a reversed pair whose endpoints both sit inside the hunk passes every range test and
+    # renders "lines 191–184".
+    if start > end:
+        raise RenderError(f"cited lines must have start <= end, got {cited!r}")
+    # ``lines`` narrows a hunk, so the ref must name one. Without this the lookup below
+    # raises a bare KeyError instead of a located RenderError the analyst can repair.
+    if "hunk" not in ref:
+        raise RenderError(f"cited lines {cited!r} need a hunk to narrow")
+    hunk = _hunk_entry(entry, ref["hunk"])
+    new_start = hunk.get("new_start")
+    body_lines = hunk.get("lines")
+    if isinstance(new_start, int) and isinstance(body_lines, int):
+        last = new_start + body_lines - 1
+        if start < new_start or end > last:
+            raise RenderError(
+                f"{_text(entry.get('path'))!r} hunk {ref['hunk']} cites lines [{start}, {end}], "
+                f"outside the hunk's new-side range [{new_start}, {last}]"
+            )
+    label = f"line {start}" if start == end else f"lines {start}–{end}"
+    return f'<span class="evidence-lines">{escape_text(label)}</span>'
 
 
 def _step_evidence(step: Mapping[str, object]) -> list[Mapping[str, object]]:
@@ -585,6 +647,10 @@ def _render_evidence_ref(
         if "hunk" in ref:
             anchor = _hunk_anchor(entry, ref["hunk"])
         parts.append(f'<a href="#{escape_text(anchor)}">{_path_html(entry)}</a>')
+        # The cited line range, when the narrator pinned one — it rides beside the link
+        # rather than inside it, so the anchor's text stays exactly the file path.
+        if "lines" in ref:
+            parts.append(f" {_cited_lines_html(entry, ref)}")
     note = ref.get("note")
     if isinstance(note, str):
         prefix = " — " if parts else ""

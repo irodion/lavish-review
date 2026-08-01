@@ -246,6 +246,9 @@ def _validate_evidence(value: object, loc: str) -> list[AnalysisError]:
     checked here: the validator is pure (it never sees ``fragments.json``); that
     resolution belongs to the Cockpit Linter's anchor rule, exactly as whether a
     ``path`` names a real changed file does.
+
+    ``lines`` narrows a ``hunk`` ref further, to the inclusive new-side range that
+    actually substantiates the step (see :func:`_validate_lines`).
     """
     objects, errors = _as_objects(value, loc)
     if not errors and not objects:
@@ -261,6 +264,8 @@ def _validate_evidence(value: object, loc: str) -> list[AnalysisError]:
             errors.extend(_require_str(ref["note"], f"{ref_loc}.note"))
         if "hunk" in ref:
             errors.extend(_validate_hunk(ref["hunk"], ref, f"{ref_loc}.hunk"))
+        if "lines" in ref:
+            errors.extend(_validate_lines(ref["lines"], ref, f"{ref_loc}.lines"))
     return errors
 
 
@@ -278,6 +283,49 @@ def _validate_hunk(value: object, ref: Mapping[str, object], loc: str) -> list[A
         errors.append(AnalysisError(loc, f"expected a positive integer, got {_typename(value)}"))
     elif value < 1:
         errors.append(AnalysisError(loc, f"must be a 1-based hunk index (>= 1), got {value}"))
+    return errors
+
+
+def _validate_lines(value: object, ref: Mapping[str, object], loc: str) -> list[AnalysisError]:
+    """A ``{path, hunk}`` ref's optional ``lines``: the inclusive new-side range it cites.
+
+    Narrows a hunk to the lines that actually substantiate the step, so two steps citing
+    the same hunk can be told apart — the case where a hunk-only citation asserts a
+    distinction it cannot show. The numbers are **new-side line numbers** (what the hunk's
+    ``@@`` header counts from, and what the cockpit's copyable ``path:line`` and editor
+    deep link already speak), never body positions: the record is read by a human.
+
+    It only makes sense on a ref that already names a ``hunk`` — a range means nothing
+    without the hunk it narrows, and the renderer needs that hunk to bound it. Additive and
+    optional, so it stays inside ``review-analysis/0.4`` (ADR-0017): every ref written
+    before it keeps validating.
+
+    Shape only. Whether the range lies **inside** the hunk it names is not checked here —
+    the validator is pure and never sees ``fragments.json`` — exactly as with ``hunk``'s
+    upper bound; the renderer bounds it while resolving against the manifest.
+    """
+    errors: list[AnalysisError] = []
+    # A range narrows a hunk; there is nothing to narrow on a file-level or note ref.
+    if "hunk" not in ref:
+        errors.append(
+            AnalysisError(loc, "only a ref with a hunk may carry lines (a range narrows a hunk)")
+        )
+    if not isinstance(value, list) or len(value) != 2:
+        errors.append(
+            AnalysisError(loc, f"expected an inclusive [start, end] pair, got {_typename(value)}")
+        )
+        return errors
+    start, end = value
+    for name, number in (("start", start), ("end", end)):
+        # ``bool`` is an ``int`` subclass — exclude it so ``true``/``false`` isn't a "1"/"0".
+        if isinstance(number, bool) or not isinstance(number, int):
+            errors.append(AnalysisError(loc, f"{name} must be an integer, got {_typename(number)}"))
+        elif number < 1:
+            errors.append(
+                AnalysisError(loc, f"{name} must be a 1-based line number (>= 1), got {number}")
+            )
+    if not errors and start > end:
+        errors.append(AnalysisError(loc, f"start must be <= end, got [{start}, {end}]"))
     return errors
 
 
